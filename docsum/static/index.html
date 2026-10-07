@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Document Summarizer</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📄</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="brand">📄 Document Summarizer</a>
+    <span id="health" class="health" title="Service status"></span>
+  </header>
+
+  <main id="view" class="container"></main>
+
+  <!-- Home -->
+  <template id="tpl-home">
+    <section class="card">
+      <h2>Upload a document</h2>
+      <p class="muted">PDF (text or scanned), images (PNG/JPG/TIFF), DOCX or TXT. Text is OCR'd, split into
+        sections and stored in the RAG database for Q&amp;A.</p>
+      <label id="dropzone" class="dropzone">
+        <input id="file" type="file" hidden>
+        <strong>Drop a file here</strong> or click to choose
+      </label>
+      <div id="upload-status" class="status" hidden></div>
+    </section>
+
+    <section class="card">
+      <h2>Your documents</h2>
+      <div id="doc-list" class="doc-list"><p class="muted">Loading…</p></div>
+    </section>
+
+    <section class="card" id="qa-home"></section>
+  </template>
+
+  <!-- Sections -->
+  <template id="tpl-sections">
+    <nav class="crumbs"><a href="#/">Home</a> › <span data-bind="filename"></span></nav>
+    <section class="card">
+      <div class="row space">
+        <div>
+          <h2 data-bind="filename"></h2>
+          <p class="muted" data-bind="stats"></p>
+        </div>
+        <a href="#/" class="btn ghost">⌂ Home</a>
+      </div>
+      <h3>Select sections to summarize</h3>
+      <div class="row toolbar">
+        <button class="btn ghost small" id="select-all">Select all</button>
+        <button class="btn ghost small" id="select-none">Clear</button>
+        <span class="spacer"></span>
+        <label>Style
+          <select id="style">
+            <option value="brief">Brief</option>
+            <option value="bullets">Bullet points</option>
+            <option value="detailed">Detailed</option>
+          </select>
+        </label>
+        <button class="btn" id="summarize" disabled>Summarize selected (0)</button>
+      </div>
+      <ul id="section-list" class="section-list"></ul>
+    </section>
+    <section class="card" id="qa-doc"></section>
+  </template>
+
+  <!-- Preview -->
+  <template id="tpl-preview">
+    <nav class="crumbs"><a href="#/">Home</a> › <a data-bind-href="sections" data-bind="filename"></a> › Summary</nav>
+    <section class="card">
+      <div class="row space">
+        <h2>Summary preview</h2>
+        <div class="row">
+          <a class="btn ghost" data-bind-href="sections">← Back to sections</a>
+          <a href="#/" class="btn ghost">⌂ Home</a>
+        </div>
+      </div>
+      <p class="muted" data-bind="stats"></p>
+      <div id="summaries"></div>
+      <div class="row toolbar">
+        <button class="btn ghost" id="copy" disabled>Copy</button>
+        <button class="btn ghost" id="download" disabled>Download .md</button>
+        <button class="btn ghost" id="regenerate" disabled>Regenerate</button>
+      </div>
+    </section>
+  </template>
+
+  <!-- Q&A panel -->
+  <template id="tpl-qa">
+    <h2>Ask questions <span class="muted small" data-bind="scope"></span></h2>
+    <div class="qa-log"></div>
+    <form class="qa-form row">
+      <input name="q" type="text" placeholder="Ask about your documents…" autocomplete="off" required>
+      <button class="btn" type="submit">Ask</button>
+    </form>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
