@@ -26,7 +26,7 @@ class RagStore:
         )
         self._embed = embedder
 
-    def index_document(self, doc_id: str, filename: str, sections: list[Section]) -> int:
+    def index_document(self, doc_id: str, owner_id: int, filename: str, sections: list[Section]) -> int:
         ids, texts, metas = [], [], []
         for section in sections:
             for n, chunk in enumerate(split_text(section.text, CHUNK_CHARS, CHUNK_OVERLAP)):
@@ -34,6 +34,7 @@ class RagStore:
                 texts.append(chunk)
                 metas.append({
                     "doc_id": doc_id,
+                    "owner_id": owner_id,
                     "filename": filename,
                     "section_id": section.id,
                     "section_title": section.title,
@@ -57,13 +58,17 @@ class RagStore:
     def delete_document(self, doc_id: str) -> None:
         self._col.delete(where={"doc_id": doc_id})
 
-    def search(self, query: str, doc_id: str | None = None, k: int = 5) -> list[dict]:
+    def search(self, query: str, owner_id: int, doc_id: str | None = None, k: int = 5) -> list[dict]:
         if self._col.count() == 0:
             return []
+        # Always scope to the user's own documents.
+        where = {"owner_id": owner_id}
+        if doc_id:
+            where = {"$and": [where, {"doc_id": doc_id}]}
         result = self._col.query(
             query_embeddings=self._embed([query]),
             n_results=k,
-            where={"doc_id": doc_id} if doc_id else None,
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
         hits = []

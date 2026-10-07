@@ -10,10 +10,41 @@
 <body>
   <header class="topbar">
     <a href="#/" class="brand">📄 Document Summarizer</a>
-    <span id="health" class="health" title="Service status"></span>
+    <span class="row">
+      <span id="health" class="health" title="Service status"></span>
+      <span id="account" class="account" hidden>
+        <span id="account-name" class="muted small"></span>
+        <button id="logout" class="btn ghost small">Log out</button>
+      </span>
+    </span>
   </header>
 
   <main id="view" class="container"></main>
+
+  <!-- Login -->
+  <template id="tpl-login">
+    <section class="card login">
+      <h2>Log in</h2>
+      <p class="muted">Use your email address or mobile number. We'll send you a one-time code.</p>
+      <form id="login-step1">
+        <label for="identifier">Email or mobile number</label>
+        <input id="identifier" name="identifier" type="text" inputmode="email" autocomplete="username"
+               placeholder="you@example.com or +91 98765 43210" required>
+        <button class="btn" type="submit">Send code</button>
+      </form>
+      <form id="login-step2" hidden>
+        <p>Enter the 6-digit code sent to <b id="sent-to"></b>.</p>
+        <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="6" pattern="[0-9]{6}" placeholder="••••••" required>
+        <button class="btn" type="submit">Verify &amp; log in</button>
+        <div class="row">
+          <button class="btn ghost small" type="button" id="resend" disabled>Resend code</button>
+          <button class="btn ghost small" type="button" id="change">Use a different email/number</button>
+        </div>
+      </form>
+      <div id="login-status" class="status" hidden></div>
+    </section>
+  </template>
 
   <!-- Home -->
   <template id="tpl-home">

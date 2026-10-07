@@ -4,7 +4,14 @@ Upload a document → OCR → identify sections → store in a RAG vector DB →
 summarize them with **Qwen running locally in Ollama** → preview (with **Back to sections** / **Home**).
 You can also **ask questions** about one document or all uploaded documents (RAG Q&A with cited sources).
 
-Everything runs locally: no document text leaves your machine.
+- **Web app**: served by the FastAPI server at `/`.
+- **Android & iOS app**: React Native / Expo in [`mobile/`](mobile/README.md). It calls the same server
+  API, so web and mobile share one Qwen model, one ChromaDB RAG database and the same accounts.
+- **Login required**: passwordless, using a one-time code sent to your **email** (SMTP) or **mobile
+  number** (SMS via Twilio). Each user sees only their own documents, summaries and Q&A results.
+
+Document processing and AI run on your own server. The only external services are the email/SMS
+providers that deliver login codes.
 
 ```
 Upload ─► Extract text ─► Detect sections ─► Chunk + embed ─► ChromaDB
@@ -45,14 +52,33 @@ Q&A box (Home = all docs, Sections page = this doc) ─► vector search ─► 
    ollama pull qwen2.5:7b          # summarizer / Q&A model (any Qwen tag works, e.g. qwen2.5:3b, qwen3:8b)
    ollama pull nomic-embed-text    # embeddings for the RAG DB
    ```
-4. Optional: `cp .env.example .env` and adjust models, Ollama URL, OCR language, data dir.
+4. `cp .env.example .env` and configure login (see [Login](#login-otp)). Also adjust models,
+   Ollama URL, OCR language and data dir if needed.
 
 ## Run
 
 ```bash
-uvicorn docsum.main:app --port 8000
+uvicorn docsum.main:app --host 0.0.0.0 --port 8000
 ```
-Open <http://localhost:8000>. The top bar shows whether Qwen, the embedding model and Tesseract are available.
+Open <http://localhost:8000> and log in. The top bar shows whether Qwen, the embedding model and
+Tesseract are available. For the phone app, see [mobile/README.md](mobile/README.md).
+
+## Login (OTP)
+
+Enter an email address or a mobile number with country code (e.g. `+919876543210`). A 6-digit code is
+sent and you type it in to log in. The first login creates the account. An email address and a phone
+number are separate accounts.
+
+| Channel | Configure in `.env` |
+|---------|---------------------|
+| Email | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` (Gmail: `smtp.gmail.com` + an App Password) |
+| SMS | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
+| Local testing | `OTP_DEV_MODE=true` prints codes in the server log. **Never enable it in production.** |
+
+Security rules: codes expire after 5 minutes and are single-use. A code is locked after 5 wrong
+attempts. Resends are limited to one every 30 s and 5 per hour per email/number. Sessions last 30 days
+and end on logout. Codes and session tokens are stored only as HMAC hashes (`data/auth.db`, key in
+`AUTH_SECRET` or `data/secret.key`).
 
 ## Using it
 
@@ -79,16 +105,28 @@ summarized map-reduce style (part summaries, then a combined summary) to stay wi
 | `OCR_LANG` | `eng` | Tesseract language(s), e.g. `eng+hin` |
 | `TESSERACT_CMD` | – | Path to `tesseract` if not on `PATH` |
 | `MAX_UPLOAD_MB` | `50` | Upload size limit |
+| `OTP_DEV_MODE` | `false` | Log login codes instead of sending them (dev only) |
+| `DEFAULT_COUNTRY_CODE` | – | Prefix for numbers typed without a country code, e.g. `+91` |
+| `SMTP_*`, `TWILIO_*` | – | Email / SMS delivery of login codes |
+| `AUTH_SECRET` | auto | Secret for hashing codes and tokens |
+| `CORS_ORIGINS` | – | Browser origins allowed to call the API (Expo web only) |
 
 If you change the embedding model, delete `data/` (existing vectors use the old model's dimensions).
 
 ## API
 
+All endpoints except `/api/health` and `/api/auth/request-otp|verify-otp` need
+`Authorization: Bearer <token>`.
+
 | Method | Path | |
 |--------|------|---|
-| `GET` | `/api/health` | Ollama / model / Tesseract status |
+| `GET` | `/api/health` | Ollama / model / Tesseract / login channel status |
+| `POST` | `/api/auth/request-otp` | `{"identifier": "you@example.com"}` or a `+91…` number → sends a code |
+| `POST` | `/api/auth/verify-otp` | `{"identifier": "...", "code": "123456"}` → `{token, user}` |
+| `GET` | `/api/auth/me` | Current user |
+| `POST` | `/api/auth/logout` | End the session |
 | `POST` | `/api/documents` | Upload (multipart `file`) → document with sections |
-| `GET` | `/api/documents` | List documents |
+| `GET` | `/api/documents` | List your documents |
 | `GET` | `/api/documents/{id}` | Document + section list |
 | `GET` | `/api/documents/{id}/sections/{sid}` | Full section text |
 | `POST` | `/api/documents/{id}/summarize` | `{"section_ids": ["s1"], "style": "brief", "refresh": false}` |
@@ -99,14 +137,16 @@ If you change the embedding model, delete `data/` (existing vectors use the old 
 
 ```
 docsum/
-  main.py      FastAPI routes (upload pipeline, summarize, Q&A)
+  main.py      FastAPI routes (auth, upload pipeline, summarize, Q&A)
+  auth.py      OTP login (email/SMS), sessions, rate limits
   ocr.py       Text extraction + Tesseract OCR
   sections.py  Heading detection / section splitting
   rag.py       Chunking, embeddings, ChromaDB search
   llm.py       Ollama client: summarize (map-reduce), answer, embed
   store.py     Uploaded files, metadata and cached summaries
-  static/      Single-page UI (Home, Sections, Preview, Q&A)
-tests/         pytest suite using a fake Ollama server
+  static/      Web UI (Login, Home, Sections, Preview, Q&A)
+mobile/        Android & iOS app (Expo / React Native)
+tests/         pytest suite using a fake Ollama server and a fake OTP sender
 ```
 
 ## Tests

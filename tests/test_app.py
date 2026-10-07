@@ -8,6 +8,7 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
+from docsum.auth import OtpSender
 from docsum.llm import OllamaClient, split_text
 from docsum.main import create_app
 from docsum.ocr import Line, Page
@@ -48,10 +49,39 @@ def fake():
     return FakeOllama()
 
 
+class CapturingSender(OtpSender):
+    def __init__(self):
+        self.sent: dict[str, str] = {}
+        self.last = ""
+
+    def send(self, ident, code):
+        self.sent[ident.value] = self.last = code
+
+
+def login(client, sender, identifier="user@example.com"):
+    assert client.post("/api/auth/request-otp", json={"identifier": identifier}).status_code == 200
+    res = client.post("/api/auth/verify-otp", json={"identifier": identifier, "code": sender.last})
+    assert res.status_code == 200, res.text
+    client.headers["Authorization"] = f"Bearer {res.json()['token']}"
+    return res.json()
+
+
 @pytest.fixture
-def client(tmp_path, fake):
+def sender():
+    return CapturingSender()
+
+
+@pytest.fixture
+def app(tmp_path, fake, sender):
     llm = OllamaClient("http://ollama.test", "qwen2.5:7b", "nomic-embed-text", transport=httpx.MockTransport(fake))
-    return TestClient(create_app(llm=llm, data_dir=tmp_path))
+    return create_app(llm=llm, data_dir=tmp_path, otp_sender=sender)
+
+
+@pytest.fixture
+def client(app, sender):
+    c = TestClient(app)
+    login(c, sender)
+    return c
 
 
 def make_pdf() -> bytes:
@@ -133,7 +163,9 @@ def test_ollama_down_returns_503(tmp_path):
     def down(request):
         raise httpx.ConnectError("refused")
     llm = OllamaClient("http://ollama.test", transport=httpx.MockTransport(down))
-    client = TestClient(create_app(llm=llm, data_dir=tmp_path))
+    sender = CapturingSender()
+    client = TestClient(create_app(llm=llm, data_dir=tmp_path, otp_sender=sender))
+    login(client, sender)
     assert upload(client, "a.txt", b"hello world " * 20).status_code == 503
     assert client.get("/api/documents").json() == []
     assert client.get("/api/health").json()["ollama"]["reachable"] is False

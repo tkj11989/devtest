@@ -30,9 +30,10 @@ class DocumentStore:
         d.mkdir(parents=True, exist_ok=True)
         return d / ("original" + Path(filename).suffix.lower())
 
-    def save(self, doc_id: str, filename: str, sections: list[Section], pages: int, ocr_pages: int, chunks: int) -> dict:
+    def save(self, doc_id: str, owner_id: int, filename: str, sections: list[Section], pages: int, ocr_pages: int, chunks: int) -> dict:
         meta = {
             "id": doc_id,
+            "owner_id": owner_id,
             "filename": filename,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "pages": pages,
@@ -56,10 +57,12 @@ class DocumentStore:
             raise KeyError(doc_id)
         return json.loads(path.read_text())
 
-    def list(self) -> list[dict]:
+    def list(self, owner_id: int) -> list[dict]:
         docs = []
         for meta_path in self.root.glob("*/meta.json"):
             meta = json.loads(meta_path.read_text())
+            if meta.get("owner_id") != owner_id:
+                continue
             docs.append({k: meta[k] for k in ("id", "filename", "created_at", "pages", "ocr_pages")}
                         | {"section_count": len(meta["sections"])})
         return sorted(docs, key=lambda d: d["created_at"], reverse=True)

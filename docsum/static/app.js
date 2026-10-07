@@ -8,10 +8,34 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// ---------- auth ----------
+const TOKEN_KEY = "docsum_token";
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* private mode */ } },
+};
+let token = store.get(TOKEN_KEY);
+let currentUser = null;
+
+function setSession(newToken, user) {
+  token = newToken;
+  currentUser = user;
+  store.set(TOKEN_KEY, newToken);
+  $("#account").hidden = !user;
+  $("#account-name").textContent = user ? (user.email || user.phone) : "";
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { ...opts, headers });
   let body = null;
   try { body = await res.json(); } catch { /* empty body */ }
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    setSession(null, null);
+    location.hash = "#/login";
+    throw new Error("Please log in again.");
+  }
   if (!res.ok) throw new Error(body?.detail ? (typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)) : `HTTP ${res.status}`);
   return body;
 }
@@ -102,6 +126,58 @@ function mountQA(container, docId, scopeLabel) {
       input.focus();
     }
   });
+}
+
+// ---------- Login ----------
+function renderLogin() {
+  mount("#tpl-login");
+  const step1 = $("#login-step1"), step2 = $("#login-step2"), status = $("#login-status");
+  const resend = $("#resend");
+  let identifier = "", timer = null;
+
+  const show = (msg, error = false) => {
+    status.hidden = !msg;
+    status.className = error ? "status error" : "status";
+    status.textContent = msg || "";
+  };
+  const cooldown = secs => {
+    clearInterval(timer);
+    resend.disabled = true;
+    let left = secs;
+    const tick = () => {
+      resend.textContent = left > 0 ? `Resend code (${left}s)` : "Resend code";
+      if (left-- <= 0) { clearInterval(timer); resend.disabled = false; }
+    };
+    tick();
+    timer = setInterval(tick, 1000);
+  };
+  const send = async () => {
+    show("Sending code…");
+    try {
+      const res = await postJSON("/api/auth/request-otp", { identifier });
+      $("#sent-to").textContent = res.identifier;
+      step1.hidden = true;
+      step2.hidden = false;
+      show("");
+      cooldown(res.resend_after);
+      $("#code").focus();
+    } catch (err) { show(err.message, true); }
+  };
+
+  step1.addEventListener("submit", e => { e.preventDefault(); identifier = step1.elements.identifier.value.trim(); send(); });
+  resend.addEventListener("click", send);
+  $("#change").addEventListener("click", () => { step2.hidden = true; step1.hidden = false; show(""); clearInterval(timer); });
+  step2.addEventListener("submit", async e => {
+    e.preventDefault();
+    show("Verifying…");
+    try {
+      const res = await postJSON("/api/auth/verify-otp", { identifier, code: step2.elements.code.value.trim() });
+      clearInterval(timer);
+      setSession(res.token, res.user);
+      location.hash = "#/";
+    } catch (err) { show(err.message, true); step2.elements.code.select(); }
+  });
+  step1.elements.identifier.focus();
 }
 
 // ---------- Home ----------
@@ -290,11 +366,25 @@ function route() {
   const [path, query = ""] = location.hash.replace(/^#/, "").split("?");
   const parts = path.split("/").filter(Boolean);
   window.scrollTo(0, 0);
+  if (!token) return parts[0] === "login" ? renderLogin() : (location.hash = "#/login");
+  if (parts[0] === "login") return (location.hash = "#/");
   if (parts[0] === "doc" && parts[1] && parts[2] === "summary") return renderPreview(parts[1], new URLSearchParams(query));
   if (parts[0] === "doc" && parts[1]) return renderSections(parts[1]);
   return renderHome();
 }
 
+$("#logout").addEventListener("click", async () => {
+  try { await api("/api/auth/logout", { method: "POST" }); } catch { /* already logged out */ }
+  setSession(null, null);
+  location.hash = "#/login";
+});
+
 window.addEventListener("hashchange", route);
 loadHealth();
-route();
+(async () => {
+  if (token) {
+    try { setSession(token, await api("/api/auth/me")); }
+    catch { setSession(null, null); }
+  }
+  route();
+})();

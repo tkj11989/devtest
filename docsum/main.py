@@ -4,11 +4,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .auth import AuthError, AuthService, OtpSender, User
 from .config import settings
 from .llm import SUMMARY_STYLES, OllamaClient, OllamaError
 from .ocr import SUPPORTED_EXT, ExtractionError, extract_pages, tesseract_available
@@ -26,33 +28,89 @@ class SummarizeRequest(BaseModel):
     refresh: bool = False
 
 
+class OtpRequest(BaseModel):
+    identifier: str = Field(min_length=3, max_length=254, description="Email or mobile number")
+
+
+class OtpVerify(OtpRequest):
+    code: str = Field(min_length=4, max_length=10)
+
+
 class QARequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     doc_id: str | None = None
     top_k: int = Field(default=5, ge=1, le=15)
 
 
-def create_app(llm: OllamaClient | None = None, data_dir: Path | None = None) -> FastAPI:
+def create_app(llm: OllamaClient | None = None, data_dir: Path | None = None,
+               otp_sender: OtpSender | None = None) -> FastAPI:
     llm = llm or OllamaClient()
     data_dir = data_dir or settings.data_dir
     docs = DocumentStore(data_dir / "documents")
     rag = RagStore(data_dir / "chroma", embedder=llm.embed)
+    auth = AuthService(data_dir / "auth.db", sender=otp_sender)
 
     app = FastAPI(title="Document Summarizer")
+    if settings.cors_origins:
+        app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
+                           allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
 
-    def get_doc(doc_id: str) -> dict:
+    def bearer(authorization: str | None) -> str:
+        scheme, _, token = (authorization or "").partition(" ")
+        return token.strip() if scheme.lower() == "bearer" else ""
+
+    def current_user(authorization: str | None = Header(default=None)) -> User:
+        user = auth.authenticate(bearer(authorization))
+        if user is None:
+            raise HTTPException(401, "Login required", headers={"WWW-Authenticate": "Bearer"})
+        return user
+
+    def get_doc(doc_id: str, user: User) -> dict:
         try:
-            return docs.get(doc_id)
+            meta = docs.get(doc_id)
         except KeyError:
             raise HTTPException(404, "Document not found")
+        if meta.get("owner_id") != user.id:
+            raise HTTPException(404, "Document not found")  # don't reveal other users' documents
+        return meta
+
+    # ---------------------------------------------------------------- auth
+    @app.post("/api/auth/request-otp")
+    def request_otp(req: OtpRequest):
+        try:
+            return auth.request_otp(req.identifier)
+        except AuthError as exc:
+            raise HTTPException(exc.status, str(exc))
+
+    @app.post("/api/auth/verify-otp")
+    def verify_otp(req: OtpVerify):
+        try:
+            token, user = auth.verify_otp(req.identifier, req.code)
+        except AuthError as exc:
+            raise HTTPException(exc.status, str(exc))
+        return {"token": token, "user": user.to_dict()}
+
+    @app.get("/api/auth/me")
+    def me(user: User = Depends(current_user)):
+        return user.to_dict()
+
+    @app.post("/api/auth/logout")
+    def logout(authorization: str | None = Header(default=None)):
+        auth.logout(bearer(authorization))
+        return {"ok": True}
+
+    # ---------------------------------------------------------------- documents
 
     @app.get("/api/health")
     def health():
         return {"ollama": llm.health(), "tesseract": tesseract_available(),
-                "styles": list(SUMMARY_STYLES), "supported_types": sorted(SUPPORTED_EXT)}
+                "styles": list(SUMMARY_STYLES), "supported_types": sorted(SUPPORTED_EXT),
+                "login": {"email": bool(settings.smtp_host or settings.otp_dev_mode),
+                          "phone": bool(settings.twilio_sid or settings.otp_dev_mode),
+                          "dev_mode": settings.otp_dev_mode}}
 
     @app.post("/api/documents")
-    def upload(file: UploadFile = File(...)):
+    def upload(file: UploadFile = File(...), user: User = Depends(current_user)):
         filename = Path(file.filename or "document").name
         if Path(filename).suffix.lower() not in SUPPORTED_EXT:
             raise HTTPException(400, f"Unsupported file type. Supported: {', '.join(sorted(SUPPORTED_EXT))}")
@@ -73,7 +131,7 @@ def create_app(llm: OllamaClient | None = None, data_dir: Path | None = None) ->
         try:
             pages = extract_pages(path)                      # 1. OCR / text extraction
             sections = detect_sections(pages)                # 2. section identification
-            chunks = rag.index_document(doc_id, filename, sections)  # 3. store in RAG DB
+            chunks = rag.index_document(doc_id, user.id, filename, sections)  # 3. store in RAG DB
         except ExtractionError as exc:
             docs.delete(doc_id)
             raise HTTPException(422, str(exc))
@@ -85,34 +143,34 @@ def create_app(llm: OllamaClient | None = None, data_dir: Path | None = None) ->
             docs.delete(doc_id)
             raise HTTPException(422, f"Could not process document: {exc}")
 
-        meta = docs.save(doc_id, filename, sections, pages=len(pages),
+        meta = docs.save(doc_id, user.id, filename, sections, pages=len(pages),
                          ocr_pages=sum(p.ocr for p in pages), chunks=chunks)
         return _public(meta)
 
     @app.get("/api/documents")
-    def list_documents():
-        return docs.list()
+    def list_documents(user: User = Depends(current_user)):
+        return docs.list(user.id)
 
     @app.get("/api/documents/{doc_id}")
-    def get_document(doc_id: str):
-        return _public(get_doc(doc_id))
+    def get_document(doc_id: str, user: User = Depends(current_user)):
+        return _public(get_doc(doc_id, user))
 
     @app.get("/api/documents/{doc_id}/sections/{section_id}")
-    def get_section(doc_id: str, section_id: str):
-        return _section(get_doc(doc_id), section_id)
+    def get_section(doc_id: str, section_id: str, user: User = Depends(current_user)):
+        return _section(get_doc(doc_id, user), section_id)
 
     @app.delete("/api/documents/{doc_id}")
-    def delete_document(doc_id: str):
-        get_doc(doc_id)
+    def delete_document(doc_id: str, user: User = Depends(current_user)):
+        get_doc(doc_id, user)
         rag.delete_document(doc_id)
         docs.delete(doc_id)
         return {"deleted": doc_id}
 
     @app.post("/api/documents/{doc_id}/summarize")
-    def summarize(doc_id: str, req: SummarizeRequest):
+    def summarize(doc_id: str, req: SummarizeRequest, user: User = Depends(current_user)):
         if req.style not in SUMMARY_STYLES:
             raise HTTPException(400, f"Unknown style. Use one of: {', '.join(SUMMARY_STYLES)}")
-        meta = get_doc(doc_id)
+        meta = get_doc(doc_id, user)
         selected = [_section(meta, sid) for sid in dict.fromkeys(req.section_ids)]
 
         results = []
@@ -130,11 +188,11 @@ def create_app(llm: OllamaClient | None = None, data_dir: Path | None = None) ->
         return {"doc_id": doc_id, "filename": meta["filename"], "style": req.style, "summaries": results}
 
     @app.post("/api/qa")
-    def qa(req: QARequest):
+    def qa(req: QARequest, user: User = Depends(current_user)):
         if req.doc_id:
-            get_doc(req.doc_id)
+            get_doc(req.doc_id, user)
         try:
-            hits = rag.search(req.question, doc_id=req.doc_id, k=req.top_k)
+            hits = rag.search(req.question, owner_id=user.id, doc_id=req.doc_id, k=req.top_k)
             answer = llm.answer(req.question, hits)
         except OllamaError as exc:
             raise HTTPException(503, str(exc))
@@ -155,7 +213,7 @@ def create_app(llm: OllamaClient | None = None, data_dir: Path | None = None) ->
 
 def _public(meta: dict) -> dict:
     """Document metadata without full section text or cached summaries."""
-    out = {k: v for k, v in meta.items() if k not in ("sections", "summaries")}
+    out = {k: v for k, v in meta.items() if k not in ("sections", "summaries", "owner_id")}
     out["sections"] = [{k: v for k, v in s.items() if k != "text"} for s in meta["sections"]]
     return out
 
