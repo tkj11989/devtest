@@ -17,7 +17,7 @@ window.createStatusController = function createStatusController({ emit, me, disp
     return n;
   };
 
-  const BACKGROUNDS = ['#00a884', '#25a3e0', '#e66b4f', '#a36de0', '#e0a325', '#e04f86', '#4fb3a8', '#54656f'];
+  const BACKGROUNDS = ['#0670DE', '#061639', '#C24E08', '#0A72B0', '#6A4BD8', '#C2387A', '#0F7F72', '#4A5C78'];
   const TEXT_MS = 5000;
   const PHOTO_MS = 6000;
   const PHOTO_MAX_SIDE = 1600;

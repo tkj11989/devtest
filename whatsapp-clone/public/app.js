@@ -48,7 +48,8 @@
     del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
   };
 
-  const COLORS = ['#00a884', '#25a3e0', '#e66b4f', '#a36de0', '#e0a325', '#4fb3a8', '#e04f86', '#6b8be0', '#7cb342', '#ff7043'];
+  // Avatar colours: brand blues and orange plus companions (all readable with white initials).
+  const COLORS = ['#0670DE', '#C24E08', '#003D82', '#0A72B0', '#6A4BD8', '#C2387A', '#0F7F72', '#9A5B00', '#3F51B5', '#4A5C78'];
   const colorFor = (s) => {
     let h = 0;
     for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;

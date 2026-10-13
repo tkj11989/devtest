@@ -125,7 +125,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       owner: { type: 'string' },
       type: { type: 'string', enum: ['text', 'image'] },
       text: { type: 'string' },
-      bg: { type: 'string', example: '#00a884' },
+      bg: { type: 'string', example: '#0670DE' },
       mediaId: { type: 'string', description: 'image: download from /media/{id}' },
       caption: { type: 'string' },
       ts: { type: 'integer' },
@@ -420,7 +420,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ statuses: arrayOf(ref('Status')), users: ref('Users') })), ...errors(401) },
       }),
       post: op(T.status, 'Post a status update (visible for 24 hours)', {
-        description: 'Text: JSON `{ "type": "text", "text": "…", "bg": "#00a884" }`. Photo: send the image itself (`image/jpeg|png|webp|gif`, max 3 MB) with `?caption=`.',
+        description: 'Text: JSON `{ "type": "text", "text": "…", "bg": "#0670DE" }`. Photo: send the image itself (`image/jpeg|png|webp|gif`, max 3 MB) with `?caption=`.',
         params: [{ name: 'caption', in: 'query', schema: { type: 'string' }, description: 'photo updates only' }],
         body: {
           required: true,

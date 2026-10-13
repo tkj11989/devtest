@@ -27,6 +27,19 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - **Public API for other platforms**: REST API (`/api/v1`) with API keys, signed webhooks, an OpenAPI 3.1 spec and interactive docs at `/api/docs`, plus a Developer panel in the app (Profile → Developer)
 - Data persisted to `data/db.json` (voice-message audio and status photos in `data/media/`)
 
+## Look and feel
+
+The app uses the **PrayukTech** colour palette, taken from the logo, on desktop and mobile in light and dark mode:
+
+| Colour | Hex | Used for |
+|--------|-----|----------|
+| Navy | `#061639` | Panel headers, login backdrop, call screen, mobile browser bar |
+| Royal blue | `#0670DE` (logo `#0475EB`/`#006FCE`) | Buttons, links, your message bubbles (light tint), accents |
+| Deep blue | `#003D82` | Hover/pressed states, header gradient |
+| Orange | `#FE730F` / `#FF9A15` | Unread badges, header accent line, notices, keyboard focus ring |
+
+All colours are CSS variables at the top of `public/styles.css`; text and background pairs meet WCAG AA contrast in both themes. On phones the browser bar takes the navy colour, and the app can be installed to the home screen (`public/manifest.webmanifest`, icons in `public/app-icons/`).
+
 ## Getting started
 
 ```bash

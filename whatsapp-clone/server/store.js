@@ -810,7 +810,7 @@ class Store {
       const text = String(fields.text || '').trim();
       if (!text) throw new Error('Status is empty');
       if (text.length > 700) throw new Error('Status is too long');
-      Object.assign(status, { type: 'text', text, bg: /^#[0-9a-f]{6}$/i.test(fields.bg || '') ? fields.bg : '#00a884' });
+      Object.assign(status, { type: 'text', text, bg: /^#[0-9a-f]{6}$/i.test(fields.bg || '') ? fields.bg : '#0670DE' });
     } else if (fields.type === 'image') {
       if (!fields.mediaId) throw new Error('Photo is missing');
       Object.assign(status, { type: 'image', mediaId: fields.mediaId, caption: String(fields.caption || '').trim().slice(0, 700) });
