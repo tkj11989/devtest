@@ -24,6 +24,8 @@
     typing: new Map(), // convId -> Map(username -> timeout)
     filter: '',
     groupMembers: new Set(),
+    iceServers: [],
+    calls: null, // call controller (see call.js)
   };
 
   // ---------- helpers ----------
@@ -103,6 +105,39 @@
     return svg;
   }
 
+  // ---------- call history entries ----------
+
+  const CALL_ICONS = {
+    audio: 'M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8Z',
+    video: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z',
+  };
+  function callGlyph(kind, cls) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', cls);
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', CALL_ICONS[kind] || CALL_ICONS.audio);
+    svg.appendChild(p);
+    return svg;
+  }
+  const fmtDuration = (s) => (s >= 3600
+    ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+    : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+
+  /** Title/subtitle for a call entry from my point of view. */
+  function describeCall(m) {
+    const { kind, status, duration } = m.call;
+    const mine = m.from === state.me.username;
+    const noun = kind === 'video' ? 'video call' : 'voice call';
+    const missed = !mine && status !== 'completed';
+    const title = missed ? `Missed ${noun}` : noun[0].toUpperCase() + noun.slice(1);
+    let sub;
+    if (status === 'completed') sub = fmtDuration(duration);
+    else if (mine) sub = status === 'declined' ? 'Declined' : 'No answer';
+    else sub = 'Tap to call back';
+    return { title, sub, missed };
+  }
+
   const emit = (event, payload) => new Promise((resolve, reject) => {
     state.socket.emit(event, payload, (res) => (res && res.ok ? resolve(res) : reject(new Error(res?.error || 'Request failed'))));
   });
@@ -151,8 +186,9 @@
   async function logout() {
     if (state.token) fetch('/api/logout', { method: 'POST', headers: { Authorization: `Bearer ${state.token}` } }).catch(() => {});
     storage.del('chat.token');
+    state.calls?.dispose();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null });
     state.conversations.clear();
     state.messages.clear();
     state.users = {};
@@ -166,6 +202,13 @@
     state.me = user || null;
     const socket = io({ auth: { token } });
     state.socket = socket;
+    state.calls = window.createCallController({
+      socket,
+      emit,
+      iceServers: () => state.iceServers,
+      displayName,
+      paintAvatar,
+    });
 
     socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') {
@@ -177,8 +220,9 @@
 
     socket.on('connect', async () => {
       try {
-        const { user: me } = await emit('me');
+        const { user: me, iceServers } = await emit('me');
         state.me = me;
+        state.iceServers = iceServers || [];
         state.users[me.username] = { ...me, online: true };
         $('#auth').classList.add('hidden');
         $('#app').classList.remove('hidden');
@@ -292,6 +336,10 @@
       const preview = el('span', 'preview' + (typing ? ' typing' : ''));
       if (typing) {
         preview.textContent = typing;
+      } else if (c.lastMessage?.type === 'call') {
+        const { title, sub, missed } = describeCall(c.lastMessage);
+        preview.appendChild(callGlyph(c.lastMessage.call.kind, 'call-glyph' + (missed ? ' missed' : '')));
+        preview.appendChild(document.createTextNode(`${title}${c.lastMessage.call.status === 'completed' ? ` · ${sub}` : ''}`));
       } else if (c.lastMessage) {
         const m = c.lastMessage;
         const mine = m.from === state.me.username;
@@ -372,6 +420,7 @@
       group: conv.type === 'group',
     });
     $('#chat-name').textContent = convTitle(conv);
+    $('#call-buttons').classList.toggle('hidden', conv.type !== 'direct');
     const status = $('#chat-status');
     const typing = typingText(conv.id);
     status.classList.toggle('typing', !!typing);
@@ -396,6 +445,11 @@
       if (!prev || !sameDay(prev.ts, m.ts)) box.appendChild(el('div', 'day', dayLabel(m.ts)));
       const mine = m.from === state.me.username;
       const first = !prev || prev.from !== m.from || !sameDay(prev.ts, m.ts);
+      if (m.type === 'call') {
+        box.appendChild(callBubble(m, conv, mine, first));
+        prev = m;
+        continue;
+      }
       const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}`);
       if (conv.type === 'group' && !mine && first) {
         const author = el('div', 'author', displayName(m.from));
@@ -420,6 +474,32 @@
     if (scrollToEnd || nearBottom) box.scrollTop = box.scrollHeight;
   }
 
+  function callBubble(m, conv, mine, first) {
+    const { title, sub, missed } = describeCall(m);
+    const bubble = el('div', `msg call-entry${mine ? ' out' : ''}${first ? ' first' : ''}${missed ? ' missed' : ''}`);
+    bubble.title = 'Call again';
+    const row = el('div', 'call-row');
+    const icon = el('div', 'call-icon');
+    icon.appendChild(callGlyph(m.call.kind));
+    row.appendChild(icon);
+    const text = el('div');
+    text.appendChild(el('div', 'call-title', title));
+    text.appendChild(el('div', 'call-sub', sub));
+    row.appendChild(text);
+    bubble.appendChild(row);
+    bubble.appendChild(el('span', 'meta', timeOf(m.ts)));
+    bubble.addEventListener('click', () => startCall(m.call.kind, conv.id));
+    return bubble;
+  }
+
+  function startCall(kind, convId = state.activeId) {
+    const conv = state.conversations.get(convId);
+    if (!conv || conv.type !== 'direct' || !state.calls) return;
+    state.calls.start(conv.id, convPeer(conv), kind);
+  }
+  $('#btn-voice-call').addEventListener('click', () => startCall('audio'));
+  $('#btn-video-call').addEventListener('click', () => startCall('video'));
+
   function onMessage(msg) {
     const conv = state.conversations.get(msg.convId);
     if (!conv) {
@@ -434,7 +514,7 @@
     if (msg.convId === state.activeId) {
       renderMessages(mine);
       if (!mine) markRead(msg.convId);
-    } else if (!mine) {
+    } else if (!mine && !msg.readBy.includes(state.me.username)) {
       conv.unread = (conv.unread || 0) + 1;
     }
     // Sender stops typing once a message arrives.

@@ -221,6 +221,30 @@ class Store {
     return msg;
   }
 
+  /**
+   * Record a voice/video call in the conversation history.
+   * `call` is `{ kind: 'audio'|'video', status: 'completed'|'missed'|'declined', duration }`.
+   */
+  addCallMessage(convId, from, { kind, status, duration = 0 }) {
+    const conv = this.getConversation(convId);
+    if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
+    const msg = {
+      id: crypto.randomBytes(8).toString('hex'),
+      convId,
+      from,
+      type: 'call',
+      text: '',
+      call: { kind, status, duration },
+      ts: Date.now(),
+      deliveredTo: [],
+      // Only missed/declined calls should show up as unread for the callee.
+      readBy: status === 'completed' ? conv.members.filter((m) => m !== from) : [],
+    };
+    this.data.messages[convId].push(msg);
+    this._save();
+    return msg;
+  }
+
   getMessages(convId, username, { before, limit = 50 } = {}) {
     if (!this.isMember(convId, username)) throw new Error('Not a member of this chat');
     let msgs = this.data.messages[convId] || [];
@@ -267,6 +291,7 @@ class Store {
       const m = msgs.find((x) => x.id === msgId);
       if (!m) continue;
       if (m.from !== username) throw new Error('You can only delete your own messages');
+      if (m.type === 'call') throw new Error('Call history entries cannot be deleted');
       m.text = '';
       m.deleted = true;
       this._save();

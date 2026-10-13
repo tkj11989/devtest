@@ -1,14 +1,30 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const express = require('express');
 const { Server } = require('socket.io');
 const { Store } = require('./store');
+const { createCallManager } = require('./calls');
 
-function createApp({ store = new Store() } = {}) {
+// STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
+// e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'
+function iceServersFromEnv() {
+  if (process.env.ICE_SERVERS) {
+    try {
+      return JSON.parse(process.env.ICE_SERVERS);
+    } catch (err) {
+      console.error('Invalid ICE_SERVERS JSON, using defaults:', err.message);
+    }
+  }
+  return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+}
+
+function createApp({ store = new Store(), tls = null, iceServers = iceServersFromEnv(), ringTimeoutMs } = {}) {
   const app = express();
-  const server = http.createServer(app);
+  const server = tls ? https.createServer(tls, app) : http.createServer(app);
   const io = new Server(server);
 
   // username -> number of connected sockets
@@ -56,6 +72,16 @@ function createApp({ store = new Store() } = {}) {
     for (const m of conv.members) io.to(userRoom(m)).emit(event, payload);
   };
 
+  /** Mark a new message delivered to online members and push it to everyone in the chat. */
+  const postMessage = (conv, msg) => {
+    for (const m of conv.members) {
+      if (m !== msg.from && isOnline(m)) msg.deliveredTo.push(m);
+    }
+    store._save();
+    emitToMembers(conv, 'message:new', { message: msg });
+    return msg;
+  };
+
   const statusPayload = (msgs) =>
     msgs.map((m) => ({ id: m.id, deliveredTo: m.deliveredTo, readBy: m.readBy }));
 
@@ -85,6 +111,8 @@ function createApp({ store = new Store() } = {}) {
     }
   };
 
+  const calls = createCallManager({ io, store, isOnline, userRoom, postMessage, handle, ringTimeoutMs });
+
   io.on('connection', (socket) => {
     const me = socket.data.username;
     socket.join(userRoom(me));
@@ -94,7 +122,9 @@ function createApp({ store = new Store() } = {}) {
     // Anything sent while we were offline is now delivered.
     for (const c of store.conversationsFor(me)) notifyStatus(c.id, store.markDelivered(c.id, me));
 
-    socket.on('me', handle(() => ({ user: store.publicUser(me) })));
+    calls.attach(socket);
+
+    socket.on('me', handle(() => ({ user: store.publicUser(me), iceServers })));
 
     socket.on('conversations', handle(() => {
       const conversations = store.conversationsFor(me);
@@ -143,14 +173,7 @@ function createApp({ store = new Store() } = {}) {
         }
       }
 
-      // Members that are online receive it immediately.
-      for (const m of conv.members) {
-        if (m !== me && isOnline(m)) msg.deliveredTo.push(m);
-      }
-      store._save();
-
-      emitToMembers(conv, 'message:new', { message: msg });
-      return { message: msg };
+      return { message: postMessage(conv, msg) };
     }));
 
     socket.on('messages:read', handle(({ convId }) => {
@@ -192,13 +215,18 @@ function createApp({ store = new Store() } = {}) {
     });
   });
 
-  return { app, server, io, store };
+  return { app, server, io, store, calls };
 }
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
-  const { server, store } = createApp();
-  server.listen(port, () => console.log(`ChatApp running at http://localhost:${port}`));
+  // Browsers only allow camera/microphone on https:// or localhost, so serve
+  // HTTPS when a certificate is provided (needed to call from other devices).
+  const tls = process.env.SSL_KEY && process.env.SSL_CERT
+    ? { key: fs.readFileSync(process.env.SSL_KEY), cert: fs.readFileSync(process.env.SSL_CERT) }
+    : null;
+  const { server, store } = createApp({ tls });
+  server.listen(port, () => console.log(`ChatApp running at ${tls ? 'https' : 'http'}://localhost:${port}`));
   const shutdown = () => {
     store.flush();
     process.exit(0);
