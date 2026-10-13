@@ -25,7 +25,11 @@ const MAX_PARTICIPANTS = 6;
  * call:hold, call:ended, and call:state (to every chat member, so group
  * members can see and join a running call).
  */
-function createCallManager({ io, store, isOnline, userRoom, postMessage, handle, ringTimeoutMs = 30000 }) {
+/**
+ * `notify(username, event, payload)` reaches all of a user's devices (and their webhooks);
+ * per-socket events (joined/left/signal/hold) go only to the sockets in the call.
+ */
+function createCallManager({ io, store, isOnline, notify, postMessage, handle, ringTimeoutMs = 30000 }) {
   const calls = new Map(); // callId -> call
 
   const inCall = (u) => [...calls.values()].some((c) => c.participants.has(u) || c.ringing.has(u));
@@ -44,7 +48,7 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
     const conv = store.getConversation(call.convId);
     if (!conv) return;
     for (const m of conv.members) {
-      io.to(userRoom(m)).emit('call:state', { convId: call.convId, call: active ? describe(call) : null });
+      notify(m, 'call:state', { convId: call.convId, call: active ? describe(call) : null });
     }
   }
 
@@ -64,7 +68,7 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
 
     // Every device of everyone involved: also dismisses ringing on devices that didn't answer.
     for (const u of new Set([call.from, ...call.invited, ...call.joined])) {
-      io.to(userRoom(u)).emit('call:ended', { callId: call.id, reason, status, duration });
+      notify(u, 'call:ended', { callId: call.id, reason, status, duration });
     }
     announce(call, false);
     const conv = store.getConversation(call.convId);
@@ -80,7 +84,7 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
 
   function stopRinging(call, username, reason) {
     if (!call.ringing.delete(username)) return;
-    io.to(userRoom(username)).emit('call:ended', { callId: call.id, reason });
+    notify(username, 'call:ended', { callId: call.id, reason });
   }
 
   function join(call, socket, username) {
@@ -92,7 +96,7 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
     if (!call.answeredAt && others.length) call.answeredAt = Date.now();
     for (const u of others) io.to(call.participants.get(u)).emit('call:joined', { callId: call.id, username });
     // Stop ringing on my other devices.
-    socket.to(userRoom(username)).emit('call:ended', { callId: call.id, reason: 'answered-elsewhere' });
+    socket.to(`user:${username}`).emit('call:ended', { callId: call.id, reason: 'answered-elsewhere' });
     announce(call);
     return { participants: others, onHold: [...call.onHold] };
   }
@@ -178,7 +182,7 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
 
       const title = group ? conv.name : null;
       for (const u of ring) {
-        io.to(userRoom(u)).emit('call:incoming', {
+        notify(u, 'call:incoming', {
           callId: call.id,
           convId,
           kind,

@@ -1233,6 +1233,132 @@
 
   $('#btn-logout').addEventListener('click', logout);
 
+  // ---------- developer settings (API keys & webhooks via the REST API) ----------
+
+  async function apiFetch(method, path, body) {
+    const res = await fetch(`/api/v1${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${state.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 204) return null;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Request failed');
+    return data;
+  }
+
+  const fmtWhen = (ts) => (ts ? new Date(ts).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
+
+  async function loadDeveloper() {
+    $('#dev-error').textContent = '';
+    try {
+      const [{ apiKeys }, { webhooks, events }] = await Promise.all([apiFetch('GET', '/api-keys'), apiFetch('GET', '/webhooks')]);
+
+      const keys = $('#dev-keys');
+      keys.textContent = '';
+      if (!apiKeys.length) keys.appendChild(el('li', 'muted dev-empty', 'No API keys yet'));
+      for (const k of apiKeys) {
+        const li = el('li');
+        const body = el('div', 'body');
+        body.append(el('div', 'name', k.name), el('div', 'sub', `${k.preview} · created ${fmtWhen(k.createdAt)} · last used ${fmtWhen(k.lastUsedAt)}`));
+        const revoke = el('button', 'danger-link', 'Revoke');
+        revoke.type = 'button';
+        revoke.addEventListener('click', async () => {
+          if (!confirm(`Revoke "${k.name}"? Anything using it will stop working.`)) return;
+          await apiFetch('DELETE', `/api-keys/${k.id}`).catch((e) => { $('#dev-error').textContent = e.message; });
+          $('#dev-key-new').classList.add('hidden');
+          loadDeveloper();
+        });
+        li.append(body, revoke);
+        keys.appendChild(li);
+      }
+
+      $('#dev-events').innerHTML = '';
+      for (const e of ['*', ...events]) {
+        const o = document.createElement('option');
+        o.value = e;
+        $('#dev-events').appendChild(o);
+      }
+      const hooks = $('#dev-hooks');
+      hooks.textContent = '';
+      if (!webhooks.length) hooks.appendChild(el('li', 'muted dev-empty', 'No webhooks yet'));
+      for (const w of webhooks) {
+        const li = el('li');
+        const body = el('div', 'body');
+        const last = w.lastDelivery
+          ? `${w.lastDelivery.ok ? '✓' : '✗'} ${w.lastDelivery.event} ${w.lastDelivery.ok ? w.lastDelivery.status : w.lastDelivery.error} · ${fmtWhen(w.lastDelivery.at)}`
+          : 'no deliveries yet';
+        body.append(
+          el('div', 'name dev-url', w.url),
+          el('div', 'sub', `${w.events.join(', ')}${w.active ? '' : ' · switched off'}`),
+          el('div', `sub ${w.lastDelivery && !w.lastDelivery.ok ? 'error' : ''}`, last),
+        );
+        const actionsEl = el('div', 'dev-actions');
+        const btn = (label, fn, cls = 'link') => {
+          const b = el('button', cls, label);
+          b.type = 'button';
+          b.addEventListener('click', async () => {
+            try { await fn(); } catch (e) { $('#dev-error').textContent = e.message; }
+            loadDeveloper();
+          });
+          actionsEl.appendChild(b);
+        };
+        btn('Send test', async () => {
+          const { result } = await apiFetch('POST', `/webhooks/${w.id}/test`);
+          toast(result.ok ? `Test delivered (HTTP ${result.status})` : `Test failed: ${result.error}`);
+        });
+        btn(w.active ? 'Turn off' : 'Turn on', () => apiFetch('PATCH', `/webhooks/${w.id}`, { active: !w.active }));
+        btn('Delete', async () => {
+          if (confirm('Delete this webhook?')) await apiFetch('DELETE', `/webhooks/${w.id}`);
+        }, 'danger-link');
+        li.append(body, actionsEl);
+        hooks.appendChild(li);
+      }
+    } catch (err) {
+      $('#dev-error').textContent = err.message;
+    }
+  }
+
+  $('#btn-developer').addEventListener('click', () => {
+    openPanel('#panel-developer');
+    $('#dev-key-new').classList.add('hidden');
+    $('#dev-hook-new').classList.add('hidden');
+    loadDeveloper();
+  });
+  $('#dev-key-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const { key } = await apiFetch('POST', '/api-keys', { name: e.target.name.value });
+      $('#dev-key-value').textContent = key;
+      $('#dev-key-new').classList.remove('hidden');
+      e.target.reset();
+      loadDeveloper();
+    } catch (err) {
+      $('#dev-error').textContent = err.message;
+    }
+  });
+  $('#dev-hook-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const events = e.target.events.value.split(',').map((x) => x.trim()).filter(Boolean);
+    try {
+      const { secret } = await apiFetch('POST', '/webhooks', { url: e.target.url.value, events });
+      $('#dev-hook-secret').textContent = secret;
+      $('#dev-hook-new').classList.remove('hidden');
+      e.target.reset();
+      loadDeveloper();
+    } catch (err) {
+      $('#dev-error').textContent = err.message;
+    }
+  });
+  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($(`#${b.dataset.copy}`).textContent);
+      toast('Copied');
+    } catch {
+      toast('Select the text and copy it manually');
+    }
+  }));
+
   // Short notices at the bottom of the screen.
   function toast(text) {
     const t = $('#toast');

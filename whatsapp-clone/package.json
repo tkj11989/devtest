@@ -6,12 +6,14 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test --test-timeout=20000 test/*.test.js"
+    "test": "node --test --test-timeout=20000 test/*.test.js",
+    "example:echo-bot": "node examples/echo-bot.js"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "express": "^4.22.3",
-    "socket.io": "^4.8.4"
+    "socket.io": "^4.8.4",
+    "swagger-ui-dist": "^5.17.14"
   },
   "devDependencies": {
     "socket.io-client": "^4.8.4"

@@ -21,6 +21,7 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - Delete your own messages ("This message was deleted")
 - Editable profile (display name and about)
 - Emoji picker, day separators, responsive layout (mobile + desktop), dark mode
+- **Public API for other platforms**: REST API (`/api/v1`) with API keys, signed webhooks, an OpenAPI 3.1 spec and interactive docs at `/api/docs`, plus a Developer panel in the app (Profile → Developer)
 - Data persisted to `data/db.json` (voice-message audio and status photos in `data/media/`)
 
 ## Getting started
@@ -48,6 +49,97 @@ Calls use WebRTC, so audio/video goes directly between the two browsers; the ser
   ```
 - Group calls connect every participant to every other one (a "mesh"), so they're limited to 6 people; larger calls would need a media server (SFU).
 - Hold stops sending your audio/video and mutes theirs until you resume.
+
+## API for other platforms
+
+Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with ChatApp.
+
+- **Docs**: open **`/api/docs`** (interactive, with "Try it out") or fetch **`/api/v1/openapi.json`** (OpenAPI 3.1; generate a client with any OpenAPI generator).
+- **Auth**: `Authorization: Bearer <token>` with either a session token (`POST /api/v1/auth/login`) or an **API key** (`cak_…`). API keys are for servers and bots: they survive restarts, show when they were last used, and can be revoked. Create them in the app under **Profile → Developer**, or with `POST /api/v1/api-keys` while logged in.
+- **Real-time events**: register a **webhook** (Developer panel or `POST /api/v1/webhooks`), or connect a Socket.IO client with `auth: { token: "<session token or API key>" }` to get the same events live (see Socket events below).
+- **Same behaviour as the app**: messages sent over the API appear instantly in open apps, are delivered to webhooks, and follow the same rules (blocking, membership, limits).
+
+### Quick start
+
+```bash
+BASE=http://localhost:3000/api/v1
+TOKEN=$(curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"secret123"}' | jq -r .token)
+
+# A long-lived API key for your integration (shown once)
+KEY=$(curl -s -X POST $BASE/api-keys -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"CRM"}' | jq -r .key)
+
+# Open a chat with bob and send a message (Idempotency-Key makes retries safe)
+CONV=$(curl -s -X POST $BASE/conversations -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' -d '{"type":"direct","username":"bob"}' | jq -r '.conversation.id | @uri')
+curl -s -X POST "$BASE/conversations/$CONV/messages" -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: order-1042' -d '{"text":"Your order has shipped 📦"}'
+
+# Read history (oldest first; page back with ?before=<nextBefore>)
+curl -s "$BASE/conversations/$CONV/messages?limit=20" -H "Authorization: Bearer $KEY"
+
+# Get events at your URL
+curl -s -X POST $BASE/webhooks -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/chatapp","events":["message:new","call:incoming"]}'
+```
+
+Conversation ids for direct chats contain colons (`dm:alice:bob`): URL-encode them in paths.
+
+Main endpoints (all under `/api/v1`; full details in `/api/docs`):
+
+| Area | Endpoints |
+|------|-----------|
+| Auth & account | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET/PATCH /me` |
+| API keys | `GET/POST /api-keys`, `DELETE /api-keys/{id}` |
+| Webhooks | `GET/POST /webhooks`, `GET/PATCH/DELETE /webhooks/{id}`, `POST /webhooks/{id}/test` |
+| People | `GET /users?q=`, `GET /users/{username}`, `GET /blocked`, `PUT/DELETE /blocked/{username}` |
+| Chats | `GET/POST /conversations`, `GET /conversations/{id}`, `GET /conversations/{id}/call` |
+| Messages | `GET/POST /conversations/{id}/messages`, `POST /conversations/{id}/voice` (raw audio body), `POST /conversations/{id}/read`, `POST /conversations/{id}/typing`, `DELETE /messages/{id}`, `PUT/DELETE /messages/{id}/star`, `GET /starred`, `GET /media/{id}` |
+| Status | `GET/POST /statuses` (JSON text, or a raw image body with `?caption=`), `DELETE /statuses/{id}`, `POST /statuses/{id}/view`, `POST /statuses/{id}/replies` |
+
+Errors are `{ "error": { "code": "not_found", "message": "…" } }` with the matching HTTP status (400, 401, 403, 404, 409, 413, 415, 429).
+
+### Webhooks
+
+Each event is POSTed to your URL as JSON:
+
+```json
+{ "id": "evt_9b8a7c6d5e4f3a2b", "event": "message:new", "createdAt": 1760000000000,
+  "user": "alice", "data": { "message": { "id": "…", "convId": "dm:alice:bob", "from": "bob", "text": "Hi" } } }
+```
+
+`data` is the same payload as the Socket.IO event of that name. Events: `message:new`, `message:status`, `message:deleted`, `message:starred`, `conversation:new`, `typing`, `presence`, `user:updated`, `blocked:update`, `call:incoming`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `ping`. Subscribing to `*` (the default) means everything except the chatty `typing` and `presence`.
+
+**Verify every delivery**: `X-ChatApp-Signature` is `sha256=` + the hex HMAC-SHA256 of `"<X-ChatApp-Timestamp>.<raw body>"` using the webhook's secret (shown once when you create it). Reject old timestamps to stop replays.
+
+```js
+const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${req.headers['x-chatapp-timestamp']}.${rawBody}`).digest('hex');
+const valid = crypto.timingSafeEqual(Buffer.from(req.headers['x-chatapp-signature']), Buffer.from(expected));
+```
+
+Reply with any 2xx within 5 seconds. Failed deliveries are retried after 2 s, 10 s and 60 s; after 20 failures in a row the webhook is switched off (turn it back on in the Developer panel or with `PATCH /webhooks/{id}` `{"active": true}`). The last delivery result is shown in the panel and in `GET /webhooks/{id}`.
+
+For safety the server refuses to call private, loopback or link-local addresses. For local development, start it with `WEBHOOKS_ALLOW_PRIVATE=1`.
+
+### Example: echo bot
+
+`examples/echo-bot.js` is a complete integration in ~100 lines with no dependencies. It signs in with an API key, registers a webhook, verifies signatures, and replies to every message:
+
+```bash
+WEBHOOKS_ALLOW_PRIVATE=1 npm start
+CHATAPP_API_KEY=cak_... node examples/echo-bot.js   # then message that account from the app
+```
+
+### API settings
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `API_RATE_LIMIT` | `120` | Requests per minute per credential (`RateLimit-*` headers; `429` + `Retry-After` when exceeded). Login/register: 20 per minute per IP. |
+| `CORS_ORIGINS` | `*` | Comma-separated origins allowed to call the API from a browser. |
+| `WEBHOOKS_ALLOW_PRIVATE` | off | Allow webhooks to private/localhost addresses (development only). |
+
+Sessions and rate-limit counters are kept in memory (one server process). API keys, webhooks and data are saved in `data/db.json`.
 
 ### Status updates
 
@@ -102,7 +194,11 @@ npm test           # unit + realtime integration tests
 ```
 whatsapp-clone/
 ├── server/
-│   ├── index.js     # Express app, REST auth endpoints, Socket.IO events
+│   ├── index.js     # Express app and Socket.IO wiring
+│   ├── service.js   # Every user action, shared by Socket.IO and the REST API
+│   ├── api.js       # REST API v1 (auth, rate limits, CORS, errors)
+│   ├── openapi.js   # OpenAPI 3.1 spec (served at /api/v1/openapi.json)
+│   ├── webhooks.js  # Signed webhook delivery with retries
 │   ├── calls.js     # 1:1 and group call signalling (ring, join, relay, hold, end, call log)
 │   └── store.js     # Users, sessions, conversations, messages (JSON file storage)
 ├── public/
@@ -111,17 +207,23 @@ whatsapp-clone/
 │   ├── styles.css   # WhatsApp-style theme (light/dark)
 │   ├── app.js       # Client logic
 │   ├── call.js      # WebRTC call controller and call screen
-│   └── status.js    # Status updates: list, composer and viewer
+│   ├── status.js    # Status updates: list, composer and viewer
+│   └── api-docs.html # Interactive API docs (/api/docs)
+├── examples/
+│   └── echo-bot.js  # Example integration: API key + webhooks + REST
 ├── design/          # Source design sheets for the icons
 ├── tools/
 │   └── extract-icons.py
 └── test/
     ├── app.test.js
     ├── calls.test.js
-    └── status.test.js
+    ├── status.test.js
+    └── api.test.js
 ```
 
 ## Socket events
+
+The web app uses these over Socket.IO (connect with `auth: { token }`, a session token or API key). Requests take an acknowledgement callback that receives `{ ok: true, ... }` or `{ ok: false, error }`.
 
 | Client → server     | Purpose                                  |
 |---------------------|------------------------------------------|

@@ -135,6 +135,53 @@
           <button class="primary" type="submit">Save</button>
           <p id="profile-msg" class="muted"></p>
         </form>
+        <div class="pad">
+          <button class="link-row" id="btn-developer" type="button">
+            <svg viewBox="0 0 24 24"><path d="m9.4 16.6-4.6-4.6 4.6-4.6L8 6l-6 6 6 6 1.4-1.4Zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4Z"/></svg>
+            <span><strong>Developer</strong><small>API keys, webhooks and API docs</small></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Developer: API keys & webhooks -->
+      <div class="panel overlay hidden" id="panel-developer">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Developer</h2></header>
+        <div class="dev-scroll">
+          <p class="pad muted dev-intro">
+            Connect ChatApp to other platforms with the REST API. Use an API key as
+            <code>Authorization: Bearer cak_…</code>, and receive events at your own URL with webhooks.
+            <a href="/api/docs" target="_blank" rel="noopener">Open the API docs ↗</a>
+          </p>
+
+          <h3 class="section-title">API keys</h3>
+          <ul class="list dev-list" id="dev-keys"></ul>
+          <form class="pad dev-form" id="dev-key-form">
+            <input name="name" maxlength="60" placeholder="Key name, e.g. CRM integration" required />
+            <button class="primary small" type="submit">Create key</button>
+          </form>
+          <div class="pad hidden" id="dev-key-new">
+            <div class="secret-box">
+              <p><strong>Copy your new API key now.</strong> It won't be shown again.</p>
+              <div class="secret-row"><code id="dev-key-value"></code><button class="primary small" type="button" data-copy="dev-key-value">Copy</button></div>
+            </div>
+          </div>
+
+          <h3 class="section-title">Webhooks</h3>
+          <ul class="list dev-list" id="dev-hooks"></ul>
+          <form class="pad dev-form stack" id="dev-hook-form">
+            <input name="url" type="url" placeholder="https://your-server.example/chatapp-webhook" required />
+            <input name="events" placeholder="Events (comma separated), blank for all" list="dev-events" />
+            <datalist id="dev-events"></datalist>
+            <button class="primary small" type="submit">Add webhook</button>
+          </form>
+          <div class="pad hidden" id="dev-hook-new">
+            <div class="secret-box">
+              <p><strong>Signing secret</strong> — use it to verify <code>X-ChatApp-Signature</code>. It won't be shown again.</p>
+              <div class="secret-row"><code id="dev-hook-secret"></code><button class="primary small" type="button" data-copy="dev-hook-secret">Copy</button></div>
+            </div>
+          </div>
+          <p class="pad error" id="dev-error"></p>
+        </div>
       </div>
     </aside>
 

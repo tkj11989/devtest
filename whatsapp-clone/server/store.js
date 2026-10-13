@@ -14,7 +14,7 @@ class Store {
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000 } = {}) {
     this.statusTtlMs = statusTtlMs;
     this.file = file === undefined ? path.join(__dirname, '..', 'data', 'db.json') : file;
-    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {} };
+    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {} };
     this.sessions = new Map(); // token -> username
     // Voice-message audio lives next to the data file (or in memory without one).
     this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
@@ -27,7 +27,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, ...parsed };
+      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, ...parsed };
     } catch (err) {
       console.error('Could not read data file, starting fresh:', err.message);
     }
@@ -94,8 +94,157 @@ class Store {
     return { token, user: this.publicUser(username) };
   }
 
+  /** A login session token or an API key, as sent in `Authorization: Bearer …`. */
   userForToken(token) {
-    return this.sessions.get(token) || null;
+    if (!token) return null;
+    const session = this.sessions.get(token);
+    if (session) return session;
+    if (!String(token).startsWith(Store.API_KEY_PREFIX)) return null;
+    const hash = Store._keyHash(token);
+    const key = Object.values(this.data.apiKeys).find((k) => k.hash === hash);
+    if (!key || !this.data.users[key.owner]) return null;
+    // Remember roughly when a key was last used, without rewriting the file on every request.
+    if (Date.now() - (key.lastUsedAt || 0) > 60 * 1000) {
+      key.lastUsedAt = Date.now();
+      this._save();
+    }
+    return key.owner;
+  }
+
+  // ---------- API keys (long-lived credentials for integrations) ----------
+
+  static _keyHash(key) {
+    return crypto.createHash('sha256').update(String(key)).digest('hex');
+  }
+
+  static _publicKey(k) {
+    const { hash, ...rest } = k;
+    return rest;
+  }
+
+  /** Returns the key itself once; only its hash is stored. */
+  createApiKey(owner, name) {
+    if (!this.data.users[owner]) throw new Error('No such user');
+    const mine = Object.values(this.data.apiKeys).filter((k) => k.owner === owner);
+    if (mine.length >= Store.MAX_API_KEYS) throw new Error(`You can have at most ${Store.MAX_API_KEYS} API keys`);
+    const key = Store.API_KEY_PREFIX + crypto.randomBytes(24).toString('base64url');
+    const record = {
+      id: 'key_' + crypto.randomBytes(6).toString('hex'),
+      owner,
+      name: String(name || '').trim().slice(0, 60) || 'API key',
+      preview: `${key.slice(0, 8)}…${key.slice(-4)}`,
+      hash: Store._keyHash(key),
+      createdAt: Date.now(),
+      lastUsedAt: null,
+    };
+    this.data.apiKeys[record.id] = record;
+    this._save();
+    return { key, apiKey: Store._publicKey(record) };
+  }
+
+  listApiKeys(owner) {
+    return Object.values(this.data.apiKeys)
+      .filter((k) => k.owner === owner)
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map(Store._publicKey);
+  }
+
+  revokeApiKey(owner, id) {
+    const k = this.data.apiKeys[id];
+    if (!k || k.owner !== owner) throw new Error('API key not found');
+    delete this.data.apiKeys[id];
+    this._save();
+  }
+
+  // ---------- webhooks ----------
+
+  static _publicWebhook(w) {
+    const { secret, ...rest } = w;
+    return rest;
+  }
+
+  /** `events`: event names, or ['*'] for all. Returns the signing secret once. */
+  createWebhook(owner, { url, events, description }) {
+    if (!this.data.users[owner]) throw new Error('No such user');
+    let parsed;
+    try {
+      parsed = new URL(String(url || ''));
+    } catch {
+      throw new Error('url must be a valid http(s) URL');
+    }
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error('url must be a valid http(s) URL');
+    if (parsed.username || parsed.password) throw new Error('url must not contain credentials');
+    const list = Array.isArray(events) && events.length ? [...new Set(events.map(String))] : ['*'];
+    const unknown = list.filter((e) => e !== '*' && !Store.WEBHOOK_EVENTS.includes(e));
+    if (unknown.length) throw new Error(`Unknown event: ${unknown.join(', ')}`);
+    const mine = Object.values(this.data.webhooks).filter((w) => w.owner === owner);
+    if (mine.length >= Store.MAX_WEBHOOKS) throw new Error(`You can have at most ${Store.MAX_WEBHOOKS} webhooks`);
+    const hook = {
+      id: 'wh_' + crypto.randomBytes(6).toString('hex'),
+      owner,
+      url: parsed.toString(),
+      events: list,
+      description: String(description || '').trim().slice(0, 120),
+      secret: 'whsec_' + crypto.randomBytes(24).toString('base64url'),
+      active: true,
+      createdAt: Date.now(),
+      failures: 0,
+      lastDelivery: null,
+    };
+    this.data.webhooks[hook.id] = hook;
+    this._save();
+    return { secret: hook.secret, webhook: Store._publicWebhook(hook) };
+  }
+
+  listWebhooks(owner) {
+    return Object.values(this.data.webhooks)
+      .filter((w) => w.owner === owner)
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map(Store._publicWebhook);
+  }
+
+  getWebhook(owner, id) {
+    const w = this.data.webhooks[id];
+    if (!w || w.owner !== owner) throw new Error('Webhook not found');
+    return w;
+  }
+
+  updateWebhook(owner, id, { active, events }) {
+    const w = this.getWebhook(owner, id);
+    if (typeof active === 'boolean') {
+      w.active = active;
+      if (active) w.failures = 0;
+    }
+    if (Array.isArray(events) && events.length) {
+      const unknown = events.filter((e) => e !== '*' && !Store.WEBHOOK_EVENTS.includes(e));
+      if (unknown.length) throw new Error(`Unknown event: ${unknown.join(', ')}`);
+      w.events = [...new Set(events)];
+    }
+    this._save();
+    return Store._publicWebhook(w);
+  }
+
+  deleteWebhook(owner, id) {
+    this.getWebhook(owner, id);
+    delete this.data.webhooks[id];
+    this._save();
+  }
+
+  /** Active webhooks of `username` subscribed to `event` ('*' skips the chatty typing/presence events). */
+  webhooksFor(username, event) {
+    return Object.values(this.data.webhooks).filter((w) => w.owner === username && w.active && (
+      w.events.includes(event) || (w.events.includes('*') && !Store.NOISY_EVENTS.includes(event))
+    ));
+  }
+
+  recordDelivery(id, result) {
+    const w = this.data.webhooks[id];
+    if (!w) return;
+    w.lastDelivery = result;
+    w.failures = result.ok ? 0 : (w.failures || 0) + 1;
+    // Stop calling an endpoint that keeps failing; the owner can turn it back on.
+    if (w.failures >= Store.WEBHOOK_MAX_FAILURES) w.active = false;
+    this._save();
   }
 
   logout(token) {
@@ -567,5 +716,19 @@ class Store {
     throw new Error('Message not found');
   }
 }
+
+Store.API_KEY_PREFIX = 'cak_';
+Store.MAX_API_KEYS = 10;
+Store.MAX_WEBHOOKS = 5;
+Store.WEBHOOK_MAX_FAILURES = 20;
+/** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */
+Store.WEBHOOK_EVENTS = [
+  'message:new', 'message:status', 'message:deleted', 'message:starred',
+  'conversation:new', 'typing', 'presence', 'user:updated', 'blocked:update',
+  'call:incoming', 'call:ended', 'call:state',
+  'status:new', 'status:viewed', 'status:deleted',
+  'ping',
+];
+Store.NOISY_EVENTS = ['typing', 'presence'];
 
 module.exports = { Store };

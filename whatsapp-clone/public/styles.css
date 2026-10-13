@@ -910,3 +910,48 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color:
   box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
   max-width: calc(100% - 32px);
 }
+
+/* ---------- developer settings ---------- */
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 12px;
+  background: var(--panel-2);
+  border: 0;
+  border-radius: 10px;
+  color: var(--text);
+  text-align: left;
+}
+.link-row:hover { background: var(--active); }
+.link-row svg { width: 24px; height: 24px; fill: var(--green); flex: none; }
+.link-row small { display: block; color: var(--muted); font-size: 13px; }
+.dev-scroll { overflow-y: auto; flex: 1; }
+.dev-intro { font-size: 14px; line-height: 1.5; margin: 0; }
+.dev-intro a { color: var(--green); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+.dev-list li { cursor: default; padding: 8px 16px; gap: 10px; }
+.dev-list li:hover { background: none; }
+.dev-list .body { padding: 4px 0; border: 0; }
+.dev-list .name { font-size: 15px; }
+.dev-list .sub { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.dev-list .sub.error { color: var(--danger); }
+.dev-url { overflow-wrap: anywhere; }
+.dev-empty { padding: 8px 16px; font-size: 14px; }
+.dev-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+.link, .danger-link { background: none; border: 0; padding: 2px 0; font-size: 13.5px; color: var(--green); }
+.danger-link { color: var(--danger); }
+.link:hover, .danger-link:hover { text-decoration: underline; }
+.dev-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.dev-form input { flex: 1; min-width: 180px; }
+.dev-form.stack { flex-direction: column; align-items: stretch; }
+.secret-box { background: #fff4cc; color: #4a3b00; border-radius: 8px; padding: 10px 12px; font-size: 13.5px; }
+.secret-box p { margin: 0 0 8px; }
+.secret-box code { background: rgba(0, 0, 0, .07); color: inherit; }
+.secret-row { display: flex; gap: 8px; align-items: center; }
+.secret-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 6px 8px; }
+@media (prefers-color-scheme: dark) {
+  .secret-box { background: #3b3417; color: #f5e7b0; }
+}
+#panel-profile { overflow-y: auto; }
