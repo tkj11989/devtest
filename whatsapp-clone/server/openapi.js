@@ -60,6 +60,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         joined: arrayOf({ type: 'string' }),
       }),
       statusReply: obj({ statusId: { type: 'string' }, owner: { type: 'string' }, type: { type: 'string' }, preview: { type: 'string' }, bg: { type: 'string' } }),
+      locked: { type: 'boolean', description: 'true: the chat is locked and not unlocked in this session, so the content is withheld' },
     }, ['id', 'convId', 'from', 'ts']),
     ActiveCall: obj({
       callId: { type: 'string' },
@@ -79,7 +80,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       lastMessage: { oneOf: [ref('Message'), { type: 'null' }] },
       unread: { type: 'integer' },
       activeCall: { oneOf: [ref('ActiveCall'), { type: 'null' }] },
+      locked: { type: 'boolean', description: 'you locked this chat with your secret code' },
+      unlocked: { type: 'boolean', description: 'locked chats only: unlocked in this session' },
     }, ['id', 'type', 'members']),
+    ChatLock: obj({
+      hasCode: { type: 'boolean', description: 'a secret code has been set' },
+      lockedChats: arrayOf({ type: 'string' }),
+    }, ['hasCode', 'lockedChats']),
     Status: obj({
       id: { type: 'string' },
       owner: { type: 'string' },
@@ -129,10 +136,11 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E409: errorResponse('Conflict (e.g. username taken, limit reached)'),
     E413: errorResponse('Body too large'),
     E415: errorResponse('Unsupported media type'),
+    E423: errorResponse('The chat is locked: unlock it with POST /conversations/{id}/unlock (code `chat_locked`)'),
     E429: errorResponse('Rate limited; see Retry-After'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -232,13 +240,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
           { name: 'before', in: 'query', schema: { type: 'integer' }, description: 'only messages older than this timestamp; pass `nextBefore` to page back' },
         ],
-        responses: { 200: ok(obj({ messages: arrayOf(ref('Message')), hasMore: { type: 'boolean' }, nextBefore: { type: ['integer', 'null'] } })), ...errors(401, 404) },
+        responses: { 200: ok(obj({ messages: arrayOf(ref('Message')), hasMore: { type: 'boolean' }, nextBefore: { type: ['integer', 'null'] } })), ...errors(401, 404, 423) },
       }),
       post: op(T.msg, 'Send a text message', {
         description: 'Send `Idempotency-Key` (or `clientId` in the body) to make retries safe: the same key returns the original message instead of sending twice.',
         params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
         body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' } }, ['text']), { text: 'Hello from the API 👋' }),
-        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 429) },
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 423, 429) },
       }),
     },
     '/conversations/{id}/voice': {
@@ -250,7 +258,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           { name: 'Idempotency-Key', in: 'header', schema: { type: 'string' } },
         ],
         body: { required: true, content: { 'audio/*': { schema: { type: 'string', format: 'binary' } } } },
-        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415) },
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
       }),
     },
     '/conversations/{id}/read': { post: op(T.msg, 'Mark everything in the chat as read', { params: [CONV_ID], responses: { 200: ok(obj({ updated: { type: 'integer' } })), ...errors(401, 404) } }) },
@@ -278,7 +286,52 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/media/{id}': {
       get: op(T.msg, 'Download voice-message audio or a status photo', {
         params: [idParam('id')],
-        responses: { 200: { description: 'The file', content: { 'audio/*': {}, 'image/*': {} } }, ...errors(401, 404) },
+        responses: { 200: { description: 'The file', content: { 'audio/*': {}, 'image/*': {} } }, ...errors(401, 404, 423) },
+      }),
+    },
+
+    '/chat-lock': {
+      get: op(T.lock, 'Chat lock settings', {
+        description: [
+          'Lock chats with a secret code. A locked chat\'s messages are withheld (`locked: true`, no content; `423 chat_locked` for history, sending and its voice notes) until it is unlocked **in that session**.',
+          'For the REST API a session is the credential, optionally narrowed with an `X-App-Session` header; for the web app it is one page load. New logins start locked.',
+          'Webhooks never receive the content of locked chats. 5 wrong codes lock out further tries, for 1 minute and then doubling up to an hour.',
+        ].join('\n\n'),
+        responses: { 200: ok(ref('ChatLock')), ...errors(401) },
+      }),
+    },
+    '/chat-lock/code': {
+      put: op(T.lock, 'Set or change the secret code', {
+        body: jsonBody(obj({ code: { type: 'string', minLength: 4, maxLength: 32 }, currentCode: { type: 'string', description: 'required when changing an existing code' } }, ['code']), { code: '2468' }),
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 403, 429) },
+      }),
+    },
+    '/chat-lock/reset': {
+      post: op(T.lock, 'Forgot the code: set a new one with your account password', {
+        body: jsonBody(obj({ password: { type: 'string' }, newCode: { type: 'string', minLength: 4, maxLength: 32 } }, ['password', 'newCode'])),
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 403, 429) },
+      }),
+    },
+    '/chat-lock/relock': {
+      post: op(T.lock, 'Lock again every chat unlocked in this session', { responses: { 200: ok(ref('ChatLock')), ...errors(401) } }),
+    },
+    '/conversations/{id}/lock': {
+      put: op(T.lock, 'Lock a chat', {
+        description: 'Needs a secret code to have been set. Takes effect immediately in every session.',
+        params: [CONV_ID],
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 404) },
+      }),
+      delete: op(T.lock, 'Remove the lock from a chat', {
+        params: [CONV_ID],
+        body: jsonBody(obj({ code: { type: 'string' } }, ['code'])),
+        responses: { 200: ok(ref('ChatLock')), ...errors(401, 403, 404, 429) },
+      }),
+    },
+    '/conversations/{id}/unlock': {
+      post: op(T.lock, 'Unlock a locked chat for this session', {
+        params: [CONV_ID, { name: 'X-App-Session', in: 'header', schema: { type: 'string' }, description: 'optional: scope the unlock to one app session of this credential' }],
+        body: jsonBody(obj({ code: { type: 'string' } }, ['code'])),
+        responses: { 200: ok(obj({ conversation: ref('Conversation') })), ...errors(401, 403, 404, 429) },
       }),
     },
 
@@ -357,6 +410,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /messages/{id}/star': 'unstarMessage',
     'get /starred': 'listStarredMessages',
     'get /media/{id}': 'downloadMedia',
+    'get /chat-lock': 'getChatLock',
+    'put /chat-lock/code': 'setChatLockCode',
+    'post /chat-lock/reset': 'resetChatLockCode',
+    'post /chat-lock/relock': 'relockChats',
+    'put /conversations/{id}/lock': 'lockChat',
+    'delete /conversations/{id}/lock': 'removeChatLock',
+    'post /conversations/{id}/unlock': 'unlockChat',
     'get /statuses': 'listStatuses',
     'post /statuses': 'postStatus',
     'delete /statuses/{id}': 'deleteStatus',
@@ -383,6 +443,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     [T.conv]: 'One-to-one chats and groups',
     [T.msg]: 'Sending, reading, starring and deleting messages',
     [T.status]: 'Status updates that disappear after 24 hours',
+    [T.lock]: 'Lock chats with a secret code, required again in every new session',
     [T.meta]: 'Service health and this document',
   };
 

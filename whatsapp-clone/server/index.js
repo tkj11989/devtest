@@ -50,6 +50,13 @@ const SOCKET_ACTIONS = {
   'status:view': 'viewStatus',
   'status:delete': 'deleteStatus',
   'status:reply': 'replyStatus',
+  'chatlock:settings': 'lockSettings',
+  'chatlock:set-code': 'setLockCode',
+  'chatlock:reset-code': 'resetLockCode',
+  'chatlock:lock': 'lockChat',
+  'chatlock:remove': 'removeChatLock',
+  'chatlock:unlock': 'unlockChat',
+  'chatlock:relock': 'relock',
 };
 
 /**
@@ -132,6 +139,7 @@ function createApp({
 
   app.post('/api/logout', (req, res) => {
     store.logout(bearer(req));
+    service.forgetUnlocks({ credential: bearer(req) });
     res.json({ ok: true });
   });
 
@@ -141,6 +149,9 @@ function createApp({
     if (!username) return res.status(401).end();
     const media = store.getMedia(req.params.id, username);
     if (!media) return res.status(404).end();
+    // Voice notes from a locked chat need it unlocked in this app session.
+    const ctx = { lockKey: service.lockKeyFor(username, bearer(req), req.get('x-app-session')) };
+    if (!service.mediaAllowed(username, req.params.id, ctx)) return res.status(423).end();
     res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
     res.send(media.buffer);
   });
@@ -162,6 +173,8 @@ function createApp({
     const username = store.userForToken(socket.handshake.auth?.token);
     if (!username) return next(new Error('unauthorized'));
     socket.data.username = username;
+    // One page load of the web app = one app session for chat lock (survives reconnects, not reloads).
+    socket.data.lockKey = service.lockKeyFor(username, socket.handshake.auth.token, socket.handshake.auth.appSession);
     next();
   });
 
@@ -175,11 +188,15 @@ function createApp({
     for (const c of store.conversationsFor(me)) service.notifyStatus(c.id, store.markDelivered(c.id, me));
 
     calls.attach(socket);
+    const ctx = { lockKey: socket.data.lockKey };
     for (const [event, action] of Object.entries(SOCKET_ACTIONS)) {
-      socket.on(event, handle((payload) => actions[action](me, payload)));
+      socket.on(event, handle((payload) => actions[action](me, payload, ctx)));
     }
 
     socket.on('disconnect', () => {
+      // Closing the last tab of an app session locks its chats again.
+      const stillOpen = [...io.sockets.sockets.values()].some((s) => s.data.lockKey === ctx.lockKey);
+      if (!stillOpen && socket.handshake.auth.appSession) service.forgetUnlocks({ lockKey: ctx.lockKey });
       const n = (online.get(me) || 1) - 1;
       if (n <= 0) {
         online.delete(me);

@@ -11,6 +11,7 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Starred messages**: star any message, find them all in the starred list (stars are private to you)
+- **Chat lock**: lock specific chats with a secret code; the code is required again in every new session (each time the app is opened or you log in), and the server withholds the chat's content until then
 - **Block contacts**: blocked contacts can't message or call you and don't see your online status or last seen
 - Offline banner while the connection is down; unsent messages go out automatically when you're back
 - Message status icons (see below): not delivered, delivered, read, failed (tap to retry; auto-resent on reconnect), deleted, masked
@@ -49,6 +50,20 @@ Calls use WebRTC, so audio/video goes directly between the two browsers; the ser
   ```
 - Group calls connect every participant to every other one (a "mesh"), so they're limited to 6 people; larger calls would need a media server (SFU).
 - Hold stops sending your audio/video and mutes theirs until you resume.
+
+## Chat lock
+
+Lock any chat (one-to-one or group) from the chat menu (**⋮ → Lock chat**). The first time, you create a **secret code** (4–32 characters, separate from your password).
+
+- A locked chat shows a padlock in the chat list and the preview reads "Locked chat · tap to unlock". Opening it shows a lock screen until you enter the code.
+- **Every new session asks again**: unlocking lasts for this page load only. Reloading, opening another tab or window, closing the app, or logging in again means the code is needed again. A dropped connection that reconnects on the same page stays unlocked.
+- **Lock all chats now** (Profile → Chat lock) re-locks everything immediately; **Remove chat lock** (chat menu) needs the code.
+- **Forgot the code?** Set a new one with your account password. Your chats stay locked.
+- 5 wrong codes (or passwords on the reset) block further tries for 1 minute, then 2, 4, … up to an hour.
+
+It is enforced by the server, not just hidden in the page. Until a chat is unlocked in a session, that session gets no message text, voice notes, call details or previews for it: history requests are refused with `423 chat_locked`, live `message:new` events arrive without content (`{ locked: true }`), starred messages from it are redacted, and its voice notes can't be downloaded. **Webhooks never receive the content of locked chats.** Locking applies only to you; the other people in the chat see it as usual. Codes are stored as scrypt hashes.
+
+Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
 ## API for other platforms
 
@@ -96,9 +111,10 @@ Main endpoints (all under `/api/v1`; full details in `/api/docs`):
 | People | `GET /users?q=`, `GET /users/{username}`, `GET /blocked`, `PUT/DELETE /blocked/{username}` |
 | Chats | `GET/POST /conversations`, `GET /conversations/{id}`, `GET /conversations/{id}/call` |
 | Messages | `GET/POST /conversations/{id}/messages`, `POST /conversations/{id}/voice` (raw audio body), `POST /conversations/{id}/read`, `POST /conversations/{id}/typing`, `DELETE /messages/{id}`, `PUT/DELETE /messages/{id}/star`, `GET /starred`, `GET /media/{id}` |
+| Chat lock | `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset`, `POST /chat-lock/relock`, `PUT/DELETE /conversations/{id}/lock`, `POST /conversations/{id}/unlock` |
 | Status | `GET/POST /statuses` (JSON text, or a raw image body with `?caption=`), `DELETE /statuses/{id}`, `POST /statuses/{id}/view`, `POST /statuses/{id}/replies` |
 
-Errors are `{ "error": { "code": "not_found", "message": "…" } }` with the matching HTTP status (400, 401, 403, 404, 409, 413, 415, 429).
+Errors are `{ "error": { "code": "not_found", "message": "…" } }` with the matching HTTP status (400, 401, 403, 404, 409, 413, 415, 423, 429).
 
 ### Webhooks
 
@@ -109,7 +125,7 @@ Each event is POSTed to your URL as JSON:
   "user": "alice", "data": { "message": { "id": "…", "convId": "dm:alice:bob", "from": "bob", "text": "Hi" } } }
 ```
 
-`data` is the same payload as the Socket.IO event of that name. Events: `message:new`, `message:status`, `message:deleted`, `message:starred`, `conversation:new`, `typing`, `presence`, `user:updated`, `blocked:update`, `call:incoming`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `ping`. Subscribing to `*` (the default) means everything except the chatty `typing` and `presence`.
+`data` is the same payload as the Socket.IO event of that name. Events: `message:new`, `message:status`, `message:deleted`, `message:starred`, `conversation:new`, `typing`, `presence`, `user:updated`, `blocked:update`, `call:incoming`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `chatlock:update`, `ping`. Messages from chats you've locked arrive redacted (`{ "locked": true }`, no content). Subscribing to `*` (the default) means everything except the chatty `typing` and `presence`.
 
 **Verify every delivery**: `X-ChatApp-Signature` is `sha256=` + the hex HMAC-SHA256 of `"<X-ChatApp-Timestamp>.<raw body>"` using the webhook's secret (shown once when you create it). Reject old timestamps to stop replays.
 
@@ -218,7 +234,8 @@ whatsapp-clone/
     ├── app.test.js
     ├── calls.test.js
     ├── status.test.js
-    └── api.test.js
+    ├── api.test.js
+    └── chatlock.test.js
 ```
 
 ## Socket events
@@ -242,6 +259,11 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `status:view`       | Mark an update as seen                   |
 | `status:delete`     | Delete one of my updates                 |
 | `status:reply`      | Reply to an update (sent as a chat message) |
+| `chatlock:settings` | Whether a secret code is set, and my locked chats |
+| `chatlock:set-code` / `chatlock:reset-code` | Create/change the secret code, or reset it with the password |
+| `chatlock:lock` / `chatlock:remove` | Lock a chat / remove its lock (needs the code) |
+| `chatlock:unlock`   | Unlock a chat for this app session (`auth.appSession` = one page load) |
+| `chatlock:relock`   | Lock every chat unlocked in this session again |
 | `messages:read`     | Mark a chat as read                      |
 | `message:delete`    | Delete my message                        |
 | `typing`            | Typing or recording started/stopped (`activity`) |

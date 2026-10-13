@@ -30,8 +30,13 @@
     revealed: new Set(), // ids of masked messages this viewer chose to reveal
     maskNext: false, // composer: send the next message masked
     blocked: new Set(), // usernames I have blocked
+    lock: { hasCode: false, lockedChats: new Set() }, // chat lock settings
     voiceUrls: new Map(), // mediaId -> object URL of downloaded voice audio
   };
+
+  // Chat lock: unlocked chats stay open only for this page load. Reloading the app or
+  // logging in again starts a new app session in which locked chats are locked again.
+  const APP_SESSION = (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^a-z0-9-]/gi, '');
 
   // ---------- helpers ----------
 
@@ -223,6 +228,7 @@
     state.messages.clear();
     state.outbox.clear();
     state.revealed.clear();
+    state.lock = { hasCode: false, lockedChats: new Set() };
     state.blocked.clear();
     stopRecording(false);
     state.voiceUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -236,7 +242,7 @@
   function start(token, user) {
     state.token = token;
     state.me = user || null;
-    const socket = io({ auth: { token } });
+    const socket = io({ auth: { token, appSession: APP_SESSION } });
     state.socket = socket;
     state.calls = window.createCallController({
       socket,
@@ -257,7 +263,8 @@
 
     socket.on('connect', async () => {
       try {
-        const { user: me, iceServers, blocked } = await emit('me');
+        const [{ user: me, iceServers, blocked }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        setLockSettings(lockSettings);
         state.me = me;
         state.iceServers = iceServers || [];
         state.blocked = new Set(blocked || []);
@@ -284,6 +291,12 @@
       if (m) m.starred = starred;
       if (convId === state.activeId) renderMessages();
       if (!$('#panel-starred').classList.contains('hidden')) loadStarred();
+    });
+    socket.on('chatlock:update', async (settings) => {
+      setLockSettings(settings);
+      // Locks changed (maybe on another device): reload so locked chats lose their content.
+      await loadConversations();
+      if (state.activeId) openChat(state.activeId);
     });
     socket.on('blocked:update', ({ blocked }) => {
       state.blocked = new Set(blocked);
@@ -400,6 +413,7 @@
       const body = el('div', 'body');
       const top = el('div', 'row');
       top.appendChild(el('span', 'name', convTitle(c)));
+      if (c.locked) top.appendChild(lockIcon(c.unlocked ? 'Locked chat (unlocked for now)' : 'Locked chat'));
       if (peer && state.blocked.has(peer)) top.appendChild(icon('blocked'));
       top.appendChild(el('span', 'time', c.lastMessage ? listTime(c.lastMessage.ts) : ''));
       body.appendChild(top);
@@ -421,7 +435,9 @@
         let prefix = '';
         if (c.type === 'group') prefix = mine ? 'You: ' : `${displayName(m.from)}: `;
         let text;
-        if (m.deleted) {
+        if (m.locked) {
+          text = 'Locked chat · tap to unlock';
+        } else if (m.deleted) {
           preview.appendChild(icon('deleted'));
           text = 'This message was deleted';
         } else {
@@ -464,6 +480,12 @@
     $('#emoji-picker').classList.add('hidden');
     renderHeader();
     renderChatList();
+    if (isLockedView(conv)) {
+      $('#unlock-error').textContent = '';
+      $('#unlock-code').value = '';
+      $('#unlock-code').focus();
+      return;
+    }
     try {
       const { messages } = await emit('messages:get', { convId: id });
       if (state.activeId !== id) return;
@@ -478,7 +500,14 @@
       markRead(id);
       if (highlight) flashMessage(highlight);
     } catch (err) {
-      console.error(err);
+      if (/locked/i.test(err.message)) {
+        // Locked meanwhile (e.g. on another device): show the lock screen.
+        Object.assign(conv, { locked: true, unlocked: false });
+        if (state.activeId === id) renderHeader();
+        renderChatList();
+      } else {
+        console.error(err);
+      }
     }
     $('#message-input').focus();
   }
@@ -502,7 +531,7 @@
 
   function markRead(id) {
     const conv = state.conversations.get(id);
-    if (!conv || document.hidden) return;
+    if (!conv || document.hidden || isLockedView(conv)) return;
     conv.unread = 0;
     emit('messages:read', { convId: id }).catch(() => {});
     renderChatList();
@@ -525,8 +554,15 @@
     $('#call-buttons').classList.toggle('hidden', blocked);
     $('#btn-voice-call').classList.toggle('hidden', group);
     $('#btn-group-call').classList.toggle('hidden', !group);
-    $('#chat-menu').parentElement.classList.toggle('hidden', group);
+    $('#menu-block').classList.toggle('hidden', group);
     $('#menu-block span').textContent = blocked ? 'Unblock contact' : 'Block contact';
+    $('#menu-lock span').textContent = conv.locked ? 'Remove chat lock' : 'Lock chat';
+
+    // Locked and not unlocked in this session: show the lock screen instead of the chat.
+    const lockedView = isLockedView(conv);
+    $('#lock-screen').classList.toggle('hidden', !lockedView);
+    $('#messages').classList.toggle('hidden', lockedView);
+    if (lockedView) forgetChatContent(conv.id);
 
     const status = $('#chat-status');
     status.textContent = '';
@@ -558,7 +594,7 @@
     // Blocked contact: the composer is replaced by an unblock banner.
     $('#blocked-banner').classList.toggle('hidden', !blocked);
     if (blocked) $('#blocked-banner-text').textContent = `You blocked ${displayName(peer)}. Tap to unblock.`;
-    $('#composer').classList.toggle('hidden', blocked || !!state.recorder);
+    $('#composer').classList.toggle('hidden', blocked || lockedView || !!state.recorder);
   }
 
   // chat menu (block / unblock)
@@ -739,7 +775,7 @@
   /** Object URL for uploaded media (voice audio, status photos); downloaded once with my token. */
   async function mediaUrl(id) {
     if (!state.voiceUrls.has(id)) {
-      const res = await fetch(`/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      const res = await fetch(`/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}`, 'X-App-Session': APP_SESSION } });
       if (!res.ok) throw new Error('Could not load media');
       state.voiceUrls.set(id, URL.createObjectURL(await res.blob()));
     }
@@ -1213,6 +1249,7 @@
     $('#profile-msg').textContent = '';
     paintAvatar($('#profile-avatar'), state.me.displayName, state.me.username);
     $('#profile-username').textContent = '@' + state.me.username;
+    renderLockSummary();
   });
   $('#profile-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1238,7 +1275,7 @@
   async function apiFetch(method, path, body) {
     const res = await fetch(`/api/v1${path}`, {
       method,
-      headers: { Authorization: `Bearer ${state.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { Authorization: `Bearer ${state.token}`, 'X-App-Session': APP_SESSION, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     if (res.status === 204) return null;
@@ -1359,6 +1396,192 @@
     }
   }));
 
+  // ---------- chat lock ----------
+
+  const LOCK_PATH = 'M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z';
+  function lockIcon(title) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', 'lock-icon');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', title);
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    t.textContent = title;
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', LOCK_PATH);
+    svg.append(t, p);
+    return svg;
+  }
+
+  /** A locked chat that hasn't been unlocked in this app session. */
+  const isLockedView = (conv) => !!conv?.locked && !conv.unlocked;
+
+  /** Drop everything already loaded for a chat that is now locked (in memory and on screen). */
+  function forgetChatContent(convId) {
+    const playingHere = playingId && state.messages.get(convId)?.some((m) => m.id === playingId);
+    if (playingHere) {
+      player.pause();
+      playingId = null;
+    }
+    state.messages.delete(convId);
+    if (state.activeId === convId) $('#messages').textContent = '';
+  }
+
+  function setLockSettings({ hasCode, lockedChats }) {
+    state.lock = { hasCode, lockedChats: new Set(lockedChats) };
+    renderLockSummary();
+  }
+
+  function renderLockSummary() {
+    const n = state.lock.lockedChats.size;
+    $('#lock-summary').textContent = !state.lock.hasCode
+      ? 'Lock chats with a secret code'
+      : `${n} locked chat${n === 1 ? '' : 's'} · the code is asked again every new session`;
+    $('#btn-lock-code').textContent = state.lock.hasCode ? 'Change secret code' : 'Set secret code';
+    $('#btn-lock-forgot').classList.toggle('hidden', !state.lock.hasCode);
+    $('#btn-lock-now').classList.toggle('hidden', !n);
+  }
+
+  /**
+   * Small modal form. `fields`: [{ name, label, type, autocomplete }]. `onSubmit(values)` may throw
+   * to show an error and keep the dialog open. Resolves with its result, or null if cancelled.
+   */
+  function dialog({ title, text = '', fields, submit = 'OK', onSubmit }) {
+    return new Promise((resolve) => {
+      const modal = $('#modal');
+      const form = $('#modal-form');
+      $('#modal-title').textContent = title;
+      $('#modal-text').textContent = text;
+      $('#modal-error').textContent = '';
+      $('#modal-submit').textContent = submit;
+      const box = $('#modal-fields');
+      box.textContent = '';
+      for (const f of fields) {
+        const label = el('label', '', f.label);
+        const input = el('input');
+        Object.assign(input, { name: f.name, type: f.type || 'password', required: true, maxLength: 64, autocomplete: f.autocomplete || 'off' });
+        label.appendChild(input);
+        box.appendChild(label);
+      }
+      modal.classList.remove('hidden');
+      box.querySelector('input')?.focus();
+      const close = (result) => {
+        modal.classList.add('hidden');
+        form.onsubmit = null;
+        $('#modal-cancel').onclick = null;
+        resolve(result);
+      };
+      $('#modal-cancel').onclick = () => close(null);
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const values = Object.fromEntries(new FormData(form).entries());
+        $('#modal-submit').disabled = true;
+        try {
+          close((await onSubmit(values)) ?? true);
+        } catch (err) {
+          $('#modal-error').textContent = err.message;
+        } finally {
+          $('#modal-submit').disabled = false;
+        }
+      };
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#modal').classList.contains('hidden')) $('#modal-cancel').click();
+  });
+
+  const codeFields = [
+    { name: 'code', label: 'New secret code (4–32 characters)', autocomplete: 'new-password' },
+    { name: 'confirm', label: 'Type it again', autocomplete: 'new-password' },
+  ];
+  const checkNewCode = ({ code, confirm }) => {
+    if (code !== confirm) throw new Error("The codes don't match");
+  };
+
+  function setCodeDialog() {
+    const changing = state.lock.hasCode;
+    return dialog({
+      title: changing ? 'Change secret code' : 'Create a secret code',
+      text: changing
+        ? 'Enter your current code, then the new one.'
+        : 'Locked chats ask for this code every time you open ChatApp or log in. It is different from your password.',
+      fields: changing ? [{ name: 'currentCode', label: 'Current secret code' }, ...codeFields] : codeFields,
+      submit: changing ? 'Change code' : 'Create code',
+      onSubmit: async (v) => {
+        checkNewCode(v);
+        setLockSettings(await emit('chatlock:set-code', { code: v.code, currentCode: v.currentCode }));
+        toast(changing ? 'Secret code changed' : 'Secret code created');
+      },
+    });
+  }
+
+  function forgotCodeDialog() {
+    return dialog({
+      title: 'Forgot secret code?',
+      text: 'Enter your account password to choose a new secret code. Your locked chats stay locked.',
+      fields: [{ name: 'password', label: 'Account password', autocomplete: 'current-password' }, ...codeFields],
+      submit: 'Set new code',
+      onSubmit: async (v) => {
+        checkNewCode(v);
+        setLockSettings(await emit('chatlock:reset-code', { password: v.password, newCode: v.code }));
+        toast('New secret code set');
+      },
+    });
+  }
+
+  async function toggleChatLock() {
+    const conv = state.conversations.get(state.activeId);
+    if (!conv) return;
+    if (conv.locked) {
+      await dialog({
+        title: 'Remove chat lock',
+        text: `Enter your secret code to stop locking "${convTitle(conv)}".`,
+        fields: [{ name: 'code', label: 'Secret code' }],
+        submit: 'Remove lock',
+        onSubmit: async ({ code }) => {
+          setLockSettings(await emit('chatlock:remove', { convId: conv.id, code }));
+          toast('Chat lock removed');
+        },
+      });
+      return;
+    }
+    if (!state.lock.hasCode && !(await setCodeDialog())) return;
+    try {
+      setLockSettings(await emit('chatlock:lock', { convId: conv.id }));
+      toast('Chat locked · your secret code is needed to open it');
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  $('#menu-lock').addEventListener('click', toggleChatLock);
+  $('#btn-lock-code').addEventListener('click', setCodeDialog);
+  $('#btn-lock-forgot').addEventListener('click', forgotCodeDialog);
+  $('#btn-forgot-code').addEventListener('click', forgotCodeDialog);
+  $('#btn-lock-now').addEventListener('click', async () => {
+    await emit('chatlock:relock').catch(() => {});
+    for (const c of state.conversations.values()) {
+      if (c.locked) forgetChatContent(c.id);
+    }
+    await loadConversations();
+    if (state.activeId) openChat(state.activeId);
+    toast('Locked chats are locked again');
+  });
+
+  $('#unlock-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = state.activeId;
+    try {
+      const { conversation } = await emit('chatlock:unlock', { convId: id, code: $('#unlock-code').value });
+      Object.assign(state.conversations.get(id), conversation);
+      $('#unlock-code').value = '';
+      openChat(id);
+    } catch (err) {
+      $('#unlock-error').textContent = err.message;
+      $('#unlock-code').select();
+    }
+  });
+
   // Short notices at the bottom of the screen.
   function toast(text) {
     const t = $('#toast');
@@ -1409,7 +1632,8 @@
         preview.appendChild(icon('starred'));
         if (m.masked) preview.appendChild(icon('masked'));
         preview.appendChild(document.createTextNode(
-          m.type === 'voice' ? `🎤 Voice message (${fmtDuration(m.voice.duration)})` : m.masked ? 'Masked message' : m.text,
+          m.locked ? '🔒 In a locked chat'
+            : m.type === 'voice' ? `🎤 Voice message (${fmtDuration(m.voice.duration)})` : m.masked ? 'Masked message' : m.text,
         ));
         bottom.appendChild(preview);
         body.appendChild(bottom);

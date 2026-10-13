@@ -135,6 +135,17 @@
           <button class="primary" type="submit">Save</button>
           <p id="profile-msg" class="muted"></p>
         </form>
+        <div class="pad stack chat-lock-settings">
+          <div class="link-row static">
+            <svg viewBox="0 0 24 24"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg>
+            <span><strong>Chat lock</strong><small id="lock-summary">Lock chats with a secret code</small></span>
+          </div>
+          <div class="lock-actions">
+            <button class="link" type="button" id="btn-lock-code">Set secret code</button>
+            <button class="link" type="button" id="btn-lock-forgot">Forgot code</button>
+            <button class="link" type="button" id="btn-lock-now">Lock all chats now</button>
+          </div>
+        </div>
         <div class="pad">
           <button class="link-row" id="btn-developer" type="button">
             <svg viewBox="0 0 24 24"><path d="m9.4 16.6-4.6-4.6 4.6-4.6L8 6l-6 6 6 6 1.4-1.4Zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4Z"/></svg>
@@ -212,6 +223,7 @@
               <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
             </button>
             <div class="menu hidden" id="chat-menu" role="menu">
+              <button role="menuitem" id="menu-lock"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg><span>Lock chat</span></button>
               <button role="menuitem" id="menu-block"><img src="icons/blocked.png" alt="" /><span>Block contact</span></button>
             </div>
           </div>
@@ -220,6 +232,17 @@
           <img src="icons/calling.png" alt="" />
           <span id="call-banner-text"></span>
           <button class="primary small" id="btn-join-call">Join</button>
+        </div>
+        <div class="lock-screen hidden" id="lock-screen">
+          <svg viewBox="0 0 24 24" class="lock-big" aria-hidden="true"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg>
+          <h2>This chat is locked</h2>
+          <p class="muted">Enter your secret code to view it. You'll need it again every time you open ChatApp or log in.</p>
+          <form id="unlock-form" class="unlock-form">
+            <input id="unlock-code" type="password" autocomplete="off" placeholder="Secret code" maxlength="32" required />
+            <button class="primary" type="submit">Unlock</button>
+          </form>
+          <p class="error" id="unlock-error" role="alert"></p>
+          <button class="link" type="button" id="btn-forgot-code">Forgot secret code?</button>
         </div>
         <div class="messages" id="messages"></div>
         <button class="blocked-banner hidden" id="blocked-banner" type="button">
@@ -312,6 +335,20 @@
   </section>
 
   <div class="toast hidden" id="toast" role="status"></div>
+
+  <!-- ========== Dialog (secret codes) ========== -->
+  <div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <form class="modal-card" id="modal-form">
+      <h3 id="modal-title"></h3>
+      <p class="muted" id="modal-text"></p>
+      <div class="stack" id="modal-fields"></div>
+      <p class="error" id="modal-error" role="alert"></p>
+      <div class="modal-buttons">
+        <button type="button" class="link" id="modal-cancel">Cancel</button>
+        <button type="submit" class="primary small" id="modal-submit">OK</button>
+      </div>
+    </form>
+  </div>
 
   <!-- ========== Voice / video call screen ========== -->
   <section id="call" class="call hidden" aria-live="polite">

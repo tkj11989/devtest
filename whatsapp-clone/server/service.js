@@ -26,8 +26,87 @@ const PAGE_MAX = 100;
 function createService({ store, io, isOnline, webhooks, iceServers }) {
   const userRoom = (u) => `user:${u}`;
 
+  // ---------- chat lock ----------
+  //
+  // A user can lock chats with a secret code. A locked chat's messages are only
+  // sent to a device after the code is entered in that "app session": one page
+  // load of the web app (Socket.IO auth.appSession / X-App-Session header), or
+  // one REST credential. A new login or a reload means locked again.
+
+  const unlocked = new Map(); // lockKey -> Set(convId)
+  const attempts = new Map(); // username -> { fails, until }
+  const MAX_FAILS = 5;
+
+  /** Identifies one app session of `username`. */
+  const lockKeyFor = (username, credential, appSession) =>
+    `${username}|${credential || ''}|${appSession ? String(appSession).slice(0, 64) : '-'}`;
+
+  const isUnlocked = (me, convId, ctx) =>
+    !store.isChatLocked(me, convId) || !!(ctx?.lockKey && unlocked.get(ctx.lockKey)?.has(convId));
+
+  const requireUnlocked = (me, convId, ctx) => {
+    if (!isUnlocked(me, convId, ctx)) throw new ApiError(423, 'chat_locked', 'This chat is locked. Unlock it with your secret code.');
+  };
+
+  /** What a locked chat's message looks like before it's unlocked: no content. */
+  const redactMessage = (m) => ({
+    id: m.id,
+    convId: m.convId,
+    from: m.from,
+    ts: m.ts,
+    deliveredTo: m.deliveredTo,
+    readBy: m.readBy,
+    ...(m.clientId ? { clientId: m.clientId } : {}),
+    ...(m.deleted ? { deleted: true } : {}),
+    locked: true,
+  });
+
+  /** A conversation summary for `me`, with the lock state and a redacted preview when locked. */
+  const lockView = (me, c, lockKey) => {
+    if (!store.isChatLocked(me, c.id)) return { ...c, locked: false };
+    const open = !!(lockKey && unlocked.get(lockKey)?.has(c.id));
+    return { ...c, locked: true, unlocked: open, lastMessage: open || !c.lastMessage ? c.lastMessage : redactMessage(c.lastMessage) };
+  };
+
+  /** The version of an event a device (or webhook, lockKey null) of `username` may receive. */
+  const eventFor = (username, event, payload, lockKey) => {
+    if (event === 'message:new') {
+      const m = payload.message;
+      return isUnlocked(username, m.convId, { lockKey }) ? payload : { message: redactMessage(m) };
+    }
+    if (event === 'conversation:new') return { ...payload, conversation: lockView(username, payload.conversation, lockKey) };
+    return payload;
+  };
+  const LOCK_SENSITIVE = new Set(['message:new', 'conversation:new']);
+
+  /** Wrong codes count against the user; after MAX_FAILS they must wait (doubling, up to an hour). */
+  const checkSecret = (me, ok, what = 'secret code') => {
+    const a = attempts.get(me) || { fails: 0, until: 0 };
+    if (a.until > Date.now()) {
+      throw new ApiError(429, 'too_many_attempts', `Too many wrong attempts. Try again in ${Math.ceil((a.until - Date.now()) / 1000)} seconds.`);
+    }
+    if (ok()) {
+      attempts.delete(me);
+      return;
+    }
+    a.fails += 1;
+    if (a.fails >= MAX_FAILS) a.until = Date.now() + Math.min(60 * 60 * 1000, 60 * 1000 * 2 ** (a.fails - MAX_FAILS));
+    attempts.set(me, a);
+    const left = MAX_FAILS - a.fails;
+    throw new ApiError(403, 'wrong_code', `Wrong ${what}${left > 0 ? ` (${left} ${left === 1 ? 'try' : 'tries'} left)` : ''}`);
+  };
+
   /** Push an event to all of a user's connected devices and to their webhooks. */
   const notify = (username, event, payload) => {
+    if (LOCK_SENSITIVE.has(event) && store.lockedChats(username).length) {
+      // Each device gets the version its own app session may see.
+      for (const sid of io.sockets.adapter.rooms.get(userRoom(username)) || []) {
+        const sock = io.sockets.sockets.get(sid);
+        sock?.emit(event, eventFor(username, event, payload, sock.data.lockKey));
+      }
+      webhooks?.dispatch(username, event, eventFor(username, event, payload, null));
+      return;
+    }
     io.to(userRoom(username)).emit(event, payload);
     webhooks?.dispatch(username, event, payload);
   };
@@ -116,7 +195,10 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
 
   let calls = null; // set by setCalls (the call manager needs postMessage, so it's created after us)
 
-  const conversationView = (me, conv) => ({ ...store.summarize(conv, me), activeCall: calls?.activeCallFor(conv.id) || null });
+  const conversationView = (me, conv, ctx) => lockView(me, { ...store.summarize(conv, me), activeCall: calls?.activeCallFor(conv.id) || null }, ctx?.lockKey);
+
+  const lockSettings = (me) => ({ hasCode: store.hasLockCode(me), lockedChats: store.lockedChats(me) });
+  const announceLocks = (me) => notify(me, 'chatlock:update', lockSettings(me));
 
   const actions = {
     me(me) {
@@ -154,34 +236,35 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
       return { blocked: store.blockedList(me) };
     },
 
-    conversations(me) {
-      const conversations = store.conversationsFor(me).map((c) => conversationView(me, c));
+    conversations(me, _payload, ctx) {
+      const conversations = store.conversationsFor(me).map((c) => conversationView(me, c, ctx));
       const people = new Set();
       conversations.forEach((c) => c.members.forEach((m) => people.add(m)));
       return { conversations, users: usersFor(people, me) };
     },
 
-    getConversation(me, { convId }) {
+    getConversation(me, { convId }, ctx) {
       const conv = member(me, convId);
-      return { conversation: conversationView(me, conv), users: usersFor(conv.members, me) };
+      return { conversation: conversationView(me, conv, ctx), users: usersFor(conv.members, me) };
     },
 
-    openDirect(me, { username }) {
+    openDirect(me, { username }, ctx) {
       const conv = store.getOrCreateDirect(me, String(username || '').toLowerCase());
-      return { conversation: conversationView(me, conv) };
+      return { conversation: conversationView(me, conv, ctx) };
     },
 
-    createGroup(me, { name, members }) {
+    createGroup(me, { name, members }, ctx) {
       const conv = store.createGroup(me, name, members);
       for (const m of conv.members) {
         notify(m, 'conversation:new', { conversation: store.summarize(conv, m), users: usersFor(conv.members, m) });
       }
-      return { conversation: conversationView(me, conv) };
+      return { conversation: conversationView(me, conv, ctx) };
     },
 
     /** Newest `limit` messages (before `before`, a timestamp, for older pages). */
-    messages(me, { convId, before, limit }) {
+    messages(me, { convId, before, limit }, ctx) {
       member(me, convId);
+      requireUnlocked(me, convId, ctx);
       const n = Math.max(1, Math.min(PAGE_MAX, Number(limit) || 50));
       const page = store.getMessages(convId, me, { before: Number(before) || undefined, limit: n + 1 });
       const hasMore = page.length > n;
@@ -189,13 +272,15 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
       return { messages, hasMore, nextBefore: hasMore ? messages[0].ts : null };
     },
 
-    sendText(me, { convId, text, masked, clientId }) {
+    sendText(me, { convId, text, masked, clientId }, ctx) {
       member(me, convId);
+      requireUnlocked(me, convId, ctx);
       return { message: sendMessage(me, convId, text, { masked: !!masked, clientId }) };
     },
 
-    sendVoice(me, { convId, clientId, duration, mime, data }) {
+    sendVoice(me, { convId, clientId, duration, mime, data }, ctx) {
       member(me, convId);
+      requireUnlocked(me, convId, ctx);
       const dup = store.findByClientId(convId, me, clientId);
       if (dup) return { message: store.viewFor(dup, me) };
       if (!Buffer.isBuffer(data) || data.length === 0) throw new Error('Recording is empty');
@@ -212,28 +297,99 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
       }
     },
 
-    markRead(me, { convId }) {
+    markRead(me, { convId }, ctx) {
       member(me, convId);
+      requireUnlocked(me, convId, ctx);
       const changed = store.markRead(convId, me);
       notifyStatus(convId, changed);
       return { updated: changed.length };
     },
 
-    deleteMessage(me, { id }) {
+    deleteMessage(me, { id }, ctx) {
+      const found = store.findMessage(id);
+      if (found && store.isMember(found.convId, me)) requireUnlocked(me, found.convId, ctx);
       const { convId, message } = store.deleteMessage(id, me);
       notifyMembers(store.getConversation(convId), 'message:deleted', { convId, id: message.id });
       return {};
     },
 
-    star(me, { id, starred }) {
+    star(me, { id, starred }, ctx) {
+      const found = store.findMessage(id);
+      if (found && store.isMember(found.convId, me)) requireUnlocked(me, found.convId, ctx);
       const { convId, message } = store.setStarred(id, me, !!starred);
       // Stars are private: only my own devices hear about it.
       notify(me, 'message:starred', { convId, id: message.id, starred: !!message.starred });
       return { message };
     },
 
-    starred(me) {
-      return { messages: store.starredFor(me) };
+    starred(me, _payload, ctx) {
+      return { messages: store.starredFor(me).map((m) => (isUnlocked(me, m.convId, ctx) ? m : redactMessage(m))) };
+    },
+
+    // ----- chat lock -----
+
+    lockSettings(me) {
+      return lockSettings(me);
+    },
+
+    /** Create the secret code, or change it (needs `currentCode`). */
+    setLockCode(me, { code, currentCode }) {
+      if (store.hasLockCode(me)) checkSecret(me, () => store.verifyLockCode(me, currentCode), 'current secret code');
+      store.setLockCode(me, code, currentCode);
+      announceLocks(me);
+      return lockSettings(me);
+    },
+
+    /** Forgot the code: choose a new one with the account password. */
+    resetLockCode(me, { password, newCode }) {
+      checkSecret(me, () => {
+        try {
+          store.resetLockCode(me, password, newCode);
+          return true;
+        } catch (err) {
+          if (/Password is wrong/.test(err.message)) return false;
+          throw err;
+        }
+      }, 'password');
+      announceLocks(me);
+      return lockSettings(me);
+    },
+
+    /** Lock a chat. It is locked straight away, everywhere, including this session. */
+    lockChat(me, { convId }) {
+      member(me, convId);
+      store.setChatLocked(me, convId, true);
+      for (const [key, set] of unlocked) if (key.startsWith(`${me}|`)) set.delete(convId);
+      announceLocks(me);
+      return lockSettings(me);
+    },
+
+    /** Remove the lock from a chat for good (needs the code). */
+    removeChatLock(me, { convId, code }) {
+      member(me, convId);
+      if (!store.isChatLocked(me, convId)) return lockSettings(me);
+      checkSecret(me, () => store.verifyLockCode(me, code));
+      store.setChatLocked(me, convId, false);
+      announceLocks(me);
+      return lockSettings(me);
+    },
+
+    /** Open a locked chat for the rest of this app session. */
+    unlockChat(me, { convId, code }, ctx) {
+      const conv = member(me, convId);
+      if (!ctx?.lockKey) throw new ApiError(400, 'bad_request', 'No app session to unlock');
+      if (store.isChatLocked(me, convId)) {
+        checkSecret(me, () => store.verifyLockCode(me, code));
+        if (!unlocked.has(ctx.lockKey)) unlocked.set(ctx.lockKey, new Set());
+        unlocked.get(ctx.lockKey).add(convId);
+      }
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    /** Lock every unlocked chat again in this app session ("Lock now"). */
+    relock(me, _payload, ctx) {
+      if (ctx?.lockKey) unlocked.delete(ctx.lockKey);
+      return lockSettings(me);
     },
 
     /** What I'm doing in a chat: 'typing' or 'recording' (a voice message); isTyping=false clears it. */
@@ -292,7 +448,7 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
     },
 
     /** Replying to a status sends a message in the one-to-one chat with its owner. */
-    replyStatus(me, { id, text, clientId }) {
+    replyStatus(me, { id, text, clientId }, ctx) {
       const status = store.data.statuses[id];
       if (!store.canSeeStatus(status, me) || status.owner === me) throw new ApiError(404, 'not_found', 'Status not found');
       const conv = store.getOrCreateDirect(me, status.owner);
@@ -301,7 +457,7 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
         clientId,
         statusReply: { statusId: status.id, owner: status.owner, type: status.type, preview, ...(status.bg ? { bg: status.bg } : {}) },
       });
-      return { message, conversation: conversationView(me, conv) };
+      return { message, conversation: conversationView(me, conv, ctx) };
     },
 
     activeCall(me, { convId }) {
@@ -310,9 +466,24 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
     },
   };
 
+  /** May this app session download this media (voice notes of locked chats need unlocking)? */
+  const mediaAllowed = (me, mediaId, ctx) => {
+    const convId = store.mediaConversation(mediaId);
+    return !convId || isUnlocked(me, convId, ctx);
+  };
+
+  /** Forget unlocks tied to a credential (on logout) or one app session (on disconnect). */
+  const forgetUnlocks = ({ credential, lockKey }) => {
+    if (lockKey) unlocked.delete(lockKey);
+    if (credential) for (const key of unlocked.keys()) if (key.split('|')[1] === credential) unlocked.delete(key);
+  };
+
   return {
     actions,
     notify,
+    lockKeyFor,
+    mediaAllowed,
+    forgetUnlocks,
     userRoom,
     userView,
     postMessage,

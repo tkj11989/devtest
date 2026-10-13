@@ -955,3 +955,50 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   .secret-box { background: #3b3417; color: #f5e7b0; }
 }
 #panel-profile { overflow-y: auto; }
+
+/* ---------- chat lock ---------- */
+.lock-icon { width: 15px; height: 15px; fill: var(--muted); flex: none; }
+.menu .menu-svg { width: 24px; height: 24px; fill: var(--muted); }
+.lock-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: var(--chat-bg);
+}
+.lock-screen h2 { font-size: 22px; }
+.lock-screen p { max-width: 360px; margin: 0; }
+.lock-big { width: 72px; height: 72px; fill: var(--green); opacity: .85; }
+.unlock-form { display: flex; gap: 8px; margin-top: 8px; width: min(100%, 340px); }
+.unlock-form input { flex: 1; text-align: center; letter-spacing: .15em; }
+.link-row.static { cursor: default; }
+.link-row.static:hover { background: var(--panel-2); }
+.lock-actions { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0 4px; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, .45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.modal-card {
+  width: min(100%, 400px);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 22px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .3);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modal-card h3 { margin: 0; font-size: 18px; font-weight: 500; }
+.modal-card p { margin: 0; font-size: 14px; }
+.modal-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 16px; }

@@ -79,6 +79,8 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
     if (!username) return next(new ApiError(401, 'unauthorized', 'Missing or invalid credentials. Send "Authorization: Bearer <token or API key>".'));
     req.user = username;
     req.credential = token;
+    // Chat lock: unlocks last for this credential (optionally narrowed with X-App-Session).
+    req.ctx = { lockKey: service.lockKeyFor(username, token, req.get('x-app-session')) };
     next();
   };
   const authed = [auth, limiter((req) => `u:${req.credential}`, limits.max)];
@@ -123,13 +125,14 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
   }));
   router.post('/auth/logout', ...authed, run((req) => {
     store.logout(req.credential);
+    service.forgetUnlocks({ credential: req.credential });
     return undefined;
   }));
 
   // ---------- me ----------
 
   router.get('/me', ...authed, run((req) => {
-    const { user, blocked, iceServers } = actions.me(req.user);
+    const { user, blocked, iceServers } = actions.me(req.user, {}, req.ctx);
     return { user, blocked, iceServers };
   }));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
@@ -169,30 +172,30 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
 
   // ---------- users & blocking ----------
 
-  router.get('/users', ...authed, run((req) => actions.searchUsers(req.user, { q: req.query.q })));
-  router.get('/users/:username', ...authed, run((req) => actions.getUser(req.user, { username: p(req, 'username') })));
-  router.get('/blocked', ...authed, run((req) => actions.blocked(req.user)));
-  router.put('/blocked/:username', ...authed, run((req) => actions.block(req.user, { username: p(req, 'username'), blocked: true })));
-  router.delete('/blocked/:username', ...authed, run((req) => actions.block(req.user, { username: p(req, 'username'), blocked: false })));
+  router.get('/users', ...authed, run((req) => actions.searchUsers(req.user, { q: req.query.q }, req.ctx)));
+  router.get('/users/:username', ...authed, run((req) => actions.getUser(req.user, { username: p(req, 'username') }, req.ctx)));
+  router.get('/blocked', ...authed, run((req) => actions.blocked(req.user, {}, req.ctx)));
+  router.put('/blocked/:username', ...authed, run((req) => actions.block(req.user, { username: p(req, 'username'), blocked: true }, req.ctx)));
+  router.delete('/blocked/:username', ...authed, run((req) => actions.block(req.user, { username: p(req, 'username'), blocked: false }, req.ctx)));
 
   // ---------- conversations & messages ----------
 
-  router.get('/conversations', ...authed, run((req) => actions.conversations(req.user)));
+  router.get('/conversations', ...authed, run((req) => actions.conversations(req.user, {}, req.ctx)));
   router.post('/conversations', ...authed, json, run((req) => {
     const { type, username, name, members } = req.body || {};
-    if (type === 'group') return actions.createGroup(req.user, { name, members });
-    if (type === 'direct' || (!type && username)) return actions.openDirect(req.user, { username });
+    if (type === 'group') return actions.createGroup(req.user, { name, members }, req.ctx);
+    if (type === 'direct' || (!type && username)) return actions.openDirect(req.user, { username }, req.ctx);
     throw new ApiError(400, 'bad_request', 'type must be "direct" (with username) or "group" (with name and members)');
   }, 201));
-  router.get('/conversations/:id', ...authed, run((req) => actions.getConversation(req.user, { convId: p(req, 'id') })));
+  router.get('/conversations/:id', ...authed, run((req) => actions.getConversation(req.user, { convId: p(req, 'id') }, req.ctx)));
   router.get('/conversations/:id/messages', ...authed, run((req) => actions.messages(req.user, {
     convId: p(req, 'id'),
     before: req.query.before,
     limit: req.query.limit,
-  })));
+  }, req.ctx)));
   router.post('/conversations/:id/messages', ...authed, json, run((req) => {
     const { text, masked } = req.body || {};
-    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req) });
+    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req) }, req.ctx);
   }, 201));
   router.post('/conversations/:id/voice', ...authed,
     express.raw({ type: () => true, limit: '3mb' }),
@@ -202,57 +205,82 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
       mime: req.get('content-type'),
       duration: req.query.duration,
       clientId: req.query.clientId ?? req.get('idempotency-key'),
-    }), 201));
-  router.post('/conversations/:id/read', ...authed, run((req) => actions.markRead(req.user, { convId: p(req, 'id') })));
+    }, req.ctx), 201));
+  router.post('/conversations/:id/read', ...authed, run((req) => actions.markRead(req.user, { convId: p(req, 'id') }, req.ctx)));
   router.post('/conversations/:id/typing', ...authed, json, run((req) => {
     const { isTyping = true, activity } = req.body || {};
-    actions.typing(req.user, { convId: p(req, 'id'), isTyping, activity });
+    actions.typing(req.user, { convId: p(req, 'id'), isTyping, activity }, req.ctx);
     return undefined;
   }));
-  router.get('/conversations/:id/call', ...authed, run((req) => actions.activeCall(req.user, { convId: p(req, 'id') })));
+  router.get('/conversations/:id/call', ...authed, run((req) => actions.activeCall(req.user, { convId: p(req, 'id') }, req.ctx)));
 
   router.delete('/messages/:id', ...authed, run((req) => {
-    actions.deleteMessage(req.user, { id: p(req, 'id') });
+    actions.deleteMessage(req.user, { id: p(req, 'id') }, req.ctx);
     return undefined;
   }));
-  router.put('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: true })));
-  router.delete('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: false })));
-  router.get('/starred', ...authed, run((req) => actions.starred(req.user)));
+  router.put('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: true }, req.ctx)));
+  router.delete('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: false }, req.ctx)));
+  router.get('/starred', ...authed, run((req) => actions.starred(req.user, {}, req.ctx)));
 
   router.get('/media/:id', ...authed, (req, res, next) => {
     const media = store.getMedia(p(req, 'id'), req.user);
     if (!media) return next(new ApiError(404, 'not_found', 'Media not found'));
+    if (!service.mediaAllowed(req.user, p(req, 'id'), req.ctx)) {
+      return next(new ApiError(423, 'chat_locked', 'This voice message is in a locked chat. Unlock the chat first.'));
+    }
     res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
     res.send(media.buffer);
   });
 
+  // ---------- chat lock ----------
+
+  router.get('/chat-lock', ...authed, run((req) => actions.lockSettings(req.user)));
+  router.put('/chat-lock/code', ...authed, json, run((req) => actions.setLockCode(req.user, {
+    code: req.body?.code,
+    currentCode: req.body?.currentCode,
+  })));
+  router.post('/chat-lock/reset', ...authed, json, run((req) => actions.resetLockCode(req.user, {
+    password: req.body?.password,
+    newCode: req.body?.newCode,
+  })));
+  router.post('/chat-lock/relock', ...authed, run((req) => actions.relock(req.user, {}, req.ctx)));
+  router.put('/conversations/:id/lock', ...authed, run((req) => actions.lockChat(req.user, { convId: p(req, 'id') })));
+  router.delete('/conversations/:id/lock', ...authed, json, run((req) => actions.removeChatLock(req.user, {
+    convId: p(req, 'id'),
+    code: req.body?.code,
+  })));
+  router.post('/conversations/:id/unlock', ...authed, json, run((req) => actions.unlockChat(req.user, {
+    convId: p(req, 'id'),
+    code: req.body?.code,
+  }, req.ctx)));
+
   // ---------- status updates ----------
 
-  router.get('/statuses', ...authed, run((req) => actions.statuses(req.user)));
+  router.get('/statuses', ...authed, run((req) => actions.statuses(req.user, {}, req.ctx)));
   router.post('/statuses', ...authed,
     json,
     express.raw({ type: 'image/*', limit: '3mb' }),
     run((req) => {
       if (Buffer.isBuffer(req.body)) {
-        return actions.postStatus(req.user, { type: 'image', data: req.body, mime: req.get('content-type'), caption: req.query.caption });
+        return actions.postStatus(req.user, { type: 'image', data: req.body, mime: req.get('content-type'), caption: req.query.caption }, req.ctx);
       }
       const { type = 'text', text, bg } = req.body || {};
       if (type !== 'text') throw new ApiError(400, 'bad_request', 'Send JSON { "type": "text", "text": "…" }, or the image itself with Content-Type: image/*');
-      return actions.postStatus(req.user, { type, text, bg });
+      return actions.postStatus(req.user, { type, text, bg }, req.ctx);
     }, 201));
   router.delete('/statuses/:id', ...authed, run((req) => {
-    actions.deleteStatus(req.user, { id: p(req, 'id') });
+    actions.deleteStatus(req.user, { id: p(req, 'id') }, req.ctx);
     return undefined;
   }));
   router.post('/statuses/:id/view', ...authed, run((req) => {
-    actions.viewStatus(req.user, { id: p(req, 'id') });
+    actions.viewStatus(req.user, { id: p(req, 'id') }, req.ctx);
     return undefined;
   }));
   router.post('/statuses/:id/replies', ...authed, json, run((req) => actions.replyStatus(req.user, {
     id: p(req, 'id'),
     text: req.body?.text,
     clientId: idempotency(req),
-  }), 201));
+  }, req.ctx), 201));
 
   // ---------- errors ----------
 

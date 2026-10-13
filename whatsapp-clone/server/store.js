@@ -291,6 +291,67 @@ class Store {
     return u.blocked;
   }
 
+  // ---------- chat lock (secret code per user, locked chats) ----------
+
+  hasLockCode(username) {
+    return !!this.data.users[username]?.chatLock;
+  }
+
+  /** Set the secret code. Changing an existing one needs the current code. */
+  setLockCode(username, code, currentCode) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    Store._checkLockCode(code);
+    if (u.chatLock && !this.verifyLockCode(username, currentCode)) throw new Error('Current secret code is wrong');
+    const salt = crypto.randomBytes(16).toString('hex');
+    u.chatLock = { salt, hash: Store._hash(String(code), salt) };
+    this._save();
+  }
+
+  /** Forgot the code: the account password lets you choose a new one. */
+  resetLockCode(username, password, newCode) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const hash = Store._hash(String(password || ''), u.salt);
+    if (!crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(u.hash, 'hex'))) throw new Error('Password is wrong');
+    Store._checkLockCode(newCode);
+    const salt = crypto.randomBytes(16).toString('hex');
+    u.chatLock = { salt, hash: Store._hash(String(newCode), salt) };
+    this._save();
+  }
+
+  verifyLockCode(username, code) {
+    const lock = this.data.users[username]?.chatLock;
+    if (!lock || typeof code !== 'string' || !code) return false;
+    const hash = Store._hash(code, lock.salt);
+    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(lock.hash, 'hex'));
+  }
+
+  static _checkLockCode(code) {
+    if (typeof code !== 'string' || code.length < 4 || code.length > 32) {
+      throw new Error('Secret code must be 4 to 32 characters');
+    }
+  }
+
+  lockedChats(username) {
+    return [...(this.data.users[username]?.lockedChats || [])];
+  }
+
+  isChatLocked(username, convId) {
+    return !!this.data.users[username]?.lockedChats?.includes(convId);
+  }
+
+  setChatLocked(username, convId, locked) {
+    const u = this.data.users[username];
+    if (!u || !this.isMember(convId, username)) throw new Error('Conversation not found');
+    if (locked && !u.chatLock) throw new Error('Set a secret code first');
+    const set = new Set(u.lockedChats || []);
+    if (locked) set.add(convId);
+    else set.delete(convId);
+    u.lockedChats = [...set];
+    this._save();
+  }
+
   updateProfile(username, { displayName, about }) {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
@@ -432,6 +493,11 @@ class Store {
   }
 
   /** `{ mime, buffer }` if `username` may access the media, else null. */
+  /** The conversation a media file belongs to (voice messages), or null (status photos). */
+  mediaConversation(id) {
+    return this.data.media[id]?.convId || null;
+  }
+
   getMedia(id, username) {
     const meta = this.data.media[id];
     if (!meta) return null;
@@ -727,6 +793,7 @@ Store.WEBHOOK_EVENTS = [
   'conversation:new', 'typing', 'presence', 'user:updated', 'blocked:update',
   'call:incoming', 'call:ended', 'call:state',
   'status:new', 'status:viewed', 'status:deleted',
+  'chatlock:update',
   'ping',
 ];
 Store.NOISY_EVENTS = ['typing', 'presence'];
