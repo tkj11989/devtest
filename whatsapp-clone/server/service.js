@@ -1,6 +1,7 @@
 'use strict';
 
 const { Store } = require('./store');
+const { normalisePhone, normaliseEmail } = require('./otp');
 const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -24,7 +25,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers }) {
+function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
   const userRoom = (u) => `user:${u}`;
 
   // ---------- chat lock ----------
@@ -95,6 +96,16 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
     attempts.set(me, a);
     const left = MAX_FAILS - a.fails;
     throw new ApiError(403, 'wrong_code', `Wrong ${what}${left > 0 ? ` (${left} ${left === 1 ? 'try' : 'tries'} left)` : ''}`);
+  };
+
+  const contactDestination = (body) => {
+    try {
+      if (body.phone) return { channel: 'sms', to: normalisePhone(body.phone) };
+      if (body.email) return { channel: 'email', to: normaliseEmail(body.email) };
+    } catch (err) {
+      throw new ApiError(400, err.code, err.message);
+    }
+    throw new ApiError(400, 'invalid_request', 'Send "phone" or "email"');
   };
 
   /** Push an event to all of a user's connected devices and to their webhooks. */
@@ -244,7 +255,28 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
         blocked: store.blockedList(me),
         defaultDisappear: store.defaultDisappear(me),
         business: store.getBusiness(me),
+        contact: store.contactOf(me),
       };
+    },
+
+    // ----- verified mobile number and email -----
+
+    /** Send a code to a new mobile number (`{ phone }`) or email (`{ email }`) to add or change it. */
+    async requestContactCode(me, body = {}) {
+      const dest = contactDestination(body);
+      const owner = dest.channel === 'sms' ? store.findByPhone(dest.to) : store.findByEmail(dest.to);
+      if (owner === me) throw new ApiError(400, 'invalid_request', `That is already your ${dest.channel === 'sms' ? 'mobile number' : 'email'}`);
+      if (owner) throw new ApiError(409, `${dest.channel === 'sms' ? 'phone' : 'email'}_taken`, `This ${dest.channel === 'sms' ? 'mobile number' : 'email'} is already registered`);
+      return otp.request({ ...dest, purpose: 'contact' });
+    },
+
+    /** Save the number or email once its code checks out: `{ phone | email, requestId, code }`. */
+    verifyContact(me, body = {}) {
+      const dest = contactDestination(body);
+      otp.verify({ requestId: body.requestId, code: body.code, ...dest, purpose: 'contact' });
+      store.setContact(me, dest.channel, dest.to);
+      announceProfile(me);
+      return { contact: store.contactOf(me), business: store.getBusiness(me) };
     },
 
     updateProfile(me, { displayName, about }) {
@@ -260,6 +292,10 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
 
     /** Become a business account, or update the business details. */
     setBusiness(me, input) {
+      const { phone, email } = store.contactOf(me) || {};
+      if (!phone || !email) {
+        throw new ApiError(400, 'verification_required', 'A business account needs a verified mobile number and email. Add them in your profile first.');
+      }
       const business = store.setBusiness(me, input || {});
       return { business, user: announceProfile(me) };
     },
@@ -416,8 +452,26 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
       return lockSettings(me);
     },
 
-    /** Forgot the code: choose a new one with the account password. */
-    resetLockCode(me, { password, newCode }) {
+    /** Forgot the code: get a code by SMS on the account's mobile number. */
+    requestLockResetCode(me) {
+      const { phone } = store.contactOf(me) || {};
+      if (!phone) throw new ApiError(400, 'verification_required', 'Add a mobile number to your account first, or reset with your password');
+      return otp.request({ channel: 'sms', to: phone, purpose: 'chatlock-reset' });
+    },
+
+    /**
+     * Forgot the code: choose a new one, proven with the SMS code
+     * (`{ requestId, code, newCode }`) or, for older accounts, the password.
+     */
+    resetLockCode(me, { password, requestId, code, newCode }) {
+      if (requestId) {
+        Store._checkLockCode(newCode);
+        const { phone } = store.contactOf(me) || {};
+        otp.verify({ requestId, code, channel: 'sms', to: phone, purpose: 'chatlock-reset' });
+        store.resetLockCode(me, null, newCode);
+        announceLocks(me);
+        return lockSettings(me);
+      }
       checkSecret(me, () => {
         try {
           store.resetLockCode(me, password, newCode);

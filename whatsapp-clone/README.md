@@ -4,7 +4,7 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 
 ## Features
 
-- Sign up / log in (passwords hashed with scrypt)
+- **Sign up / log in with a one-time code (OTP)**: individuals use their mobile number; **business accounts verify both a mobile number and an email**
 - One-to-one chats and group chats
 - Real-time messaging over WebSockets
 - **Voice and video calls**, 1:1 and **group calls** (up to 6 people, peer-to-peer WebRTC): ringing on all devices, accept/decline, mute, camera on/off, **hold**, call timer, join a group call that's already running, and call history in the chat (missed / declined / duration, tap to call back)
@@ -50,6 +50,42 @@ npm start          # http://localhost:3000  (set PORT to change)
 
 Open the app in two browser windows (or one normal + one private window), create two accounts and start chatting.
 
+Sign-up and login codes are printed in the server console until you connect an SMS/email gateway (see [Login with OTP](#login-with-otp)). To also see them in the app while developing, start with `OTP_DEV_CODES=1 npm start`.
+
+## Login with OTP
+
+There are no passwords. You sign up and log in with a 6-digit code:
+
+| Account | Sign up | Log in |
+|---------|---------|--------|
+| **Individual** | Name + **mobile number**, verified by an SMS code | Mobile number + SMS code |
+| **Business** | Business name + category + **mobile number and email, both required and both verified** (an SMS code and an email code) | Mobile number + SMS code, or business email + email code |
+
+- Numbers are stored in international form (`+919876543210`). Pick the country code in the form, or type the number with its own `+` code.
+- Codes last **5 minutes** and allow **5 wrong tries**. A new code for the same number/email and purpose can be sent after **30 seconds**, and at most **5 codes per number/email per hour**. Codes are single-use, kept only as an HMAC in memory, and the latest code replaces earlier ones.
+- For a business, every code is checked before any is used, so a typo in the email code doesn't cost the SMS code.
+- A username is made from your name (e.g. `anitarao`); friends can also find you by typing your **full mobile number** in New chat. Your number and email are never shown to other people (a business's email is shown as its contact email).
+- **Profile → Mobile number / Email** changes either one, after verifying the new one with a code. A personal account that switches to a business account is asked to verify whichever is missing first.
+- **Forgot your chat lock code?** A code by SMS to your number lets you set a new one.
+- Accounts created before OTP login (username + password) can still log in over the API with `{ "username", "password" }`; add a mobile number in Profile to use OTP.
+
+### Sending real SMS and email
+
+Set `OTP_WEBHOOK_URL` and ChatApp POSTs every code to it as JSON, so you can plug in any provider (Twilio, MSG91, Gupshup, SendGrid, Amazon SES/SNS…) with a small relay:
+
+```json
+{ "channel": "sms", "to": "+919876543210", "code": "482913", "purpose": "login",
+  "text": "482913 is your ChatApp verification code. It expires in 5 minutes. Never share it with anyone." }
+```
+
+`channel` is `sms` or `email`; `purpose` is `register`, `login`, `contact` or `chatlock-reset`. With `OTP_WEBHOOK_TOKEN` set, the request carries `Authorization: Bearer <token>`. Answer with any 2xx; anything else (or no answer in 10 seconds) tells the user the code couldn't be sent (`502 otp_delivery_failed`).
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OTP_WEBHOOK_URL` | (unset: codes are printed in the server console) | Your SMS/email relay |
+| `OTP_WEBHOOK_TOKEN` | (unset) | Bearer token sent to the relay |
+| `OTP_DEV_CODES` | (unset) | `1` returns codes in API responses (`devCode`) and shows them in the app. **Development only.** |
+
 ### Voice & video calls
 
 Calls use WebRTC, so audio/video goes directly between the two browsers; the server only relays the call setup ("signalling").
@@ -79,9 +115,9 @@ API: `PUT /conversations/{id}/disappearing` `{ "seconds": 187200 }` (0 = off), `
 
 ## Business profile
 
-**Profile → Switch to a business account** turns any account into a business account:
+Sign up as a **Business** (mobile number and email both verified by OTP), or use **Profile → Switch to a business account** on a personal account (it first asks you to verify whichever of mobile number or email is missing):
 
-- **Business details**: category (Restaurant, Retail, …), description, address (links to a map), email, website.
+- **Business details**: category (Restaurant, Retail, …), description, address (links to a map), email (always your verified email), website.
 - **Business hours** per weekday (open/close times, open 24 hours, or closed; past-midnight hours like 6 PM–2 AM work) in the business's **time zone**. Customers see "Open now" / "Closed now", today's hours and the full week, in the business's local time.
 - **Business badge** next to the name in the chat list, the chat header, search results and group member lists. People can search for businesses by category.
 - **Contact info**: tap a chat's header to see the business card (or a contact's/group's info).
@@ -93,24 +129,24 @@ Switch back to a personal account at any time. API: `GET/PUT/DELETE /me/business
 
 ## Chat lock
 
-Lock any chat (one-to-one or group) from the chat menu (**⋮ → Lock chat**). The first time, you create a **secret code** (4–32 characters, separate from your password).
+Lock any chat (one-to-one or group) from the chat menu (**⋮ → Lock chat**). The first time, you create a **secret code** (4–32 characters).
 
 - A locked chat shows a padlock in the chat list and the preview reads "Locked chat · tap to unlock". Opening it shows a lock screen until you enter the code.
 - **Every new session asks again**: unlocking lasts for this page load only. Reloading, opening another tab or window, closing the app, or logging in again means the code is needed again. A dropped connection that reconnects on the same page stays unlocked.
 - **Lock all chats now** (Profile → Chat lock) re-locks everything immediately; **Remove chat lock** (chat menu) needs the code.
-- **Forgot the code?** Set a new one with your account password. Your chats stay locked.
-- 5 wrong codes (or passwords on the reset) block further tries for 1 minute, then 2, 4, … up to an hour.
+- **Forgot the code?** Get a code by SMS on your mobile number and set a new one (older password accounts use the password). Your chats stay locked.
+- 5 wrong codes (or passwords on a password reset) block further tries for 1 minute, then 2, 4, … up to an hour.
 
 It is enforced by the server, not just hidden in the page. Until a chat is unlocked in a session, that session gets no message text, voice notes, call details or previews for it: history requests are refused with `423 chat_locked`, live `message:new` events arrive without content (`{ locked: true }`), starred messages from it are redacted, and its voice notes can't be downloaded. **Webhooks never receive the content of locked chats.** Locking applies only to you; the other people in the chat see it as usual. Codes are stored as scrypt hashes.
 
-Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset`, `POST /chat-lock/relock`.
+Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
 ## API for other platforms
 
 Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with ChatApp.
 
 - **Docs**: open **`/api/docs`** (interactive, with "Try it out") or fetch **`/api/v1/openapi.json`** (OpenAPI 3.1; generate a client with any OpenAPI generator).
-- **Auth**: `Authorization: Bearer <token>` with either a session token (`POST /api/v1/auth/login`) or an **API key** (`cak_…`). API keys are for servers and bots: they survive restarts, show when they were last used, and can be revoked. Create them in the app under **Profile → Developer**, or with `POST /api/v1/api-keys` while logged in.
+- **Auth**: `Authorization: Bearer <token>` with either a session token (`POST /api/v1/auth/otp`, then `POST /api/v1/auth/login`) or an **API key** (`cak_…`). API keys are for servers and bots: they survive restarts, show when they were last used, and can be revoked. Create them in the app under **Profile → Developer**, or with `POST /api/v1/api-keys` while logged in.
 - **Real-time events**: register a **webhook** (Developer panel or `POST /api/v1/webhooks`), or connect a Socket.IO client with `auth: { token: "<session token or API key>" }` to get the same events live (see Socket events below).
 - **Same behaviour as the app**: messages sent over the API appear instantly in open apps, are delivered to webhooks, and follow the same rules (blocking, membership, limits).
 
@@ -118,8 +154,12 @@ Everything the app does (except placing calls, which needs WebRTC in a client) i
 
 ```bash
 BASE=http://localhost:3000/api/v1
+# Log in: ask for a code by SMS, then send it back
+REQ=$(curl -s -X POST $BASE/auth/otp -H 'Content-Type: application/json' \
+  -d '{"purpose":"login","phone":"+919876543210"}' | jq -r .requestId)
+read -p 'Code: ' CODE
 TOKEN=$(curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"secret123"}' | jq -r .token)
+  -d "{\"phone\":\"+919876543210\",\"requestId\":\"$REQ\",\"code\":\"$CODE\"}" | jq -r .token)
 
 # A long-lived API key for your integration (shown once)
 KEY=$(curl -s -X POST $BASE/api-keys -H "Authorization: Bearer $TOKEN" \
@@ -145,7 +185,7 @@ Main endpoints (all under `/api/v1`; full details in `/api/docs`):
 
 | Area | Endpoints |
 |------|-----------|
-| Auth & account | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET/PATCH /me` |
+| Auth & account | `POST /auth/otp`, `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET/PATCH /me`, `POST /me/contact/otp` + `PUT /me/contact` |
 | API keys | `GET/POST /api-keys`, `DELETE /api-keys/{id}` |
 | Webhooks | `GET/POST /webhooks`, `GET/PATCH/DELETE /webhooks/{id}`, `POST /webhooks/{id}/test` |
 | People | `GET /users?q=`, `GET /users/{username}`, `GET /blocked`, `PUT/DELETE /blocked/{username}` |
@@ -193,7 +233,7 @@ CHATAPP_API_KEY=cak_... node examples/echo-bot.js   # then message that account 
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `API_RATE_LIMIT` | `120` | Requests per minute per credential (`RateLimit-*` headers; `429` + `Retry-After` when exceeded). Login/register: 20 per minute per IP. |
+| `API_RATE_LIMIT` | `120` | Requests per minute per credential (`RateLimit-*` headers; `429` + `Retry-After` when exceeded). Login/register/OTP: 20 per minute per IP (plus the per-number OTP limits above). |
 | `CORS_ORIGINS` | `*` | Comma-separated origins allowed to call the API from a browser. |
 | `WEBHOOKS_ALLOW_PRIVATE` | off | Allow webhooks to private/localhost addresses (development only). |
 
@@ -256,6 +296,8 @@ whatsapp-clone/
 │   ├── service.js   # Every user action, shared by Socket.IO and the REST API
 │   ├── api.js       # REST API v1 (auth, rate limits, CORS, errors)
 │   ├── openapi.js   # OpenAPI 3.1 spec (served at /api/v1/openapi.json)
+│   ├── auth.js      # Sign-up and login with one-time codes
+│   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
 │   ├── webhooks.js  # Signed webhook delivery with retries
 │   ├── calls.js     # 1:1 and group call signalling (ring, join, relay, hold, end, call log)
 │   └── store.js     # Users, sessions, conversations, messages (JSON file storage)
@@ -275,6 +317,7 @@ whatsapp-clone/
 │   └── extract-icons.py
 └── test/
     ├── app.test.js
+    ├── auth.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js
@@ -308,7 +351,8 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `settings:default-disappear` | My default timer for new chats |
 | `business:get` / `business:set` / `business:remove` | My business profile |
 | `chatlock:settings` | Whether a secret code is set, and my locked chats |
-| `chatlock:set-code` / `chatlock:reset-code` | Create/change the secret code, or reset it with the password |
+| `chatlock:set-code` / `chatlock:reset-code` | Create/change the secret code, or reset it (SMS code from `chatlock:reset-sms`, or the password) |
+| `chatlock:reset-sms` | Send a reset code by SMS to my mobile number |
 | `chatlock:lock` / `chatlock:remove` | Lock a chat / remove its lock (needs the code) |
 | `chatlock:unlock`   | Unlock a chat for this app session (`auth.appSession` = one page load) |
 | `chatlock:relock`   | Lock every chat unlocked in this session again |
@@ -316,6 +360,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `message:delete`    | Delete my message                        |
 | `typing`            | Typing or recording started/stopped (`activity`) |
 | `profile:update`    | Change display name / about              |
+| `me:contact-code` / `me:contact-verify` | Send a code to a new mobile number/email, then save it |
 | `call:start`        | Start a call (or join the group call already running in that chat) |
 | `call:accept` / `call:reject` | Answer or decline an incoming call |
 | `call:signal`       | WebRTC offer/answer/ICE candidate relay to one participant |

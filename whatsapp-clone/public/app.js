@@ -181,39 +181,252 @@
 
   // ---------- auth ----------
 
-  let authMode = 'login';
+  // Sign up and log in with one-time codes: a mobile number for individuals,
+  // mobile number + email (both verified) for businesses.
+
+  const COUNTRY_CODES = [
+    ['IN', '+91'], ['US', '+1'], ['GB', '+44'], ['AE', '+971'], ['SA', '+966'], ['QA', '+974'], ['SG', '+65'],
+    ['AU', '+61'], ['CA', '+1'], ['DE', '+49'], ['FR', '+33'], ['NL', '+31'], ['IT', '+39'], ['ES', '+34'],
+    ['IE', '+353'], ['NZ', '+64'], ['JP', '+81'], ['CN', '+86'], ['HK', '+852'], ['MY', '+60'], ['ID', '+62'],
+    ['PH', '+63'], ['TH', '+66'], ['PK', '+92'], ['BD', '+880'], ['NP', '+977'], ['LK', '+94'], ['ZA', '+27'],
+    ['NG', '+234'], ['KE', '+254'], ['EG', '+20'], ['BR', '+55'], ['MX', '+52'], ['RU', '+7'],
+  ];
+  const flag = (cc) => String.fromCodePoint(...[...cc].map((ch) => 0x1f1a5 + ch.charCodeAt(0)));
+  (() => {
+    const select = $('#auth-form [name=cc]');
+    const region = (navigator.language || '').split('-')[1]?.toUpperCase();
+    for (const [cc, dial] of COUNTRY_CODES) select.appendChild(new Option(`${flag(cc)} ${dial}`, `${cc}${dial}`));
+    select.value = COUNTRY_CODES.some(([cc]) => cc === region) ? COUNTRY_CODES.find(([cc]) => cc === region).join('') : 'IN+91';
+    const category = $('#auth-form [name=category]');
+    for (const c of window.BusinessHours.CATEGORIES) category.appendChild(new Option(c, c));
+  })();
+
+  /** "+91" + "98765 43210" -> "+919876543210"; a number typed with "+" keeps its own code. */
+  function fullPhone(form) {
+    const typed = form.phone.value.trim();
+    if (/^(\+|00)/.test(typed)) return typed;
+    return `${form.cc.value.replace(/^[A-Z]+/, '')}${typed.replace(/^0+/, '')}`;
+  }
+
+  async function apiPost(path, body, token) {
+    const res = await fetch(`/api/v1${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.error?.message || 'Something went wrong'), { code: data.error?.code });
+    return data;
+  }
+
+  /**
+   * A "send code / enter code" field. `send()` asks the server for a code and returns
+   * its reply; `proof()` gives `{ requestId, code }` once a code was sent and typed.
+   */
+  function createOtpField(root, { destination, request, onError }) {
+    const codeInput = root.querySelector('.otp-code input');
+    const hint = root.querySelector('.otp-hint');
+    const sendBtn = root.querySelector('.resend');
+    let sent = null; // { requestId, to }
+    let timer = null;
+
+    const countdown = (seconds, sentTo, devCode) => {
+      clearInterval(timer);
+      let left = seconds;
+      const paint = () => {
+        hint.textContent = `Code sent to ${sentTo}.`;
+        if (devCode) hint.append(' ', el('span', 'dev-code', `Dev code: ${devCode}`));
+        sendBtn.disabled = left > 0;
+        sendBtn.textContent = left > 0 ? `Resend in ${left}s` : 'Resend code';
+      };
+      paint();
+      timer = setInterval(() => {
+        left -= 1;
+        paint();
+        if (left <= 0) clearInterval(timer);
+      }, 1000);
+    };
+
+    const reset = () => {
+      clearInterval(timer);
+      sent = null;
+      codeInput.value = '';
+      hint.textContent = '';
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Resend code';
+      root.querySelector('.otp-code').classList.add('hidden');
+    };
+
+    async function send() {
+      const to = destination();
+      sendBtn.disabled = true;
+      try {
+        const res = await request(to);
+        sent = { requestId: res.requestId, to };
+        root.querySelector('.otp-code').classList.remove('hidden');
+        countdown(res.resendIn, res.sentTo, res.devCode);
+        codeInput.focus();
+        return true;
+      } catch (err) {
+        sendBtn.disabled = false;
+        onError(err.message);
+        return false;
+      }
+    }
+
+    sendBtn.addEventListener('click', () => { onError(''); send(); });
+    // Changing the number/email after a code was sent means a new code is needed.
+    root.querySelectorAll('.otp-input-row input, .otp-input-row select').forEach((input) => input.addEventListener('input', () => {
+      if (sent && destination() !== sent.to) reset();
+    }));
+    codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); });
+
+    return {
+      send,
+      reset,
+      get sent() { return !!sent; },
+      get ready() { return !!sent && /^\d{6}$/.test(codeInput.value); },
+      proof: () => ({ requestId: sent.requestId, code: codeInput.value }),
+      focusCode: () => codeInput.focus(),
+    };
+  }
+
+  const authForm = $('#auth-form');
+  const auth = { mode: 'login', type: 'individual', loginBy: 'phone' };
+  const authError = (text) => { $('#auth-error').textContent = text; };
+  const purpose = () => (auth.mode === 'login' ? 'login' : 'register');
+  const phoneField = createOtpField(authForm.querySelector('[data-field=phone]'), {
+    destination: () => fullPhone(authForm),
+    request: (phone) => apiPost('/auth/otp', { purpose: purpose(), phone }),
+    onError: authError,
+  });
+  const emailField = createOtpField(authForm.querySelector('[data-field=email]'), {
+    destination: () => authForm.email.value.trim(),
+    request: (email) => apiPost('/auth/otp', { purpose: purpose(), email }),
+    onError: authError,
+  });
+
+  /** Which code fields this form needs, in order. */
+  const neededFields = () => {
+    if (auth.mode === 'login') return [auth.loginBy === 'email' ? emailField : phoneField];
+    return auth.type === 'business' ? [phoneField, emailField] : [phoneField];
+  };
+
+  function paintAuth() {
+    const register = auth.mode === 'register';
+    const business = register && auth.type === 'business';
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.mode === auth.mode));
+    document.querySelectorAll('.seg').forEach((b) => {
+      b.classList.toggle('active', b.dataset.type === auth.type);
+      b.setAttribute('aria-checked', String(b.dataset.type === auth.type));
+    });
+    authForm.querySelectorAll('.register-only').forEach((n) => n.classList.toggle('hidden', !register));
+    authForm.querySelectorAll('.business-only').forEach((n) => n.classList.toggle('hidden', !business));
+    authForm.querySelectorAll('.login-only').forEach((n) => n.classList.toggle('hidden', register));
+    const usePhone = register || auth.loginBy === 'phone';
+    const useEmail = business || (!register && auth.loginBy === 'email');
+    authForm.querySelector('[data-field=phone]').classList.toggle('hidden', !usePhone);
+    authForm.querySelector('[data-field=email]').classList.toggle('hidden', !useEmail);
+    $('#auth-email').placeholder = business ? 'you@business.com' : 'Your business email';
+    $('#auth-name-label').textContent = business ? 'Business name' : 'Your name';
+    $('#auth-use-email').textContent = auth.loginBy === 'email' ? 'Log in with mobile number instead' : 'Business account? Log in with email';
+    $('#auth-lead').textContent = !register
+      ? (auth.loginBy === 'email' ? 'Log in with your business email. We\'ll email you a code.' : 'Log in with your mobile number. We\'ll send you a code by SMS.')
+      : (business ? 'Business accounts verify both a mobile number and an email address.' : 'Sign up with your mobile number. We\'ll verify it with a code by SMS.');
+    paintSubmit();
+  }
+
+  function paintSubmit() {
+    const pending = neededFields().find((f) => !f.sent);
+    $('#auth-submit').textContent = pending ? 'Send code' : auth.mode === 'login' ? 'Log in' : auth.type === 'business' ? 'Create business account' : 'Create account';
+  }
+
   function setAuthMode(mode) {
-    authMode = mode;
-    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.mode === mode));
-    document.querySelectorAll('.register-only').forEach((n) => n.classList.toggle('hidden', mode !== 'register'));
-    $('#auth-submit').textContent = mode === 'login' ? 'Log in' : 'Create account';
-    $('#auth-form [name=password]').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
-    $('#auth-error').textContent = '';
+    auth.mode = mode;
+    phoneField.reset();
+    emailField.reset();
+    authError('');
+    paintAuth();
   }
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => setAuthMode(t.dataset.mode)));
+  document.querySelectorAll('.seg').forEach((b) => b.addEventListener('click', () => {
+    auth.type = b.dataset.type;
+    emailField.reset();
+    authError('');
+    paintAuth();
+  }));
+  $('#auth-use-email').addEventListener('click', () => {
+    auth.loginBy = auth.loginBy === 'email' ? 'phone' : 'email';
+    phoneField.reset();
+    emailField.reset();
+    authError('');
+    paintAuth();
+  });
+  authForm.addEventListener('input', () => { authError(''); paintSubmit(); });
 
-  $('#auth-form').addEventListener('submit', async (e) => {
+  authForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const form = new FormData(e.target);
-    const body = Object.fromEntries(form.entries());
-    $('#auth-submit').disabled = true;
+    authError('');
+    const register = auth.mode === 'register';
+    const business = register && auth.type === 'business';
+    if (register && !authForm.displayName.value.trim()) {
+      authError(business ? 'Enter your business name' : 'Enter your name');
+      return authForm.displayName.focus();
+    }
+    if (business && !authForm.category.value) {
+      authError('Choose a business category');
+      return authForm.category.focus();
+    }
+    // Step through the codes: send the next one that wasn't sent, then ask for any missing code.
+    const submit = $('#auth-submit');
+    submit.disabled = true;
     try {
-      const res = await fetch(`/api/${authMode === 'login' ? 'login' : 'register'}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Something went wrong');
+      const fields = neededFields();
+      const unsent = fields.find((f) => !f.sent);
+      if (unsent) {
+        await unsent.send();
+        return;
+      }
+      const missing = fields.find((f) => !f.ready);
+      if (missing) {
+        authError('Enter the 6-digit code we sent you');
+        return missing.focusCode();
+      }
+      let data;
+      if (!register) {
+        const by = auth.loginBy === 'email' ? { email: authForm.email.value.trim() } : { phone: fullPhone(authForm) };
+        data = await apiPost('/auth/login', { ...by, ...(auth.loginBy === 'email' ? emailField : phoneField).proof() });
+      } else {
+        data = await apiPost('/auth/register', {
+          accountType: auth.type,
+          displayName: authForm.displayName.value.trim(),
+          phone: fullPhone(authForm),
+          phoneOtp: phoneField.proof(),
+          ...(business ? {
+            email: authForm.email.value.trim(),
+            emailOtp: emailField.proof(),
+            business: { category: authForm.category.value, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
+          } : {}),
+        });
+      }
       storage.set('chat.token', data.token);
-      e.target.reset();
+      authForm.reset();
+      phoneField.reset();
+      emailField.reset();
       start(data.token, data.user);
     } catch (err) {
-      $('#auth-error').textContent = err.message;
+      authError(err.message);
+      // The code is gone (expired / too many tries): let them ask for a new one.
+      if (err.code === 'otp_expired') {
+        if (/email code/.test(err.message) || (!register && auth.loginBy === 'email')) emailField.reset();
+        else phoneField.reset();
+      }
     } finally {
-      $('#auth-submit').disabled = false;
+      submit.disabled = false;
+      paintSubmit();
     }
   });
+  paintAuth();
 
   function showAuth() {
     $('#app').classList.add('hidden');
@@ -221,12 +434,12 @@
   }
 
   async function logout() {
-    if (state.token) fetch('/api/logout', { method: 'POST', headers: { Authorization: `Bearer ${state.token}` } }).catch(() => {});
+    if (state.token) fetch('/api/v1/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${state.token}` } }).catch(() => {});
     storage.del('chat.token');
     state.calls?.dispose();
     statusUpdates.reset();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null });
     state.conversations.clear();
     state.messages.clear();
     state.outbox.clear();
@@ -266,8 +479,9 @@
 
     socket.on('connect', async () => {
       try {
-        const [{ user: me, iceServers, blocked, defaultDisappear, business }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        const [{ user: me, iceServers, blocked, defaultDisappear, business, contact }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
         state.defaultDisappear = defaultDisappear || null;
+        state.contact = contact || { phone: null, email: null };
         state.myBusiness = business || null;
         setLockSettings(lockSettings);
         state.me = me;
@@ -1612,7 +1826,62 @@
     if (e.key === 'Escape' && !$('#timer-modal').classList.contains('hidden')) $('#timer-cancel').click();
   });
 
+  // ---------- verified mobile number and email ----------
+
+  /** "+919876543210" -> "+91 98765 43210" (Indian numbers), others "+44 7700900123". */
+  function prettyPhone(p) {
+    if (!p) return '';
+    if (p.startsWith('+91') && p.length === 13) return `+91 ${p.slice(3, 8)} ${p.slice(8)}`;
+    const m = COUNTRY_CODES.map(([, d]) => d).sort((a, b) => b.length - a.length).find((d) => p.startsWith(d));
+    return m ? `${m} ${p.slice(m.length)}` : p;
+  }
+
+  /** Add or change the mobile number ("phone") or email: send a code, then check it. */
+  async function verifyContactFlow(kind) {
+    const isPhone = kind === 'phone';
+    const current = state.contact?.[kind];
+    let sent = null;
+    let value = '';
+    const ok = await dialog({
+      title: `${current ? 'Change' : 'Add'} ${isPhone ? 'mobile number' : 'email'}`,
+      text: isPhone
+        ? 'Enter the new number with its country code. We\'ll send it a code by SMS.'
+        : 'Enter your email address. We\'ll email you a code.',
+      fields: [isPhone
+        ? { name: 'value', label: 'Mobile number, e.g. +91 98765 43210', type: 'tel', autocomplete: 'tel' }
+        : { name: 'value', label: 'Email', type: 'email', autocomplete: 'email' }],
+      submit: 'Send code',
+      onSubmit: async (v) => {
+        value = v.value.trim();
+        sent = await emit('me:contact-code', isPhone ? { phone: value } : { email: value });
+      },
+    });
+    if (!ok || !sent) return false;
+    const done = await dialog({
+      title: 'Enter the code',
+      text: `We sent a 6-digit code to ${sent.sentTo}.${sent.devCode ? ` (Dev code: ${sent.devCode})` : ''}`,
+      fields: [{ name: 'code', label: '6-digit code', type: 'text', autocomplete: 'one-time-code' }],
+      submit: 'Verify',
+      onSubmit: async (v) => {
+        const res = await emit('me:contact-verify', { ...(isPhone ? { phone: value } : { email: value }), requestId: sent.requestId, code: v.code.trim() });
+        state.contact = res.contact;
+        state.myBusiness = res.business || null;
+      },
+    });
+    if (!done) return false;
+    renderProfileExtras();
+    toast(isPhone ? 'Mobile number verified' : 'Email verified');
+    return true;
+  }
+  $('#btn-contact-phone').addEventListener('click', () => verifyContactFlow('phone'));
+  $('#btn-contact-email').addEventListener('click', () => verifyContactFlow('email'));
+
   function renderProfileExtras() {
+    const c = state.contact || {};
+    $('#contact-phone').textContent = c.phone ? prettyPhone(c.phone) : 'Not added';
+    $('#contact-email').textContent = c.email || 'Not added';
+    $('#btn-contact-phone').textContent = c.phone ? 'Change' : 'Add';
+    $('#btn-contact-email').textContent = c.email ? 'Change' : 'Add';
     $('#default-timer-summary').textContent = state.defaultDisappear
       ? `${fmtTimer(state.defaultDisappear)} for new chats you start`
       : 'Off';
@@ -1763,7 +2032,7 @@
     form.category.value = b?.category || '';
     form.description.value = b?.description || '';
     form.address.value = b?.address || '';
-    form.email.value = b?.email || '';
+    form.email.value = state.contact?.email || b?.email || '';
     form.website.value = b?.website || '';
     // Time-zone lists differ between browsers (e.g. "Asia/Calcutta" vs "Asia/Kolkata"):
     // make sure the saved zone is always selectable.
@@ -1810,7 +2079,17 @@
     openPanel('#panel-business');
   }
 
-  $('#btn-business').addEventListener('click', openBusinessPanel);
+  $('#btn-business').addEventListener('click', async () => {
+    // A business needs a verified mobile number and email; verify whichever is missing first.
+    if (!state.myBusiness) {
+      for (const kind of ['phone', 'email']) {
+        if (state.contact?.[kind]) continue;
+        toast(`A business account needs a verified ${kind === 'phone' ? 'mobile number' : 'email'}`);
+        if (!(await verifyContactFlow(kind))) return;
+      }
+    }
+    openBusinessPanel();
+  });
   $('#business-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const H = window.BusinessHours;
@@ -1825,7 +2104,6 @@
         category: f.category.value,
         description: f.description.value,
         address: f.address.value,
-        email: f.email.value,
         website: f.website.value,
         timezone: f.timezone.value,
         hours,
@@ -1964,7 +2242,7 @@
       title: changing ? 'Change secret code' : 'Create a secret code',
       text: changing
         ? 'Enter your current code, then the new one.'
-        : 'Locked chats ask for this code every time you open ChatApp or log in. It is different from your password.',
+        : 'Locked chats ask for this code every time you open ChatApp or log in. Keep it private.',
       fields: changing ? [{ name: 'currentCode', label: 'Current secret code' }, ...codeFields] : codeFields,
       submit: changing ? 'Change code' : 'Create code',
       onSubmit: async (v) => {
@@ -1975,7 +2253,28 @@
     });
   }
 
-  function forgotCodeDialog() {
+  async function forgotCodeDialog() {
+    // Accounts with a mobile number get a code by SMS; older accounts use their password.
+    if (state.contact?.phone) {
+      let sent;
+      try {
+        sent = await emit('chatlock:reset-sms');
+      } catch (err) {
+        toast(err.message);
+        return null;
+      }
+      return dialog({
+        title: 'Forgot secret code?',
+        text: `We sent a 6-digit code by SMS to ${sent.sentTo}.${sent.devCode ? ` (Dev code: ${sent.devCode})` : ''} Enter it and choose a new secret code. Your locked chats stay locked.`,
+        fields: [{ name: 'otp', label: 'SMS code', type: 'text', autocomplete: 'one-time-code' }, ...codeFields],
+        submit: 'Set new code',
+        onSubmit: async (v) => {
+          checkNewCode(v);
+          setLockSettings(await emit('chatlock:reset-code', { requestId: sent.requestId, code: v.otp.trim(), newCode: v.code }));
+          toast('New secret code set');
+        },
+      });
+    }
     return dialog({
       title: 'Forgot secret code?',
       text: 'Enter your account password to choose a new secret code. Your locked chats stay locked.',
@@ -1988,6 +2287,7 @@
       },
     });
   }
+
 
   async function toggleChatLock() {
     const conv = state.conversations.get(state.activeId);

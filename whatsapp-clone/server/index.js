@@ -11,6 +11,8 @@ const { createCallManager } = require('./calls');
 const { createService } = require('./service');
 const { createWebhookDispatcher } = require('./webhooks');
 const { createApiRouter } = require('./api');
+const { createOtpService, createOtpSender } = require('./otp');
+const { createAuth } = require('./auth');
 
 // STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
 // e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'
@@ -62,6 +64,9 @@ const SOCKET_ACTIONS = {
   'business:get': 'business',
   'business:set': 'setBusiness',
   'business:remove': 'removeBusiness',
+  'me:contact-code': 'requestContactCode',
+  'me:contact-verify': 'verifyContact',
+  'chatlock:reset-sms': 'requestLockResetCode',
 };
 
 /**
@@ -74,6 +79,8 @@ const SOCKET_ACTIONS = {
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
  *   messageSweepMs   how often expired disappearing messages are removed
+ *   otp              { sender, exposeCodes, ttlMs, resendMs, … } for one-time login codes
+ *                    (see otp.js; by default codes go to OTP_WEBHOOK_URL or the console)
  */
 function createApp({
   store = new Store(),
@@ -84,6 +91,7 @@ function createApp({
   rateLimit,
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
   messageSweepMs = 5000,
+  otp: otpOptions = {},
 } = {}) {
   const app = express();
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
@@ -95,7 +103,9 @@ function createApp({
   const isOnline = (u) => (online.get(u) || 0) > 0;
 
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
-  const service = createService({ store, io, isOnline, webhooks, iceServers });
+  const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
+  const auth = createAuth({ store, otp });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -112,7 +122,7 @@ function createApp({
   service.setCalls(calls);
 
   // Public REST API for other platforms (see /api/docs). It parses its own bodies.
-  app.use('/api/v1', createApiRouter({ store, service, webhooks, rateLimit, corsOrigins }));
+  app.use('/api/v1', createApiRouter({ store, service, accounts: auth, webhooks, rateLimit, corsOrigins }));
   app.get('/api/docs', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'api-docs.html')));
   // Swagger UI is served from node_modules so the docs work without internet access.
   app.use('/api/docs/assets', express.static(require('swagger-ui-dist').getAbsoluteFSPath(), { maxAge: '7d' }));
@@ -122,25 +132,6 @@ function createApp({
   // Icons rarely change; let browsers keep them so they still render while offline.
   app.use('/icons', express.static(path.join(__dirname, '..', 'public', 'icons'), { maxAge: '7d' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
-
-  // Original endpoints used by the web app (the same as /api/v1/auth/*).
-  app.post('/api/register', (req, res) => {
-    try {
-      const { username, password, displayName } = req.body || {};
-      res.json(store.register(username, password, displayName));
-    } catch (err) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  app.post('/api/login', (req, res) => {
-    try {
-      const { username, password } = req.body || {};
-      res.json(store.login(username, password));
-    } catch (err) {
-      res.status(401).json({ error: err.message });
-    }
-  });
 
   const bearer = (req) => req.get('authorization')?.replace(/^Bearer /, '');
 
@@ -175,6 +166,7 @@ function createApp({
     clearInterval(pruneTimer);
     clearInterval(expiryTimer);
     webhooks.stop();
+    otp.stop();
   });
 
   // ---------- realtime ----------
@@ -219,7 +211,7 @@ function createApp({
     });
   });
 
-  return { app, server, io, store, calls, service, webhooks };
+  return { app, server, io, store, calls, service, webhooks, otp };
 }
 
 if (require.main === module) {
@@ -230,7 +222,11 @@ if (require.main === module) {
     ? { key: fs.readFileSync(process.env.SSL_KEY), cert: fs.readFileSync(process.env.SSL_CERT) }
     : null;
   const { server, store } = createApp({ tls });
-  server.listen(port, () => console.log(`ChatApp running at ${tls ? 'https' : 'http'}://localhost:${port}`));
+  server.listen(port, () => {
+    console.log(`ChatApp running at ${tls ? 'https' : 'http'}://localhost:${port}`);
+    if (!process.env.OTP_WEBHOOK_URL) console.log('Login codes are printed here (set OTP_WEBHOOK_URL to send real SMS/email).');
+    if (process.env.OTP_DEV_CODES === '1') console.warn('OTP_DEV_CODES=1: login codes are also shown in the app. Never use this in production.');
+  });
   const shutdown = () => {
     store.flush();
     process.exit(0);

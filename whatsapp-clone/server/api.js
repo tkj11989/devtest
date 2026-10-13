@@ -14,7 +14,7 @@ const { buildOpenApiSpec } = require('./openapi');
  * Every write goes through the same service as the web app, so changes made
  * here appear live in connected apps and are delivered to webhooks.
  */
-function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins = '*' }) {
+function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, corsOrigins = '*' }) {
   const router = express.Router();
   const { actions } = service;
   const limits = {
@@ -111,18 +111,9 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
   // ---------- auth ----------
 
   const authLimit = limiter((req) => `ip:${req.ip}`, limits.authMax);
-  router.post('/auth/register', authLimit, json, run((req) => {
-    const { username, password, displayName } = req.body || {};
-    return store.register(username, password, displayName);
-  }, 201));
-  router.post('/auth/login', authLimit, json, run((req) => {
-    const { username, password } = req.body || {};
-    try {
-      return store.login(username, password);
-    } catch (err) {
-      throw new ApiError(401, 'invalid_credentials', err.message);
-    }
-  }));
+  router.post('/auth/otp', authLimit, json, run((req) => accounts.requestCode(req.body || {})));
+  router.post('/auth/register', authLimit, json, run((req) => accounts.register(req.body || {}), 201));
+  router.post('/auth/login', authLimit, json, run((req) => accounts.login(req.body || {})));
   router.post('/auth/logout', ...authed, run((req) => {
     store.logout(req.credential);
     service.forgetUnlocks({ credential: req.credential });
@@ -133,6 +124,8 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
 
   router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+  router.post('/me/contact/otp', ...authed, json, run((req) => actions.requestContactCode(req.user, req.body || {})));
+  router.put('/me/contact', ...authed, json, run((req) => actions.verifyContact(req.user, req.body || {})));
 
   router.put('/me/default-disappearing', ...authed, json, run((req) => actions.setDefaultDisappear(req.user, { seconds: req.body?.seconds })));
 
@@ -248,8 +241,11 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
     code: req.body?.code,
     currentCode: req.body?.currentCode,
   })));
+  router.post('/chat-lock/reset/otp', ...authed, run((req) => actions.requestLockResetCode(req.user)));
   router.post('/chat-lock/reset', ...authed, json, run((req) => actions.resetLockCode(req.user, {
     password: req.body?.password,
+    requestId: req.body?.requestId,
+    code: req.body?.code,
     newCode: req.body?.newCode,
   })));
   router.post('/chat-lock/relock', ...authed, run((req) => actions.relock(req.user, {}, req.ctx)));
@@ -298,6 +294,7 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
   // eslint-disable-next-line no-unused-vars
   router.use((err, req, res, next) => {
     const e = toApiError(err);
+    if (err.retryAfter) res.set('Retry-After', String(err.retryAfter));
     if (e.status >= 500) console.error(err);
     res.status(e.status).json({ error: { code: e.code, message: e.message } });
   });
@@ -308,6 +305,7 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
 /** Map errors thrown by the store/service to HTTP statuses. */
 function toApiError(err) {
   if (err instanceof ApiError) return err;
+  if (err.status && err.code && typeof err.code === 'string') return new ApiError(err.status, err.code, err.message);
   if (err.type === 'entity.parse.failed') return new ApiError(400, 'invalid_json', 'Request body is not valid JSON');
   if (err.type === 'entity.too.large') return new ApiError(413, 'too_large', 'Request body is too large');
   const msg = err.message || 'Something went wrong';
@@ -315,7 +313,7 @@ function toApiError(err) {
   if (/^Unblock|only delete your own|cannot be (deleted|starred)|cannot block yourself|Cannot chat with yourself/i.test(msg)) {
     return new ApiError(403, 'forbidden', msg);
   }
-  if (/already taken/i.test(msg)) return new ApiError(409, 'conflict', msg);
+  if (/already taken|already registered/i.test(msg)) return new ApiError(409, 'conflict', msg);
   if (/at most/i.test(msg)) return new ApiError(409, 'limit_reached', msg);
   if (err.status && err.status < 500) return new ApiError(err.status, 'bad_request', msg);
   if (err instanceof TypeError || err instanceof ReferenceError) return new ApiError(500, 'internal_error', 'Internal server error');

@@ -158,6 +158,16 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       data: { type: 'object', description: 'Same payload as the Socket.IO event of that name' },
     }, ['id', 'event', 'createdAt', 'user', 'data']),
     Session: obj({ token: { type: 'string' }, user: ref('User') }, ['token', 'user']),
+    OtpSent: obj({
+      requestId: { type: 'string', description: 'send this back with the code' },
+      channel: { type: 'string', enum: ['sms', 'email'] },
+      sentTo: { type: 'string', description: 'masked destination, e.g. `+91•••••••210`' },
+      expiresIn: { type: 'integer', description: 'seconds the code stays valid (300)' },
+      resendIn: { type: 'integer', description: 'seconds before another code can be sent (30)' },
+      devCode: { type: 'string', description: 'only when the server runs with OTP_DEV_CODES=1 (development)' },
+    }, ['requestId', 'channel', 'sentTo', 'expiresIn', 'resendIn']),
+    OtpProof: obj({ requestId: { type: 'string' }, code: { type: 'string', pattern: '^\\d{6}$' } }, ['requestId', 'code']),
+    Contact: obj({ phone: { type: ['string', 'null'], description: 'E.164, e.g. +919876543210' }, email: { type: ['string', 'null'] } }),
   };
 
   const errorResponse = (description) => ({ description, content: { 'application/json': { schema: ref('Error') } } });
@@ -170,7 +180,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E413: errorResponse('Body too large'),
     E415: errorResponse('Unsupported media type'),
     E423: errorResponse('The chat is locked: unlock it with POST /conversations/{id}/unlock (code `chat_locked`)'),
-    E429: errorResponse('Rate limited; see Retry-After'),
+    E429: errorResponse('Rate limited, or a code was requested too soon (`otp_too_soon`, `otp_limit`); see Retry-After'),
+    E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
   const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', biz: 'Business', meta: 'Meta' };
@@ -178,20 +189,64 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
 
-    '/auth/register': {
-      post: op(T.auth, 'Create an account', {
+    '/auth/otp': {
+      post: op(T.auth, 'Send a one-time code by SMS or email', {
         auth: false,
-        body: jsonBody(obj({ username: { type: 'string', pattern: '^[a-z0-9_.]{3,20}$' }, password: { type: 'string', minLength: 4 }, displayName: { type: 'string' } }, ['username', 'password']),
-          { username: 'alice', password: 'secret123', displayName: 'Alice Smith' }),
+        description: [
+          'Step 1 of sign-up and login. Send `phone` (international format, e.g. `+919876543210`) for an SMS code, or `email` for an email code.',
+          'Codes have 6 digits, last 5 minutes and allow 5 wrong tries. Another code for the same address and purpose can be sent after 30 seconds; at most 5 codes per address per hour.',
+          '`purpose: "register"` fails with 409 `phone_taken`/`email_taken` if the address already has an account; `purpose: "login"` fails with 404 `not_registered` if it has none.',
+        ].join('\n\n'),
+        body: jsonBody(obj({
+          purpose: { type: 'string', enum: ['register', 'login'] },
+          phone: { type: 'string' },
+          email: { type: 'string', format: 'email' },
+        }, ['purpose']), { purpose: 'register', phone: '+919876543210' }),
+        responses: { 200: ok(ref('OtpSent')), ...errors(400, 404, 409, 429, 502) },
+      }),
+    },
+    '/auth/register': {
+      post: op(T.auth, 'Create an account (verified by OTP)', {
+        auth: false,
+        description: [
+          '**Individual**: `displayName`, `phone` and `phoneOtp` (the `requestId` from `POST /auth/otp` and the code received by SMS).',
+          '**Business**: `accountType: "business"`, the business name as `displayName`, `phone` + `phoneOtp`, `email` + `emailOtp` (both are required and verified) and `business` with at least a `category` (any other `Business` fields are optional).',
+          'Every code is checked before any is used up, so a typo in one code does not cost the other. A username is made from the name unless you send `username`.',
+        ].join('\n\n'),
+        body: jsonBody(obj({
+          accountType: { type: 'string', enum: ['individual', 'business'], default: 'individual' },
+          displayName: { type: 'string', maxLength: 40 },
+          username: { type: 'string', pattern: '^[a-z0-9_.]{3,20}$', description: 'optional' },
+          phone: { type: 'string' },
+          phoneOtp: ref('OtpProof'),
+          email: { type: 'string', format: 'email', description: 'business only (required)' },
+          emailOtp: ref('OtpProof'),
+          business: ref('Business'),
+        }, ['displayName', 'phone', 'phoneOtp']), {
+          accountType: 'business',
+          displayName: 'Pizza Palace',
+          phone: '+919876543210',
+          phoneOtp: { requestId: 'otp_6f1c…', code: '482913' },
+          email: 'hello@pizza.example',
+          emailOtp: { requestId: 'otp_a93e…', code: '105577' },
+          business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
+        }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session'), ...errors(400, 409, 429) },
       }),
     },
     '/auth/login': {
-      post: op(T.auth, 'Log in', {
+      post: op(T.auth, 'Log in with a one-time code', {
         auth: false,
-        description: 'Returns a session token. Sessions end when the server restarts; use an API key for long-running integrations.',
-        body: jsonBody(obj({ username: { type: 'string' }, password: { type: 'string' } }, ['username', 'password']), { username: 'alice', password: 'secret123' }),
-        responses: { 200: ok(ref('Session')), ...errors(401, 429) },
+        description: 'Send the `phone` (or a business account\'s `email`) with the `requestId` from `POST /auth/otp` (`purpose: "login"`) and the `code`. Returns a session token; sessions end when the server restarts, so use an API key for long-running integrations. Accounts created before mobile login can still send `{ "username", "password" }`.',
+        body: jsonBody(obj({
+          phone: { type: 'string' },
+          email: { type: 'string', format: 'email' },
+          requestId: { type: 'string' },
+          code: { type: 'string', pattern: '^\\d{6}$' },
+          username: { type: 'string', description: 'older accounts only, with password' },
+          password: { type: 'string', description: 'older accounts only' },
+        }), { phone: '+919876543210', requestId: 'otp_6f1c…', code: '482913' }),
+        responses: { 200: ok(ref('Session')), ...errors(400, 401, 404, 429) },
       }),
     },
     '/auth/logout': { post: op(T.auth, 'End this session', { responses: { 204: noContent, ...errors(401) } }) },
@@ -205,6 +260,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
             iceServers: arrayOf({ type: 'object' }),
             defaultDisappear: { type: ['integer', 'null'], description: 'timer (seconds) for chats you start' },
             business: { oneOf: [ref('Business'), { type: 'null' }] },
+            contact: ref('Contact'),
           })),
           ...errors(401),
         },
@@ -215,6 +271,21 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/me/contact/otp': {
+      post: op(T.me, 'Send a code to add or change my mobile number or email', {
+        description: 'Send `phone` or `email`. Then confirm with `PUT /me/contact`. A business account needs both a verified mobile number and email.',
+        body: jsonBody(obj({ phone: { type: 'string' }, email: { type: 'string', format: 'email' } }), { email: 'owner@pizza.example' }),
+        responses: { 200: ok(ref('OtpSent')), ...errors(400, 401, 409, 429, 502) },
+      }),
+    },
+    '/me/contact': {
+      put: op(T.me, 'Save a verified mobile number or email', {
+        description: 'The same `phone` or `email` as in `POST /me/contact/otp`, with its `requestId` and `code`. A business\'s contact email follows the verified email.',
+        body: jsonBody(obj({ phone: { type: 'string' }, email: { type: 'string', format: 'email' }, requestId: { type: 'string' }, code: { type: 'string' } }, ['requestId', 'code']),
+          { email: 'owner@pizza.example', requestId: 'otp_a93e…', code: '105577' }),
+        responses: { 200: ok(obj({ contact: ref('Contact'), business: { oneOf: [ref('Business'), { type: 'null' }] } })), ...errors(400, 401, 409) },
+      }),
+    },
     '/me/default-disappearing': {
       put: op(T.me, 'Default message timer for chats you start', {
         description: 'Seconds from 60 (1 minute) to 31536000 (365 days); 0 or null turns it off. Applies to new chats you start; existing chats keep their timer.',
@@ -225,7 +296,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/me/business': {
       get: op(T.biz, 'My business profile', { responses: { 200: ok(obj({ business: { oneOf: [ref('Business'), { type: 'null' }] } })), ...errors(401) } }),
       put: op(T.biz, 'Become a business account, or update it', {
-        description: 'Everyone sees the business details and hours (with your profile). Greeting and away message texts stay private; they are sent automatically.',
+        description: 'Needs a verified mobile number and email on the account (400 `verification_required` otherwise; see `/me/contact`). The contact `email` is always the verified email. Everyone sees the business details and hours (with your profile). Greeting and away message texts stay private; they are sent automatically.',
         body: jsonBody(ref('Business'), {
           category: 'Restaurant',
           description: 'Wood-fired pizza since 1998',
@@ -385,9 +456,21 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 403, 429) },
       }),
     },
+    '/chat-lock/reset/otp': {
+      post: op(T.lock, 'Forgot the code: get an SMS code on my mobile number', {
+        description: 'Then call `POST /chat-lock/reset` with the `requestId`, the `code` and a `newCode`.',
+        responses: { 200: ok(ref('OtpSent')), ...errors(400, 401, 429, 502) },
+      }),
+    },
     '/chat-lock/reset': {
-      post: op(T.lock, 'Forgot the code: set a new one with your account password', {
-        body: jsonBody(obj({ password: { type: 'string' }, newCode: { type: 'string', minLength: 4, maxLength: 32 } }, ['password', 'newCode'])),
+      post: op(T.lock, 'Forgot the code: set a new one', {
+        description: 'Prove it is you with the SMS code from `POST /chat-lock/reset/otp` (`requestId` + `code`), or, for accounts created before mobile login, the account `password`.',
+        body: jsonBody(obj({
+          requestId: { type: 'string' },
+          code: { type: 'string' },
+          password: { type: 'string' },
+          newCode: { type: 'string', minLength: 4, maxLength: 32 },
+        }, ['newCode']), { requestId: 'otp_77d0…', code: '391024', newCode: '2468' }),
         responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 403, 429) },
       }),
     },
@@ -456,11 +539,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   // Stable names for generated clients (e.g. client.sendMessage(...)).
   const OPERATION_IDS = {
     'get /health': 'health',
+    'post /auth/otp': 'requestOtp',
     'post /auth/register': 'register',
     'post /auth/login': 'login',
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'post /me/contact/otp': 'requestContactOtp',
+    'put /me/contact': 'verifyContact',
     'put /me/default-disappearing': 'setDefaultDisappearing',
     'get /me/business': 'getBusiness',
     'put /me/business': 'setBusiness',
@@ -496,6 +582,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'get /media/{id}': 'downloadMedia',
     'get /chat-lock': 'getChatLock',
     'put /chat-lock/code': 'setChatLockCode',
+    'post /chat-lock/reset/otp': 'requestChatLockResetOtp',
     'post /chat-lock/reset': 'resetChatLockCode',
     'post /chat-lock/relock': 'relockChats',
     'put /conversations/{id}/lock': 'lockChat',
@@ -519,7 +606,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   }
 
   const TAG_DESCRIPTIONS = {
-    [T.auth]: 'Accounts and login sessions',
+    [T.auth]: 'Sign up and log in with one-time codes: a mobile number for individuals; mobile number and email (both verified) for businesses',
     [T.me]: 'Your profile',
     [T.keys]: 'Long-lived credentials for servers and bots',
     [T.hooks]: 'Receive events at your own URL',
@@ -540,7 +627,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       description: [
         'REST API for integrating ChatApp with other platforms: send and read messages, manage chats, status updates and blocking, and receive events by webhook.',
         '',
-        '**Authentication**: `Authorization: Bearer <token>` with a session token from `POST /auth/login`, or an API key (`cak_…`) from `POST /api-keys` (recommended for servers and bots: it survives restarts and can be revoked).',
+        '**Authentication**: `Authorization: Bearer <token>` with a session token from `POST /auth/login` (after `POST /auth/otp`), or an API key (`cak_…`) from `POST /api-keys` (recommended for servers and bots: it survives restarts and can be revoked).',
         '',
         '**Real time**: subscribe to webhooks, or connect a Socket.IO client to the same server with `auth: { token }` (a session token or API key) to receive the same events live.',
         '',

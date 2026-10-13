@@ -76,13 +76,13 @@ async function webhookReceiver(t, { fail = 0 } = {}) {
   return { url: `http://127.0.0.1:${server.address().port}/hook`, received, waitFor };
 }
 
-test('api: register, login, API keys and auth errors', async (t) => {
-  const { api } = await setup(t);
+test('api: password login for older accounts, API keys and auth errors', async (t) => {
+  const { api, store } = await setup(t);
 
-  const reg = await api('POST', '/auth/register', { body: { username: 'alice', password: 'secret1', displayName: 'Alice' } });
-  assert.strictEqual(reg.status, 201);
-  assert.strictEqual(reg.body.user.username, 'alice');
-  assert.strictEqual((await api('POST', '/auth/register', { body: { username: 'alice', password: 'secret1' } })).body.error.code, 'conflict');
+  // Sign-up is by mobile number + OTP (see auth.test.js); accounts made before that keep their password.
+  const reg = store.register('alice', 'secret1', 'Alice');
+  const old = await api('POST', '/auth/register', { body: { username: 'bob', password: 'secret1' } });
+  assert.strictEqual(old.status, 400, 'password sign-up is gone');
 
   const login = await api('POST', '/auth/login', { body: { username: 'alice', password: 'secret1' } });
   assert.strictEqual(login.status, 200);
@@ -110,8 +110,8 @@ test('api: register, login, API keys and auth errors', async (t) => {
   assert.strictEqual((await api('POST', '/auth/logout', { token: login.body.token })).status, 204);
   assert.strictEqual((await api('GET', '/me', { token: login.body.token })).status, 401);
 
-  assert.strictEqual((await api('GET', '/nope', { token: reg.body.token })).body.error.code, 'not_found');
-  const badJson = await api('POST', '/conversations', { token: reg.body.token, raw: '{oops', headers: { 'Content-Type': 'application/json' } });
+  assert.strictEqual((await api('GET', '/nope', { token: reg.token })).body.error.code, 'not_found');
+  const badJson = await api('POST', '/conversations', { token: reg.token, raw: '{oops', headers: { 'Content-Type': 'application/json' } });
   assert.deepStrictEqual([badJson.status, badJson.body.error.code], [400, 'invalid_json']);
 });
 

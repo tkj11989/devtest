@@ -76,6 +76,8 @@ async function setup(t) {
 test('auto replies: greeting for new conversations, away outside hours (rate-limited)', async (t) => {
   const { store, client } = await setup(t);
   const shop = store.register('shop', 'pass', 'Corner Shop');
+  store.setContact('shop', 'sms', '+919800000001');
+  store.setContact('shop', 'email', 'hi@shop.example');
   const cust = store.register('cust', 'pass');
   const shopApp = await client(shop.token);
   const custApp = await client(cust.token);
@@ -136,6 +138,11 @@ test('api: business profile over REST', async (t) => {
     return { status: res.status, body: await res.json().catch(() => null) };
   };
   assert.deepStrictEqual((await api('GET', '/me/business', token)).body, { business: null });
+  // A business needs a verified mobile number and email (verified over OTP in auth.test.js).
+  const unverified = await api('PUT', '/me/business', token, { category: 'Restaurant' });
+  assert.deepStrictEqual([unverified.status, unverified.body.error.code], [400, 'verification_required']);
+  store.setContact('cafe', 'sms', '+919800000002');
+  store.setContact('cafe', 'email', 'hello@cafe.example');
   const put = await api('PUT', '/me/business', token, {
     category: 'Restaurant',
     timezone: 'Asia/Kolkata',
@@ -144,6 +151,7 @@ test('api: business profile over REST', async (t) => {
   });
   assert.strictEqual(put.status, 200);
   assert.strictEqual(put.body.business.hours.tue.mode, 'closed');
+  assert.strictEqual(put.body.business.email, 'hello@cafe.example', 'contact email is the verified email');
   assert.strictEqual((await api('PUT', '/me/business', token, { category: 'Nope' })).status, 400);
   const seen = await api('GET', '/users/cafe', other);
   assert.deepStrictEqual([seen.body.user.business.category, seen.body.user.business.away], ['Restaurant', undefined]);

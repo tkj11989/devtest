@@ -78,10 +78,89 @@ class Store {
     return this.createSession(username);
   }
 
+  /**
+   * Create an account whose mobile number (and, for a business, email) was just
+   * verified by OTP. There is no password: you log in with a code sent to the number.
+   * `business` (optional) is the business profile, e.g. `{ category }`.
+   */
+  registerVerified({ displayName, username, phone, email, business }) {
+    displayName = String(displayName || '').trim().slice(0, 40);
+    if (!displayName) throw new Error('Enter your name');
+    if (!phone) throw new Error('A verified mobile number is required');
+    if (this.findByPhone(phone)) throw new Error('This mobile number is already registered');
+    if (email && this.findByEmail(email)) throw new Error('This email is already registered');
+    if (business && !email) throw new Error('A verified email is required for a business account');
+    if (username) {
+      username = String(username).trim().toLowerCase();
+      if (!/^[a-z0-9_.]{3,20}$/.test(username)) throw new Error('Username must be 3-20 characters: letters, numbers, "_" or "."');
+      if (this.data.users[username]) throw new Error('Username already taken');
+    } else {
+      username = this._freeUsername(displayName);
+    }
+    const now = Date.now();
+    this.data.users[username] = {
+      username,
+      displayName,
+      about: business ? 'Business account' : 'Hey there! I am using ChatApp.',
+      phone,
+      ...(email ? { email } : {}),
+      lastSeen: now,
+      createdAt: now,
+    };
+    if (business) {
+      try {
+        this.setBusiness(username, business);
+      } catch (err) {
+        delete this.data.users[username];
+        throw err;
+      }
+    }
+    this._save();
+    return this.createSession(username);
+  }
+
+  /** "Anita's Café" -> "anitascafe", or "anitascafe4821" when taken. */
+  _freeUsername(displayName) {
+    let base = displayName.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14);
+    if (base.length < 3) base = `user${base}`;
+    if (!this.data.users[base]) return base;
+    for (;;) {
+      const candidate = `${base}${crypto.randomInt(1000, 1000000)}`;
+      if (!this.data.users[candidate]) return candidate;
+    }
+  }
+
+  findByPhone(phone) {
+    return Object.values(this.data.users).find((u) => u.phone === phone)?.username || null;
+  }
+
+  findByEmail(email) {
+    return Object.values(this.data.users).find((u) => u.email === email)?.username || null;
+  }
+
+  /** Set a verified mobile number (`channel` "sms") or email ("email"). A business's contact email follows it. */
+  setContact(username, channel, value) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const field = channel === 'sms' ? 'phone' : 'email';
+    const owner = field === 'phone' ? this.findByPhone(value) : this.findByEmail(value);
+    if (owner && owner !== username) throw new Error(`This ${field === 'phone' ? 'mobile number' : 'email'} is already registered`);
+    u[field] = value;
+    if (field === 'email' && u.business) u.business.email = value;
+    this._save();
+  }
+
+  /** Mobile number and email as stored for the account owner (never shown to others). */
+  contactOf(username) {
+    const u = this.data.users[username];
+    return u ? { phone: u.phone || null, email: u.email || null } : null;
+  }
+
+  /** Username + password login (accounts created before mobile login). */
   login(username, password) {
     username = String(username || '').trim().toLowerCase();
     const user = this.data.users[username];
-    if (!user) throw new Error('Invalid username or password');
+    if (!user || !user.hash) throw new Error('Invalid username or password');
     const hash = Store._hash(String(password || ''), user.salt);
     if (!crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(user.hash, 'hex'))) {
       throw new Error('Invalid username or password');
@@ -283,7 +362,8 @@ class Store {
     };
     const category = str(input.category, 60, 'category');
     if (!BusinessHours.CATEGORIES.includes(category)) throw new Error(`category must be one of: ${BusinessHours.CATEGORIES.join(', ')}`);
-    const email = str(input.email, 120, 'email');
+    // The contact email of an account with a verified email is always that email.
+    const email = u.email || str(input.email, 120, 'email');
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('email is not valid');
     let website = str(input.website, 200, 'website');
     if (website) {
@@ -447,12 +527,17 @@ class Store {
     this._save();
   }
 
-  /** Forgot the code: the account password lets you choose a new one. */
+  /**
+   * Forgot the code: choose a new one. Needs the account password, or `password: null`
+   * when the caller already verified an OTP sent to the account's mobile number.
+   */
   resetLockCode(username, password, newCode) {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
-    const hash = Store._hash(String(password || ''), u.salt);
-    if (!crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(u.hash, 'hex'))) throw new Error('Password is wrong');
+    if (password !== null) {
+      const hash = u.hash ? Store._hash(String(password || ''), u.salt) : null;
+      if (!hash || !crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(u.hash, 'hex'))) throw new Error('Password is wrong');
+    }
     Store._checkLockCode(newCode);
     const salt = crypto.randomBytes(16).toString('hex');
     u.chatLock = { salt, hash: Store._hash(String(newCode), salt) };
@@ -510,10 +595,14 @@ class Store {
 
   searchUsers(query, exclude) {
     const q = String(query || '').trim().toLowerCase();
+    // A full mobile number finds its owner (the number itself is never returned).
+    const digits = q.replace(/[\s\-().]/g, '').replace(/^00/, '+');
+    const phone = /^\+?\d{8,15}$/.test(digits) ? digits.replace(/^(?!\+)/, '+') : null;
     return Object.values(this.data.users)
       .filter((u) => u.username !== exclude)
       .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q)
-        || (u.business && u.business.category.toLowerCase().includes(q)))
+        || (u.business && u.business.category.toLowerCase().includes(q))
+        || (phone && u.phone === phone))
       .slice(0, 50)
       .map((u) => this.publicUser(u.username));
   }
