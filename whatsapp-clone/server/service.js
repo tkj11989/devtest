@@ -1,6 +1,7 @@
 'use strict';
 
 const { Store } = require('./store');
+const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
 class ApiError extends Error {
@@ -74,10 +75,10 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
       const m = payload.message;
       return isUnlocked(username, m.convId, { lockKey }) ? payload : { message: redactMessage(m) };
     }
-    if (event === 'conversation:new') return { ...payload, conversation: lockView(username, payload.conversation, lockKey) };
+    if (event === 'conversation:new' || event === 'conversation:updated') return { ...payload, conversation: lockView(username, payload.conversation, lockKey) };
     return payload;
   };
-  const LOCK_SENSITIVE = new Set(['message:new', 'conversation:new']);
+  const LOCK_SENSITIVE = new Set(['message:new', 'conversation:new', 'conversation:updated']);
 
   /** Wrong codes count against the user; after MAX_FAILS they must wait (doubling, up to an hour). */
   const checkSecret = (me, ok, what = 'secret code') => {
@@ -145,7 +146,7 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
     const conv = store.getConversation(convId);
     const dup = conv && store.findByClientId(convId, me, opts.clientId);
     if (dup) return store.viewFor(dup, me);
-    const isFirst = conv && (store.data.messages[convId] || []).length === 0;
+    const isFirst = conv && !(store.data.messages[convId] || []).some((m) => m.type !== 'system');
     const msg = store.addMessage(convId, me, text, opts);
 
     // A brand new direct chat appears in the recipient's list on first message.
@@ -156,8 +157,43 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
         }
       }
     }
-    return postMessage(conv, msg);
+    const view = postMessage(conv, msg);
+    autoReplies(conv, msg);
+    return view;
   };
+
+  // ---------- business automatic replies ----------
+
+  const GREETING_GAP_MS = 14 * 24 * 60 * 60 * 1000; // greet again after two quiet weeks
+  const AWAY_GAP_MS = 6 * 60 * 60 * 1000; // at most one away message per chat every 6 hours
+
+  /**
+   * When someone messages a business in a one-to-one chat, send the business's
+   * greeting (new conversation, or after 14 quiet days) and away message
+   * (outside business hours), if it has turned them on.
+   */
+  function autoReplies(conv, msg) {
+    if (conv.type !== 'direct' || msg.auto || msg.type === 'system') return;
+    const biz = conv.members.find((m) => m !== msg.from);
+    const business = store.getBusiness(biz);
+    if (!business || store.blockedEither(biz, msg.from)) return;
+    const msgs = store.data.messages[conv.id] || [];
+    const earlier = msgs.filter((m) => m.id !== msg.id && m.type !== 'system' && Store.visibleTo(m, biz));
+    const quietFor = earlier.length ? msg.ts - earlier[earlier.length - 1].ts : Infinity;
+    const replies = [];
+    if (business.greeting?.enabled && quietFor > GREETING_GAP_MS) replies.push(['greeting', business.greeting.text]);
+    if (business.away?.enabled && !BusinessHours.isOpenNow(business, new Date(msg.ts))
+      && !msgs.some((m) => m.auto === 'away' && msg.ts - m.ts < AWAY_GAP_MS)) {
+      replies.push(['away', business.away.text]);
+    }
+    for (const [auto, text] of replies) {
+      try {
+        postMessage(conv, store.addMessage(conv.id, biz, text, { auto }));
+      } catch (err) {
+        console.warn(`auto ${auto} reply from ${biz} failed: ${err.message}`);
+      }
+    }
+  }
 
   /** Notify message senders that their messages' delivery/read status changed. */
   const notifyStatus = (convId, changed) => {
@@ -202,14 +238,54 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
 
   const actions = {
     me(me) {
-      return { user: store.publicUser(me), iceServers, blocked: store.blockedList(me) };
+      return {
+        user: store.publicUser(me),
+        iceServers,
+        blocked: store.blockedList(me),
+        defaultDisappear: store.defaultDisappear(me),
+        business: store.getBusiness(me),
+      };
     },
 
     updateProfile(me, { displayName, about }) {
-      const user = store.updateProfile(me, { displayName, about });
-      notify(me, 'user:updated', { user: { ...user, online: isOnline(me) } });
-      for (const p of peersOf(me)) notify(p, 'user:updated', { user: userView(me, p) });
-      return { user };
+      store.updateProfile(me, { displayName, about });
+      return { user: announceProfile(me) };
+    },
+
+    // ----- business profile -----
+
+    business(me) {
+      return { business: store.getBusiness(me) };
+    },
+
+    /** Become a business account, or update the business details. */
+    setBusiness(me, input) {
+      const business = store.setBusiness(me, input || {});
+      return { business, user: announceProfile(me) };
+    },
+
+    /** Back to a personal account. */
+    removeBusiness(me) {
+      store.removeBusiness(me);
+      return { business: null, user: announceProfile(me) };
+    },
+
+    // ----- disappearing messages -----
+
+    /** Timer for this chat, in seconds (null/0 = off). Everyone in the chat sees a notice. */
+    setDisappearing(me, { convId, seconds }, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const conv = store.setDisappearing(convId, me, seconds);
+      postMessage(conv, store.addSystemMessage(convId, me, { event: 'disappearing', seconds: conv.disappearAfter || null }));
+      // notify() redacts per device for members who locked this chat.
+      for (const m of conv.members) notify(m, 'conversation:updated', { conversation: { ...store.summarize(conv, m), activeCall: calls?.activeCallFor(conv.id) || null } });
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    /** Timer applied to new chats I start (seconds, null/0 = off). */
+    setDefaultDisappear(me, { seconds }) {
+      return { defaultDisappear: store.setDefaultDisappear(me, seconds) };
     },
 
     searchUsers(me, { q }) {
@@ -466,6 +542,22 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
     },
   };
 
+  /** Tell my devices and the people I chat with that my profile changed. */
+  function announceProfile(me) {
+    const user = store.publicUser(me);
+    notify(me, 'user:updated', { user: { ...user, online: isOnline(me) } });
+    for (const p of peersOf(me)) notify(p, 'user:updated', { user: userView(me, p) });
+    return user;
+  }
+
+  /** Delete messages whose timer ran out, and tell everyone in those chats. */
+  const pruneExpired = () => {
+    for (const { convId, ids } of store.pruneMessages()) {
+      const conv = store.getConversation(convId);
+      if (conv) notifyMembers(conv, 'message:expired', { convId, ids });
+    }
+  };
+
   /** May this app session download this media (voice notes of locked chats need unlocking)? */
   const mediaAllowed = (me, mediaId, ctx) => {
     const convId = store.mediaConversation(mediaId);
@@ -483,6 +575,7 @@ function createService({ store, io, isOnline, webhooks, iceServers }) {
     notify,
     lockKeyFor,
     mediaAllowed,
+    pruneExpired,
     forgetUnlocks,
     userRoom,
     userView,

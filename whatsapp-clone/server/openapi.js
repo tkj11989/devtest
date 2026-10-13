@@ -1,5 +1,7 @@
 'use strict';
 
+const BusinessHours = require('../public/business-hours.js');
+
 /**
  * OpenAPI 3.1 description of the REST API (served at /api/v1/openapi.json and
  * rendered at /api/docs). Keep in sync with server/api.js.
@@ -36,13 +38,42 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       about: { type: 'string' },
       lastSeen: { type: ['integer', 'null'], description: 'ms since epoch; null when hidden by blocking' },
       online: { type: 'boolean' },
+      business: ref('BusinessPublic'),
     }, ['username', 'displayName']),
+    DayHours: {
+      oneOf: [
+        obj({ mode: { const: 'hours' }, open: { type: 'string', pattern: '^\\d{2}:\\d{2}$', example: '09:00' }, close: { type: 'string', example: '18:00' } }, ['mode', 'open', 'close']),
+        obj({ mode: { enum: ['open24', 'closed'] } }, ['mode']),
+      ],
+      description: 'A close time at or before the open time means open past midnight.',
+    },
+    BusinessHours: obj(Object.fromEntries(BusinessHours.DAYS.map((d) => [d, ref('DayHours')]))),
+    BusinessPublic: obj({
+      category: { type: 'string', enum: BusinessHours.CATEGORIES },
+      description: { type: 'string', maxLength: 512 },
+      address: { type: 'string', maxLength: 256 },
+      email: { type: 'string', format: 'email' },
+      website: { type: 'string', format: 'uri' },
+      timezone: { type: 'string', example: 'Asia/Kolkata', description: 'IANA time zone the hours are in' },
+      hours: { oneOf: [ref('BusinessHours'), { type: 'null' }] },
+      since: { type: 'integer' },
+    }, ['category', 'timezone']),
+    AutoReply: obj({ enabled: { type: 'boolean' }, text: { type: 'string', maxLength: 1000 } }),
+    Business: {
+      allOf: [ref('BusinessPublic'), obj({
+        greeting: { ...ref('AutoReply'), description: 'Sent to customers who message you for the first time, or after 14 days without messages' },
+        away: { ...ref('AutoReply'), description: 'Sent outside your business hours (at most once every 6 hours per chat)' },
+      })],
+    },
     Users: { type: 'object', additionalProperties: ref('User'), description: 'Users keyed by username' },
     Message: obj({
       id: { type: 'string' },
       convId: { type: 'string' },
       from: { type: 'string', description: 'username of the sender' },
-      type: { type: 'string', enum: ['text', 'voice', 'call'], description: 'absent for text messages' },
+      type: { type: 'string', enum: ['text', 'voice', 'call', 'system'], description: 'absent for text messages; `system` = a notice such as a timer change' },
+      expiresAt: { type: 'integer', description: 'disappearing messages: when it will be deleted (ms since epoch)' },
+      auto: { type: 'string', enum: ['greeting', 'away'], description: "a business's automatic reply" },
+      system: obj({ event: { const: 'disappearing' }, seconds: { type: ['integer', 'null'] } }),
       text: { type: 'string' },
       ts: { type: 'integer', description: 'ms since epoch' },
       deliveredTo: arrayOf({ type: 'string' }),
@@ -80,6 +111,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       lastMessage: { oneOf: [ref('Message'), { type: 'null' }] },
       unread: { type: 'integer' },
       activeCall: { oneOf: [ref('ActiveCall'), { type: 'null' }] },
+      disappearAfter: { type: 'integer', description: 'disappearing messages timer in seconds (absent = off)' },
+      disappearSetBy: { type: 'string' },
       locked: { type: 'boolean', description: 'you locked this chat with your secret code' },
       unlocked: { type: 'boolean', description: 'locked chats only: unlocked in this session' },
     }, ['id', 'type', 'members']),
@@ -140,7 +173,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E429: errorResponse('Rate limited; see Retry-After'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -164,11 +197,49 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/auth/logout': { post: op(T.auth, 'End this session', { responses: { 204: noContent, ...errors(401) } }) },
 
     '/me': {
-      get: op(T.me, 'My profile', { responses: { 200: ok(obj({ user: ref('User'), blocked: arrayOf({ type: 'string' }), iceServers: arrayOf({ type: 'object' }) })), ...errors(401) } }),
+      get: op(T.me, 'My profile', {
+        responses: {
+          200: ok(obj({
+            user: ref('User'),
+            blocked: arrayOf({ type: 'string' }),
+            iceServers: arrayOf({ type: 'object' }),
+            defaultDisappear: { type: ['integer', 'null'], description: 'timer (seconds) for chats you start' },
+            business: { oneOf: [ref('Business'), { type: 'null' }] },
+          })),
+          ...errors(401),
+        },
+      }),
       patch: op(T.me, 'Update my profile', {
         body: jsonBody(obj({ displayName: { type: 'string' }, about: { type: 'string' } })),
         responses: { 200: ok(obj({ user: ref('User') })), ...errors(400, 401) },
       }),
+    },
+
+    '/me/default-disappearing': {
+      put: op(T.me, 'Default message timer for chats you start', {
+        description: 'Seconds from 60 (1 minute) to 31536000 (365 days); 0 or null turns it off. Applies to new chats you start; existing chats keep their timer.',
+        body: jsonBody(obj({ seconds: { type: ['integer', 'null'] } }, ['seconds']), { seconds: 7 * 86400 }),
+        responses: { 200: ok(obj({ defaultDisappear: { type: ['integer', 'null'] } })), ...errors(400, 401) },
+      }),
+    },
+    '/me/business': {
+      get: op(T.biz, 'My business profile', { responses: { 200: ok(obj({ business: { oneOf: [ref('Business'), { type: 'null' }] } })), ...errors(401) } }),
+      put: op(T.biz, 'Become a business account, or update it', {
+        description: 'Everyone sees the business details and hours (with your profile). Greeting and away message texts stay private; they are sent automatically.',
+        body: jsonBody(ref('Business'), {
+          category: 'Restaurant',
+          description: 'Wood-fired pizza since 1998',
+          address: '12 Market St, Pune',
+          email: 'hello@pizza.example',
+          website: 'https://pizza.example',
+          timezone: 'Asia/Kolkata',
+          hours: { mon: { mode: 'hours', open: '11:00', close: '23:00' }, tue: { mode: 'closed' }, sat: { mode: 'open24' } },
+          greeting: { enabled: true, text: 'Thanks for messaging us! How can we help?' },
+          away: { enabled: true, text: "We're closed right now and will reply when we open." },
+        }),
+        responses: { 200: ok(obj({ business: ref('Business'), user: ref('User') })), ...errors(400, 401) },
+      }),
+      delete: op(T.biz, 'Switch back to a personal account', { responses: { 200: ok(obj({ business: { type: 'null' }, user: ref('User') })), ...errors(401) } }),
     },
 
     '/api-keys': {
@@ -268,6 +339,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         params: [CONV_ID],
         body: jsonBody(obj({ isTyping: { type: 'boolean', default: true }, activity: { type: 'string', enum: ['typing', 'recording'] } })),
         responses: { 204: noContent, ...errors(401, 404) },
+      }),
+    },
+    '/conversations/{id}/disappearing': {
+      put: op(T.conv, 'Turn disappearing messages on/off for a chat', {
+        description: 'New messages are deleted for everyone `seconds` after they are sent (60 … 31536000, i.e. 1 minute to 365 days; 0 or null = off). Any member can change it; everyone sees a notice.',
+        params: [CONV_ID],
+        body: jsonBody(obj({ seconds: { type: ['integer', 'null'] } }, ['seconds']), { seconds: 2 * 86400 + 4 * 3600 }),
+        responses: { 200: ok(obj({ conversation: ref('Conversation') })), ...errors(400, 401, 404, 423) },
       }),
     },
     '/conversations/{id}/call': {
@@ -382,6 +461,11 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'put /me/default-disappearing': 'setDefaultDisappearing',
+    'get /me/business': 'getBusiness',
+    'put /me/business': 'setBusiness',
+    'delete /me/business': 'removeBusiness',
+    'put /conversations/{id}/disappearing': 'setDisappearing',
     'get /api-keys': 'listApiKeys',
     'post /api-keys': 'createApiKey',
     'delete /api-keys/{id}': 'revokeApiKey',
@@ -444,6 +528,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     [T.msg]: 'Sending, reading, starring and deleting messages',
     [T.status]: 'Status updates that disappear after 24 hours',
     [T.lock]: 'Lock chats with a secret code, required again in every new session',
+    [T.biz]: 'Business profile, hours, greeting and away messages',
     [T.meta]: 'Service health and this document',
   };
 

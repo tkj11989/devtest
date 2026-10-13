@@ -1002,3 +1002,121 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .modal-card h3 { margin: 0; font-size: 18px; font-weight: 500; }
 .modal-card p { margin: 0; font-size: 14px; }
 .modal-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 16px; }
+
+/* ---------- chat header (tap for contact info) ---------- */
+.chat-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  color: inherit;
+  text-align: left;
+}
+.name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.name-row .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 16px; }
+.badges { display: inline-flex; gap: 4px; align-items: center; flex: none; }
+.biz-badge { width: 15px; height: 15px; fill: var(--green); flex: none; }
+.timer-icon { width: 14px; height: 14px; fill: var(--muted); flex: none; }
+.row .timer-icon, .row .biz-badge { margin-left: 2px; }
+.meta .timer-icon { width: 12px; height: 12px; }
+.preview .timer-icon { vertical-align: -2px; margin-right: 4px; }
+.auto-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--green); margin-right: 2px; }
+
+/* ---------- disappearing messages ---------- */
+.timer-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13.5px;
+  text-align: left;
+  flex: none;
+  width: 100%;
+}
+.timer-banner:hover { color: var(--text); }
+.timer-banner svg { width: 18px; height: 18px; fill: var(--green); flex: none; }
+.system-note {
+  align-self: center;
+  max-width: min(90%, 520px);
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #fff5c4;
+  color: #54656f;
+  font-size: 12.5px;
+  text-align: center;
+  box-shadow: 0 1px .5px rgba(0, 0, 0, .13);
+}
+.system-note .timer-icon { width: 13px; height: 13px; vertical-align: -2px; margin-right: 5px; fill: currentColor; }
+@media (prefers-color-scheme: dark) {
+  .system-note { background: #1d282f; color: #ffd279; }
+}
+.timer-options { display: flex; flex-direction: column; gap: 8px; }
+.timer-options label { flex-direction: row; align-items: center; gap: 10px; color: var(--text); font-size: 15px; }
+.timer-options input { width: auto; accent-color: var(--green); }
+.timer-custom { display: flex; gap: 8px; }
+.timer-custom label { flex: 1; }
+.timer-custom.disabled { opacity: .45; }
+.small-note { font-size: 12.5px; }
+
+/* ---------- contact / group info ---------- */
+.contact-scroll { overflow-y: auto; flex: 1; background: var(--panel-2); }
+.info-top { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 24px 16px 18px; background: var(--panel); text-align: center; }
+.info-top p { margin: 0; }
+.info-name { display: flex; align-items: center; gap: 8px; font-size: 22px; margin-top: 10px; }
+.info-name .biz-badge { width: 20px; height: 20px; }
+.info-card { background: var(--panel); margin-top: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.info-label { font-size: 13px; color: var(--muted); }
+.info-value { color: var(--text); overflow-wrap: anywhere; }
+a.info-value { color: var(--green); text-decoration: none; }
+a.info-value:hover { text-decoration: underline; }
+.info-row { display: flex; flex-direction: column; gap: 1px; padding-top: 6px; }
+.info-action { flex-direction: row; align-items: center; gap: 12px; }
+.info-action .timer-icon { width: 22px; height: 22px; fill: var(--green); }
+.grow { flex: 1; }
+.biz-head { display: flex; align-items: center; gap: 8px; color: var(--green); font-weight: 500; }
+.biz-head .biz-badge { width: 18px; height: 18px; }
+.biz-desc { margin: 0; white-space: pre-wrap; }
+.biz-status { font-size: 14px; }
+.biz-status.open strong { color: var(--green); }
+.biz-status.closed strong { color: var(--danger); }
+.biz-week { display: grid; gap: 2px; font-size: 13.5px; color: var(--muted); }
+.biz-day { display: flex; justify-content: space-between; gap: 12px; }
+.biz-day.today { color: var(--text); font-weight: 600; }
+.member-list li { cursor: default; padding: 0; }
+.member-list li:hover { background: none; }
+.admin-tag { font-size: 11px; color: var(--green); border: 1px solid var(--green); border-radius: 4px; padding: 0 4px; }
+
+/* ---------- business settings ---------- */
+.biz-form { overflow-y: auto; flex: 1; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+.biz-intro { margin: 0; font-size: 13.5px; }
+.biz-form select, .biz-form textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 100%;
+}
+.biz-form textarea { resize: vertical; }
+.biz-form fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.biz-form legend { color: var(--green); font-size: 14px; padding: 0 4px; }
+.biz-form label.checkline { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; color: var(--text); font-size: 13.5px; }
+.biz-form label.checkline input { flex: none; width: 18px; height: 18px; padding: 0; margin: 1px 0 0; accent-color: var(--green); }
+.biz-form label.checkline span { flex: 1; min-width: 0; }
+.hours-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 8px; align-items: center; font-size: 13.5px; padding: 4px 0; }
+.hours-row + .hours-row { border-top: 1px solid var(--border); }
+.hours-row select { padding: 6px 8px; font-size: 13.5px; min-width: 0; }
+.hours-row .times { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; }
+.hours-row .times input { flex: 1; min-width: 0; padding: 6px 6px; font-size: 13.5px; }
+.day-name { color: var(--text); }
+#business-remove { align-self: center; }

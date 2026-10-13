@@ -131,11 +131,16 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
 
   // ---------- me ----------
 
-  router.get('/me', ...authed, run((req) => {
-    const { user, blocked, iceServers } = actions.me(req.user, {}, req.ctx);
-    return { user, blocked, iceServers };
-  }));
+  router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+
+  router.put('/me/default-disappearing', ...authed, json, run((req) => actions.setDefaultDisappear(req.user, { seconds: req.body?.seconds })));
+
+  // ---------- business profile ----------
+
+  router.get('/me/business', ...authed, run((req) => actions.business(req.user)));
+  router.put('/me/business', ...authed, json, run((req) => actions.setBusiness(req.user, req.body || {})));
+  router.delete('/me/business', ...authed, run((req) => actions.removeBusiness(req.user)));
 
   // ---------- API keys ----------
 
@@ -212,6 +217,10 @@ function createApiRouter({ store, service, webhooks, rateLimit = {}, corsOrigins
     actions.typing(req.user, { convId: p(req, 'id'), isTyping, activity }, req.ctx);
     return undefined;
   }));
+  router.put('/conversations/:id/disappearing', ...authed, json, run((req) => actions.setDisappearing(req.user, {
+    convId: p(req, 'id'),
+    seconds: req.body?.seconds,
+  }, req.ctx)));
   router.get('/conversations/:id/call', ...authed, run((req) => actions.activeCall(req.user, { convId: p(req, 'id') }, req.ctx)));
 
   router.delete('/messages/:id', ...authed, run((req) => {

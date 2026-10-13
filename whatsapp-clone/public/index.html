@@ -112,6 +112,43 @@
         </div>
       </div>
 
+      <!-- Contact / group info -->
+      <div class="panel overlay hidden" id="panel-contact">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="contact-title">Contact info</h2></header>
+        <div class="contact-scroll" id="contact-body"></div>
+      </div>
+
+      <!-- Business settings -->
+      <div class="panel overlay hidden" id="panel-business">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Business profile</h2></header>
+        <form class="biz-form" id="business-form">
+          <p class="muted biz-intro">Customers see these details on your profile, with a business badge next to your name.</p>
+          <label>Category <select name="category" required></select></label>
+          <label>Description <textarea name="description" maxlength="512" rows="3" placeholder="What your business does"></textarea></label>
+          <label>Address <input name="address" maxlength="256" placeholder="Street, city" /></label>
+          <label>Email <input name="email" type="email" maxlength="120" placeholder="hello@example.com" /></label>
+          <label>Website <input name="website" maxlength="200" placeholder="https://example.com" /></label>
+          <label>Time zone <select name="timezone"></select></label>
+          <fieldset class="biz-hours">
+            <legend>Business hours</legend>
+            <div id="biz-hours-rows"></div>
+          </fieldset>
+          <fieldset class="biz-auto">
+            <legend>Greeting message</legend>
+            <label class="checkline"><input type="checkbox" name="greetingEnabled" /><span>Send to people who message you for the first time (or after 14 days)</span></label>
+            <textarea name="greetingText" maxlength="1000" rows="2" placeholder="Thanks for contacting us! How can we help?"></textarea>
+          </fieldset>
+          <fieldset class="biz-auto">
+            <legend>Away message</legend>
+            <label class="checkline"><input type="checkbox" name="awayEnabled" /><span>Send outside business hours (at most once every 6 hours per chat)</span></label>
+            <textarea name="awayText" maxlength="1000" rows="2" placeholder="We're closed right now and will reply when we open."></textarea>
+          </fieldset>
+          <p class="error" id="business-error" role="alert"></p>
+          <button class="primary" type="submit" id="business-save">Save business profile</button>
+          <button class="danger-link" type="button" id="business-remove">Switch to a personal account</button>
+        </form>
+      </div>
+
       <!-- Starred messages -->
       <div class="panel overlay hidden" id="panel-starred">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Starred messages</h2></header>
@@ -135,6 +172,17 @@
           <button class="primary" type="submit">Save</button>
           <p id="profile-msg" class="muted"></p>
         </form>
+        <div class="pad stack">
+          <div class="link-row static">
+            <svg viewBox="0 0 24 24"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg>
+            <span><strong>Default message timer</strong><small id="default-timer-summary">Off</small></span>
+            <button class="link" type="button" id="btn-default-timer">Change</button>
+          </div>
+          <button class="link-row" id="btn-business" type="button">
+            <svg viewBox="0 0 24 24"><path d="M10 16v-1H3.01L3 19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4h-7v1h-4Zm10-9h-4.01V5l-2-2h-4l-2 2v2H4a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h6v-2h4v2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2Zm-6 0h-4V5h4v2Z"/></svg>
+            <span><strong id="business-row-title">Business account</strong><small id="business-row-sub">Show your hours, address and website; send greeting and away messages</small></span>
+          </button>
+        </div>
         <div class="pad stack chat-lock-settings">
           <div class="link-row static">
             <svg viewBox="0 0 24 24"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg>
@@ -206,11 +254,13 @@
       <div class="chat-view hidden" id="chat-view">
         <header class="bar">
           <button class="icon-btn back mobile-only" id="btn-back">&larr;</button>
-          <div class="avatar" id="chat-avatar"></div>
-          <div class="chat-title">
-            <div id="chat-name" class="name"></div>
-            <div id="chat-status" class="sub"></div>
-          </div>
+          <button class="chat-title-btn" id="chat-title-btn" type="button" title="Contact info">
+            <div class="avatar" id="chat-avatar"></div>
+            <div class="chat-title">
+              <div class="name-row"><span id="chat-name" class="name"></span><span id="chat-badges" class="badges"></span></div>
+              <div id="chat-status" class="sub"></div>
+            </div>
+          </button>
           <div class="bar-actions" id="call-buttons">
             <button class="icon-btn img-btn" id="btn-group-call" title="Group voice call"><img src="icons/group-call.png" alt="Group call" /></button>
             <button class="icon-btn" id="btn-video-call" title="Video call">
@@ -223,11 +273,17 @@
               <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
             </button>
             <div class="menu hidden" id="chat-menu" role="menu">
+              <button role="menuitem" id="menu-info"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M11 7h2v2h-2V7Zm0 4h2v6h-2v-6Zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg><span>Contact info</span></button>
+              <button role="menuitem" id="menu-timer"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span>Disappearing messages</span></button>
               <button role="menuitem" id="menu-lock"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg><span>Lock chat</span></button>
               <button role="menuitem" id="menu-block"><img src="icons/blocked.png" alt="" /><span>Block contact</span></button>
             </div>
           </div>
         </header>
+        <button class="timer-banner hidden" id="timer-banner" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg>
+          <span id="timer-banner-text"></span>
+        </button>
         <div class="call-banner hidden" id="call-banner">
           <img src="icons/calling.png" alt="" />
           <span id="call-banner-text"></span>
@@ -336,6 +392,32 @@
 
   <div class="toast hidden" id="toast" role="status"></div>
 
+  <!-- ========== Disappearing messages timer ========== -->
+  <div class="modal hidden" id="timer-modal" role="dialog" aria-modal="true" aria-labelledby="timer-title">
+    <form class="modal-card" id="timer-form">
+      <h3 id="timer-title">Disappearing messages</h3>
+      <p class="muted" id="timer-text"></p>
+      <div class="timer-options" role="radiogroup">
+        <label><input type="radio" name="preset" value="0" /> Off</label>
+        <label><input type="radio" name="preset" value="86400" /> 24 hours</label>
+        <label><input type="radio" name="preset" value="604800" /> 7 days</label>
+        <label><input type="radio" name="preset" value="7776000" /> 90 days</label>
+        <label><input type="radio" name="preset" value="custom" /> Custom</label>
+      </div>
+      <div class="timer-custom" id="timer-custom">
+        <label>Days <input type="number" name="days" min="0" max="365" value="0" /></label>
+        <label>Hours <input type="number" name="hours" min="0" max="23" value="0" /></label>
+        <label>Minutes <input type="number" name="minutes" min="0" max="59" value="0" /></label>
+      </div>
+      <p class="muted small-note" id="timer-preview"></p>
+      <p class="error" id="timer-error" role="alert"></p>
+      <div class="modal-buttons">
+        <button type="button" class="link" id="timer-cancel">Cancel</button>
+        <button type="submit" class="primary small">Save</button>
+      </div>
+    </form>
+  </div>
+
   <!-- ========== Dialog (secret codes) ========== -->
   <div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <form class="modal-card" id="modal-form">
@@ -376,6 +458,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="call.js"></script>
   <script src="status.js"></script>
+  <script src="business-hours.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

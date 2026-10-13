@@ -57,6 +57,11 @@ const SOCKET_ACTIONS = {
   'chatlock:remove': 'removeChatLock',
   'chatlock:unlock': 'unlockChat',
   'chatlock:relock': 'relock',
+  'chat:disappearing': 'setDisappearing',
+  'settings:default-disappear': 'setDefaultDisappear',
+  'business:get': 'business',
+  'business:set': 'setBusiness',
+  'business:remove': 'removeBusiness',
 };
 
 /**
@@ -68,6 +73,7 @@ const SOCKET_ACTIONS = {
  *   webhooks         { allowPrivate, retryDelaysMs } for webhook delivery
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
+ *   messageSweepMs   how often expired disappearing messages are removed
  */
 function createApp({
   store = new Store(),
@@ -77,6 +83,7 @@ function createApp({
   webhooks: webhookOptions = { allowPrivate: process.env.WEBHOOKS_ALLOW_PRIVATE === '1' },
   rateLimit,
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
+  messageSweepMs = 5000,
 } = {}) {
   const app = express();
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
@@ -161,8 +168,12 @@ function createApp({
     for (const s of store.pruneStatuses()) service.broadcastStatus(s, 'status:deleted');
   }, 60 * 1000);
   pruneTimer.unref();
+  // Disappearing messages: remove them as soon as their timer runs out.
+  const expiryTimer = setInterval(() => service.pruneExpired(), messageSweepMs);
+  expiryTimer.unref();
   server.on('close', () => {
     clearInterval(pruneTimer);
+    clearInterval(expiryTimer);
     webhooks.stop();
   });
 

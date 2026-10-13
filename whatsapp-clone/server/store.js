@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const BusinessHours = require('../public/business-hours.js');
 
 /**
  * Simple JSON-file backed data store for users, conversations and messages.
@@ -254,7 +255,145 @@ class Store {
   publicUser(username) {
     const u = this.data.users[username];
     if (!u) return null;
-    return { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
+    const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
+    if (u.business) out.business = Store._publicBusiness(u.business);
+    return out;
+  }
+
+  // ---------- business profile ----------
+
+  /** What everyone sees (greeting/away texts stay private to the owner). */
+  static _publicBusiness(b) {
+    const { greeting, away, ...pub } = b;
+    return pub;
+  }
+
+  getBusiness(username) {
+    return this.data.users[username]?.business || null;
+  }
+
+  /** Turn the account into a business account, or update it. */
+  setBusiness(username, input = {}) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const str = (v, max, field) => {
+      const t = String(v ?? '').trim();
+      if (t.length > max) throw new Error(`${field} is too long (max ${max} characters)`);
+      return t;
+    };
+    const category = str(input.category, 60, 'category');
+    if (!BusinessHours.CATEGORIES.includes(category)) throw new Error(`category must be one of: ${BusinessHours.CATEGORIES.join(', ')}`);
+    const email = str(input.email, 120, 'email');
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('email is not valid');
+    let website = str(input.website, 200, 'website');
+    if (website) {
+      if (!/^https?:\/\//i.test(website)) website = `https://${website}`;
+      try {
+        const url = new URL(website);
+        if (!/^https?:$/.test(url.protocol) || !url.hostname.includes('.')) throw new Error();
+        website = url.toString();
+      } catch {
+        throw new Error('website is not a valid URL');
+      }
+    }
+    const timezone = str(input.timezone || 'UTC', 64, 'timezone');
+    if (!BusinessHours.isValidTimeZone(timezone)) throw new Error('timezone is not a valid IANA time zone (e.g. "Asia/Kolkata")');
+    const auto = (v, field) => {
+      const enabled = !!v?.enabled;
+      const text = str(v?.text, 1000, `${field} message`);
+      if (enabled && !text) throw new Error(`${field} message needs text`);
+      return { enabled, text };
+    };
+    u.business = {
+      category,
+      description: str(input.description, 512, 'description'),
+      address: str(input.address, 256, 'address'),
+      email,
+      website,
+      timezone,
+      hours: BusinessHours.normaliseHours(input.hours),
+      greeting: auto(input.greeting, 'Greeting'),
+      away: auto(input.away, 'Away'),
+      since: u.business?.since || Date.now(),
+    };
+    this._save();
+    return u.business;
+  }
+
+  removeBusiness(username) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    delete u.business;
+    this._save();
+  }
+
+  // ---------- disappearing messages ----------
+
+  /** The user's timer for chats they start (seconds), or null. */
+  defaultDisappear(username) {
+    return this.data.users[username]?.defaultDisappear || null;
+  }
+
+  setDefaultDisappear(username, seconds) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.defaultDisappear = Store.checkTimer(seconds);
+    this._save();
+    return u.defaultDisappear;
+  }
+
+  /** null/0 = off; otherwise 1 minute … 365 days, in seconds. */
+  static checkTimer(seconds) {
+    if (seconds === null || seconds === undefined || seconds === 0 || seconds === '0') return null;
+    const n = Number(seconds);
+    if (!Number.isInteger(n) || n < Store.TIMER_MIN || n > Store.TIMER_MAX) {
+      throw new Error('Timer must be between 1 minute (60) and 365 days (31536000), in whole seconds, or 0 to turn it off');
+    }
+    return n;
+  }
+
+  setDisappearing(convId, username, seconds) {
+    const conv = this.getConversation(convId);
+    if (!conv || !conv.members.includes(username)) throw new Error('Conversation not found');
+    const value = Store.checkTimer(seconds);
+    if (value) conv.disappearAfter = value;
+    else delete conv.disappearAfter;
+    conv.disappearSetBy = username;
+    this._save();
+    return conv;
+  }
+
+  /** A notice in the chat ("Alice turned on disappearing messages…"). Never unread, never disappears. */
+  addSystemMessage(convId, by, system) {
+    const conv = this.getConversation(convId);
+    const msg = {
+      id: crypto.randomBytes(8).toString('hex'),
+      convId,
+      from: by,
+      type: 'system',
+      text: '',
+      system,
+      ts: Date.now(),
+      deliveredTo: [],
+      readBy: conv.members.filter((m) => m !== by),
+    };
+    this.data.messages[convId].push(msg);
+    this._save();
+    return msg;
+  }
+
+  /** Remove messages whose timer ran out. Returns [{ convId, ids }]. */
+  pruneMessages(now = Date.now()) {
+    const removed = [];
+    for (const [convId, msgs] of Object.entries(this.data.messages)) {
+      const expired = msgs.filter((m) => m.expiresAt && m.expiresAt <= now);
+      if (!expired.length) continue;
+      for (const m of expired) if (m.voice) this.deleteMedia(m.voice.mediaId);
+      this.data.messages[convId] = msgs.filter((m) => !(m.expiresAt && m.expiresAt <= now));
+      removed.push({ convId, ids: expired.map((m) => m.id) });
+    }
+    if (removed.length) this._save();
+    return removed;
   }
 
   /** Public profile as seen by `viewer`: blocking hides "last seen" in both directions. */
@@ -373,7 +512,8 @@ class Store {
     const q = String(query || '').trim().toLowerCase();
     return Object.values(this.data.users)
       .filter((u) => u.username !== exclude)
-      .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q))
+      .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q)
+        || (u.business && u.business.category.toLowerCase().includes(q)))
       .slice(0, 50)
       .map((u) => this.publicUser(u.username));
   }
@@ -395,6 +535,8 @@ class Store {
         members: [a, b].sort(),
         createdAt: Date.now(),
       };
+      // The person starting the chat may have a default message timer.
+      if (this.defaultDisappear(a)) Object.assign(this.data.conversations[id], { disappearAfter: this.defaultDisappear(a), disappearSetBy: a });
       this.data.messages[id] = [];
       this._save();
     }
@@ -415,6 +557,7 @@ class Store {
       owner,
       admins: [owner],
       members: [...set],
+      ...(this.defaultDisappear(owner) ? { disappearAfter: this.defaultDisappear(owner), disappearSetBy: owner } : {}),
       createdAt: Date.now(),
     };
     this.data.messages[id] = [];
@@ -449,8 +592,12 @@ class Store {
     };
   }
 
-  /** Messages from someone `username` has blocked are stored but never shown to them. */
+  /**
+   * Messages from someone `username` has blocked are stored but never shown to them,
+   * and disappearing messages vanish as soon as their timer runs out.
+   */
   static visibleTo(msg, username) {
+    if (msg.expiresAt && msg.expiresAt <= Date.now()) return false;
     return !msg.hiddenFor?.includes(username);
   }
 
@@ -533,7 +680,7 @@ class Store {
    * `voice`: `{ mediaId, duration, mime }` for a voice message (text is then empty).
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -567,6 +714,8 @@ class Store {
     }
     if (masked && !voice) msg.masked = true;
     if (statusReply) msg.statusReply = statusReply;
+    if (auto) msg.auto = auto; // 'greeting' | 'away' (business automatic replies)
+    if (conv.disappearAfter) msg.expiresAt = msg.ts + conv.disappearAfter * 1000;
     if (clientId) msg.clientId = String(clientId).slice(0, 64);
     if (hiddenFor.length) msg.hiddenFor = hiddenFor;
     this.data.messages[convId].push(msg);
@@ -725,7 +874,9 @@ class Store {
     const out = [];
     for (const [convId, msgs] of Object.entries(this.data.messages)) {
       if (!this.isMember(convId, username)) continue;
-      for (const m of msgs) if (m.starredBy?.includes(username) && !m.deleted) out.push(this.viewFor(m, username));
+      for (const m of msgs) {
+        if (m.starredBy?.includes(username) && !m.deleted && Store.visibleTo(m, username)) out.push(this.viewFor(m, username));
+      }
     }
     return out.sort((a, b) => b.ts - a.ts);
   }
@@ -783,6 +934,8 @@ class Store {
   }
 }
 
+Store.TIMER_MIN = 60;
+Store.TIMER_MAX = 365 * 24 * 60 * 60;
 Store.API_KEY_PREFIX = 'cak_';
 Store.MAX_API_KEYS = 10;
 Store.MAX_WEBHOOKS = 5;
@@ -794,6 +947,7 @@ Store.WEBHOOK_EVENTS = [
   'call:incoming', 'call:ended', 'call:state',
   'status:new', 'status:viewed', 'status:deleted',
   'chatlock:update',
+  'conversation:updated', 'message:expired',
   'ping',
 ];
 Store.NOISY_EVENTS = ['typing', 'presence'];

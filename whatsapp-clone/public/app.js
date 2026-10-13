@@ -31,6 +31,8 @@
     maskNext: false, // composer: send the next message masked
     blocked: new Set(), // usernames I have blocked
     lock: { hasCode: false, lockedChats: new Set() }, // chat lock settings
+    defaultDisappear: null, // my timer (seconds) for chats I start
+    myBusiness: null, // my business profile (with greeting/away), or null
     voiceUrls: new Map(), // mediaId -> object URL of downloaded voice audio
   };
 
@@ -263,7 +265,9 @@
 
     socket.on('connect', async () => {
       try {
-        const [{ user: me, iceServers, blocked }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        const [{ user: me, iceServers, blocked, defaultDisappear, business }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        state.defaultDisappear = defaultDisappear || null;
+        state.myBusiness = business || null;
         setLockSettings(lockSettings);
         state.me = me;
         state.iceServers = iceServers || [];
@@ -292,6 +296,19 @@
       if (convId === state.activeId) renderMessages();
       if (!$('#panel-starred').classList.contains('hidden')) loadStarred();
     });
+    socket.on('conversation:updated', ({ conversation }) => {
+      const conv = state.conversations.get(conversation.id);
+      if (!conv) {
+        loadConversations();
+        return;
+      }
+      if (!('disappearAfter' in conversation)) delete conv.disappearAfter;
+      Object.assign(conv, conversation);
+      renderChatList();
+      if (conversation.id === state.activeId) renderHeader();
+      refreshContactInfo();
+    });
+    socket.on('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
     socket.on('chatlock:update', async (settings) => {
       setLockSettings(settings);
       // Locks changed (maybe on another device): reload so locked chats lose their content.
@@ -340,7 +357,14 @@
       renderHeader();
     });
     socket.on('user:updated', ({ user }) => {
-      state.users[user.username] = { ...(state.users[user.username] || {}), ...user };
+      // Replace (not merge), so removed fields such as a business profile disappear too.
+      const prev = state.users[user.username] || {};
+      state.users[user.username] = { ...user, online: user.online ?? prev.online };
+      if (user.username === state.me?.username) {
+        state.me = { ...state.me, ...user, business: user.business };
+        if (!user.business) state.myBusiness = null;
+      }
+      refreshContactInfo();
       renderChatList();
       renderHeader();
       if (state.activeId) renderMessages();
@@ -394,7 +418,7 @@
     list.textContent = '';
     const q = state.filter.toLowerCase();
     const convs = [...state.conversations.values()]
-      .filter((c) => c.type === 'group' || c.lastMessage || c.id === state.activeId)
+      .filter((c) => c.type === 'group' || c.lastMessage || c.disappearAfter || c.id === state.activeId)
       .filter((c) => !q || convTitle(c).toLowerCase().includes(q))
       .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
 
@@ -413,6 +437,8 @@
       const body = el('div', 'body');
       const top = el('div', 'row');
       top.appendChild(el('span', 'name', convTitle(c)));
+      if (peer && state.users[peer]?.business) top.appendChild(businessBadge());
+      if (c.disappearAfter) top.appendChild(timerIcon(`Disappearing messages: ${fmtTimer(c.disappearAfter)}`));
       if (c.locked) top.appendChild(lockIcon(c.unlocked ? 'Locked chat (unlocked for now)' : 'Locked chat'));
       if (peer && state.blocked.has(peer)) top.appendChild(icon('blocked'));
       top.appendChild(el('span', 'time', c.lastMessage ? listTime(c.lastMessage.ts) : ''));
@@ -426,6 +452,8 @@
         preview.append(icon(activity.activity), activity.text);
       } else if (live) {
         preview.append(icon('calling'), `Ongoing ${c.activeCall.kind === 'video' ? 'video' : 'voice'} call`);
+      } else if (c.lastMessage?.type === 'system') {
+        preview.append(timerIcon(''), describeSystem(c.lastMessage, true));
       } else if (c.lastMessage?.type === 'call') {
         const d = describeCall(c.lastMessage);
         preview.append(icon(d.icon), `${d.title}${c.lastMessage.call.status === 'completed' && !d.missed ? ` · ${d.sub}` : ''}`);
@@ -549,6 +577,12 @@
       group: conv.type === 'group',
     });
     $('#chat-name').textContent = convTitle(conv);
+    const badgesEl = $('#chat-badges');
+    badgesEl.textContent = '';
+    if (peer && state.users[peer]?.business) badgesEl.appendChild(businessBadge());
+    if (conv.disappearAfter) badgesEl.appendChild(timerIcon(`Disappearing messages: ${fmtTimer(conv.disappearAfter)}`));
+    $('#menu-info span').textContent = conv.type === 'group' ? 'Group info' : 'Contact info';
+    $('#chat-title-btn').title = conv.type === 'group' ? 'Group info' : 'Contact info';
     const group = conv.type === 'group';
     const blocked = !group && state.blocked.has(peer);
     $('#call-buttons').classList.toggle('hidden', blocked);
@@ -563,6 +597,10 @@
     $('#lock-screen').classList.toggle('hidden', !lockedView);
     $('#messages').classList.toggle('hidden', lockedView);
     if (lockedView) forgetChatContent(conv.id);
+    $('#timer-banner').classList.toggle('hidden', !conv.disappearAfter || lockedView);
+    if (conv.disappearAfter) {
+      $('#timer-banner-text').textContent = `Disappearing messages are on: new messages disappear ${fmtTimer(conv.disappearAfter)} after they're sent. Tap to change.`;
+    }
 
     const status = $('#chat-status');
     status.textContent = '';
@@ -643,6 +681,13 @@
         prev = m;
         continue;
       }
+      if (m.type === 'system') {
+        const note = el('div', 'system-note');
+        note.append(timerIcon(''), describeSystem(m));
+        box.appendChild(note);
+        prev = { ...m, from: null }; // keeps the day separator; the next bubble starts a new group
+        continue;
+      }
       const status = mine && !m.deleted ? statusOf(m, conv) : null;
       const covered = m.masked && !m.deleted && !mine && !state.revealed.has(m.id);
       const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}`);
@@ -670,6 +715,8 @@
         bubble.appendChild(el('span', 'text', m.text));
       }
       const meta = el('span', 'meta');
+      if (m.auto && !m.deleted) meta.appendChild(el('span', 'auto-label', 'Automated'));
+      if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Disappears ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
       if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
       if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
       meta.appendChild(document.createTextNode(timeOf(m.ts)));
@@ -1134,6 +1181,7 @@
     const body = el('div', 'body');
     const top = el('div', 'row');
     top.appendChild(el('span', 'name', u.displayName));
+    if (u.business) top.appendChild(businessBadge());
     if (checkbox) {
       const cb = el('input', 'check');
       cb.type = 'checkbox';
@@ -1250,6 +1298,7 @@
     paintAvatar($('#profile-avatar'), state.me.displayName, state.me.username);
     $('#profile-username').textContent = '@' + state.me.username;
     renderLockSummary();
+    renderProfileExtras();
   });
   $('#profile-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1395,6 +1444,416 @@
       toast('Select the text and copy it manually');
     }
   }));
+
+  // ---------- disappearing messages ----------
+
+  const TIMER_PATH = 'M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z';
+  const BRIEFCASE_PATH = 'M10 16v-1H3.01L3 19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4h-7v1h-4Zm10-9h-4.01V5l-2-2h-4l-2 2v2H4a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h6v-2h4v2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2Zm-6 0h-4V5h4v2Z';
+  const TIMER_MIN = 60;
+  const TIMER_MAX = 365 * 24 * 3600;
+
+  function svgIcon(path, cls, title) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', cls);
+    if (title) {
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', title);
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      t.textContent = title;
+      svg.appendChild(t);
+    } else {
+      svg.setAttribute('aria-hidden', 'true');
+    }
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', path);
+    svg.appendChild(p);
+    return svg;
+  }
+  const timerIcon = (title) => svgIcon(TIMER_PATH, 'timer-icon', title);
+  const businessBadge = () => svgIcon(BRIEFCASE_PATH, 'biz-badge', 'Business account');
+
+  /** 189000 -> "2 days 4 hours 30 minutes" */
+  function fmtTimer(sec) {
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const part = (n, unit) => (n ? [`${n} ${unit}${n === 1 ? '' : 's'}`] : []);
+    return [...part(d, 'day'), ...part(h, 'hour'), ...part(m, 'minute')].join(' ') || `${sec} seconds`;
+  }
+
+  function describeSystem(m, short = false) {
+    const who = m.from === state.me.username ? 'You' : displayName(m.from);
+    const s = m.system || {};
+    if (s.event !== 'disappearing') return 'Chat settings changed';
+    if (!s.seconds) return `${who} turned off disappearing messages.`;
+    return short
+      ? `${who} set messages to disappear after ${fmtTimer(s.seconds)}`
+      : `${who} turned on disappearing messages. New messages will disappear ${fmtTimer(s.seconds)} after they're sent.`;
+  }
+
+  /** Remove messages (expired or deleted) from a chat, here and in the chat list. */
+  let reloadTimer = null;
+  const scheduleReload = () => {
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => loadConversations().catch(() => {}), 800);
+  };
+  function removeMessages(convId, ids) {
+    const list = state.messages.get(convId);
+    if (list) state.messages.set(convId, list.filter((m) => !ids.has(m.id)));
+    if (playingId && ids.has(playingId)) {
+      player.pause();
+      playingId = null;
+    }
+    const conv = state.conversations.get(convId);
+    if (conv?.lastMessage && ids.has(conv.lastMessage.id)) {
+      const remaining = state.messages.get(convId);
+      if (remaining) conv.lastMessage = remaining.filter((m) => !m.localStatus).at(-1) || null;
+      else scheduleReload();
+    }
+    if (convId === state.activeId) renderMessages();
+    renderChatList();
+  }
+
+  // Remove messages as their timer runs out, without waiting for the server's sweep.
+  setInterval(() => {
+    if (!state.me) return;
+    const now = Date.now();
+    for (const [convId, list] of state.messages) {
+      const expired = list.filter((m) => m.expiresAt && m.expiresAt <= now);
+      if (expired.length) removeMessages(convId, new Set(expired.map((m) => m.id)));
+    }
+    for (const c of state.conversations.values()) {
+      if (c.lastMessage?.expiresAt && c.lastMessage.expiresAt <= now && !state.messages.has(c.id)) scheduleReload();
+    }
+  }, 2000);
+
+  /** Seconds from the dialog, or throws with a readable reason. */
+  function timerFromForm(form) {
+    const preset = form.preset.value;
+    if (preset !== 'custom') return Number(preset);
+    const n = (name, max) => {
+      const v = Number(form[name].value || 0);
+      if (!Number.isInteger(v) || v < 0 || v > max) throw new Error(`${name[0].toUpperCase() + name.slice(1)} must be a whole number from 0 to ${max}`);
+      return v;
+    };
+    const seconds = n('days', 365) * 86400 + n('hours', 23) * 3600 + n('minutes', 59) * 60;
+    if (seconds < TIMER_MIN) throw new Error('Choose at least 1 minute');
+    if (seconds > TIMER_MAX) throw new Error('The longest timer is 365 days');
+    return seconds;
+  }
+
+  /** mode 'chat': the open chat's timer; 'default': my timer for new chats. */
+  function openTimerDialog(mode) {
+    const conv = mode === 'chat' ? state.conversations.get(state.activeId) : null;
+    if (mode === 'chat' && !conv) return;
+    const current = (mode === 'chat' ? conv.disappearAfter : state.defaultDisappear) || 0;
+    const form = $('#timer-form');
+    $('#timer-title').textContent = mode === 'chat' ? 'Disappearing messages' : 'Default message timer';
+    $('#timer-text').textContent = mode === 'chat'
+      ? `New messages in this chat will disappear for everyone after the time you choose. Anyone in the chat can change it. Messages already sent aren't affected.`
+      : `New one-to-one chats and groups you start will have disappearing messages turned on. Existing chats aren't affected.`;
+    $('#timer-error').textContent = '';
+    const presets = ['0', '86400', '604800', '7776000'];
+    const isPreset = presets.includes(String(current));
+    form.preset.value = isPreset ? String(current) : 'custom';
+    form.days.value = Math.floor(current / 86400);
+    form.hours.value = Math.floor((current % 86400) / 3600);
+    form.minutes.value = Math.floor((current % 3600) / 60);
+    const update = () => {
+      const custom = form.preset.value === 'custom';
+      $('#timer-custom').classList.toggle('disabled', !custom);
+      for (const f of ['days', 'hours', 'minutes']) form[f].disabled = !custom;
+      try {
+        const sec = timerFromForm(form);
+        $('#timer-preview').textContent = sec ? `Messages will disappear ${fmtTimer(sec)} after they're sent.` : 'Messages will not disappear.';
+        $('#timer-error').textContent = '';
+      } catch (err) {
+        $('#timer-preview').textContent = '';
+        $('#timer-error').textContent = err.message;
+      }
+    };
+    form.oninput = update;
+    update();
+    $('#timer-modal').classList.remove('hidden');
+    const close = () => {
+      $('#timer-modal').classList.add('hidden');
+      form.onsubmit = null;
+    };
+    $('#timer-cancel').onclick = close;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const seconds = timerFromForm(form);
+        if (mode === 'chat') {
+          const { conversation } = await emit('chat:disappearing', { convId: conv.id, seconds });
+          if (!('disappearAfter' in conversation)) delete conv.disappearAfter;
+          Object.assign(conv, conversation);
+          renderHeader();
+          renderChatList();
+        } else {
+          const { defaultDisappear } = await emit('settings:default-disappear', { seconds });
+          state.defaultDisappear = defaultDisappear;
+          renderProfileExtras();
+        }
+        close();
+        toast(seconds ? `Messages will disappear after ${fmtTimer(seconds)}` : 'Disappearing messages turned off');
+      } catch (err) {
+        $('#timer-error').textContent = err.message;
+      }
+    };
+  }
+
+  $('#menu-timer').addEventListener('click', () => openTimerDialog('chat'));
+  $('#timer-banner').addEventListener('click', () => openTimerDialog('chat'));
+  $('#btn-default-timer').addEventListener('click', () => openTimerDialog('default'));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#timer-modal').classList.contains('hidden')) $('#timer-cancel').click();
+  });
+
+  function renderProfileExtras() {
+    $('#default-timer-summary').textContent = state.defaultDisappear
+      ? `${fmtTimer(state.defaultDisappear)} for new chats you start`
+      : 'Off';
+    const b = state.myBusiness;
+    $('#business-row-title').textContent = b ? `Business account · ${b.category}` : 'Switch to a business account';
+    $('#business-row-sub').textContent = b
+      ? 'Edit your business details, hours, greeting and away messages'
+      : 'Show your hours, address and website; send greeting and away messages';
+  }
+
+  // ---------- contact / group info ----------
+
+  function infoRow(label, value, href) {
+    const row = el('div', 'info-row');
+    row.appendChild(el('div', 'info-label', label));
+    if (href) {
+      const a = el('a', 'info-value', value);
+      a.href = href;
+      if (/^https?:/.test(href)) {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+      }
+      row.appendChild(a);
+    } else {
+      row.appendChild(el('div', 'info-value', value));
+    }
+    return row;
+  }
+
+  function businessCard(b) {
+    const H = window.BusinessHours;
+    const card = el('section', 'info-card biz-card');
+    const head = el('div', 'biz-head');
+    head.append(businessBadge(), el('span', 'biz-category', b.category));
+    card.appendChild(head);
+    if (b.description) card.appendChild(el('p', 'biz-desc', b.description));
+    if (b.hours) {
+      const open = H.isOpenNow(b);
+      const { day } = H.localNow(b.timezone);
+      const status = el('div', `biz-status ${open ? 'open' : 'closed'}`);
+      status.append(el('strong', '', open ? 'Open now' : 'Closed now'), ` · Today ${H.describeDay(b.hours[day])}`);
+      card.appendChild(status);
+      const table = el('div', 'biz-week');
+      for (const d of H.DAYS) {
+        const row = el('div', `biz-day${d === day ? ' today' : ''}`);
+        row.append(el('span', '', H.DAY_NAMES[d]), el('span', '', H.describeDay(b.hours[d])));
+        table.appendChild(row);
+      }
+      card.appendChild(table);
+      const viewerTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (viewerTz !== b.timezone) card.appendChild(el('p', 'muted small-note', `Hours are in the business's time zone (${b.timezone}).`));
+    }
+    if (b.address) card.appendChild(infoRow('Address', b.address, `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(b.address)}`));
+    if (b.email) card.appendChild(infoRow('Email', b.email, `mailto:${b.email}`));
+    if (b.website) card.appendChild(infoRow('Website', b.website.replace(/^https?:\/\//, '').replace(/\/$/, ''), b.website));
+    return card;
+  }
+
+  function renderContactInfo(conv) {
+    const body = $('#contact-body');
+    body.textContent = '';
+    const group = conv.type === 'group';
+    const peer = convPeer(conv);
+    const user = peer ? state.users[peer] || { username: peer, displayName: peer } : null;
+    $('#contact-title').textContent = group ? 'Group info' : user?.business ? 'Business info' : 'Contact info';
+
+    const top = el('section', 'info-top');
+    const av = el('div', 'avatar xl');
+    paintAvatar(av, convTitle(conv), group ? conv.id : peer, { group });
+    const name = el('h2', 'info-name', convTitle(conv));
+    if (user?.business) name.appendChild(businessBadge());
+    top.append(av, name, el('p', 'muted', group ? `Group · ${conv.members.length} members` : `@${peer}`));
+    if (user && !group) top.appendChild(el('p', 'muted', user.online ? 'online' : lastSeenText(peer) || ''));
+    body.appendChild(top);
+
+    if (user?.about) {
+      const about = el('section', 'info-card');
+      about.append(el('div', 'info-label', 'About'), el('div', '', user.about));
+      body.appendChild(about);
+    }
+    if (user?.business) body.appendChild(businessCard(user.business));
+
+    const timer = el('section', 'info-card info-action');
+    timer.appendChild(timerIcon(''));
+    const tbody = el('div', 'grow');
+    tbody.append(el('div', '', 'Disappearing messages'), el('div', 'muted small-note', conv.disappearAfter ? fmtTimer(conv.disappearAfter) : 'Off'));
+    const change = el('button', 'link', 'Change');
+    change.type = 'button';
+    change.addEventListener('click', () => openTimerDialog('chat'));
+    timer.append(tbody, change);
+    body.appendChild(timer);
+
+    if (group) {
+      const members = el('section', 'info-card');
+      members.appendChild(el('div', 'info-label', `${conv.members.length} members`));
+      const ul = el('ul', 'list member-list');
+      for (const m of conv.members) {
+        const u = state.users[m] || { username: m, displayName: m };
+        const li = el('li');
+        li.appendChild(avatar(u.displayName, m, { online: u.online }));
+        const b = el('div', 'body');
+        const row = el('div', 'row');
+        row.appendChild(el('span', 'name', m === state.me.username ? 'You' : u.displayName));
+        if (u.business) row.appendChild(businessBadge());
+        if (conv.admins?.includes(m)) row.appendChild(el('span', 'admin-tag', 'Admin'));
+        b.append(row, el('div', 'sub', u.business ? u.business.category : `@${m}`));
+        li.appendChild(b);
+        ul.appendChild(li);
+      }
+      members.appendChild(ul);
+      body.appendChild(members);
+    }
+  }
+
+  function openContactInfo() {
+    const conv = state.conversations.get(state.activeId);
+    if (!conv) return;
+    openPanel('#panel-contact');
+    renderContactInfo(conv);
+  }
+  function refreshContactInfo() {
+    if ($('#panel-contact').classList.contains('hidden')) return;
+    const conv = state.conversations.get(state.activeId);
+    if (conv) renderContactInfo(conv);
+  }
+  $('#chat-title-btn').addEventListener('click', openContactInfo);
+  $('#menu-info').addEventListener('click', openContactInfo);
+
+  // ---------- business profile settings ----------
+
+  function defaultHours() {
+    const H = window.BusinessHours;
+    return Object.fromEntries(H.DAYS.map((d) => [d, ['sat', 'sun'].includes(d) ? { mode: 'closed' } : { mode: 'hours', open: '09:00', close: '17:00' }]));
+  }
+
+  function openBusinessPanel() {
+    const H = window.BusinessHours;
+    const form = $('#business-form');
+    const b = state.myBusiness;
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+    if (!form.category.options.length) {
+      form.category.appendChild(new Option('Choose a category', ''));
+      for (const c of H.CATEGORIES) form.category.appendChild(new Option(c, c));
+      const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [browserTz, 'UTC'];
+      for (const z of new Set(['UTC', browserTz, ...zones])) form.timezone.appendChild(new Option(z.replace(/_/g, ' '), z));
+    }
+    form.category.value = b?.category || '';
+    form.description.value = b?.description || '';
+    form.address.value = b?.address || '';
+    form.email.value = b?.email || '';
+    form.website.value = b?.website || '';
+    // Time-zone lists differ between browsers (e.g. "Asia/Calcutta" vs "Asia/Kolkata"):
+    // make sure the saved zone is always selectable.
+    const tz = b?.timezone || browserTz;
+    if (![...form.timezone.options].some((o) => o.value === tz)) form.timezone.appendChild(new Option(tz.replace(/_/g, ' '), tz));
+    form.timezone.value = tz;
+    form.greetingEnabled.checked = !!b?.greeting?.enabled;
+    form.greetingText.value = b?.greeting?.text || '';
+    form.awayEnabled.checked = !!b?.away?.enabled;
+    form.awayText.value = b?.away?.text || '';
+
+    const hours = b?.hours || defaultHours();
+    const rows = $('#biz-hours-rows');
+    rows.textContent = '';
+    for (const d of H.DAYS) {
+      const h = hours[d] || { mode: 'closed' };
+      const row = el('div', 'hours-row');
+      row.dataset.day = d;
+      const mode = el('select');
+      mode.name = `mode-${d}`;
+      for (const [v, label] of [['hours', 'Open'], ['open24', 'Open 24 hours'], ['closed', 'Closed']]) mode.appendChild(new Option(label, v));
+      mode.value = h.mode;
+      const open = el('input');
+      Object.assign(open, { type: 'time', name: `open-${d}`, value: h.open || '09:00' });
+      const close = el('input');
+      Object.assign(close, { type: 'time', name: `close-${d}`, value: h.close || '17:00' });
+      const times = el('div', 'times');
+      times.append(open, el('span', 'muted', 'to'), close);
+      const sync = () => {
+        open.disabled = close.disabled = mode.value !== 'hours';
+        times.classList.toggle('hidden', mode.value !== 'hours');
+      };
+      mode.addEventListener('change', sync);
+      sync();
+      open.setAttribute('aria-label', `${H.DAY_NAMES[d]} opening time`);
+      close.setAttribute('aria-label', `${H.DAY_NAMES[d]} closing time`);
+      mode.setAttribute('aria-label', `${H.DAY_NAMES[d]}`);
+      row.append(el('span', 'day-name', H.DAY_NAMES[d]), mode, times);
+      rows.appendChild(row);
+    }
+    $('#business-error').textContent = '';
+    $('#business-save').textContent = b ? 'Save changes' : 'Switch to business account';
+    $('#business-remove').classList.toggle('hidden', !b);
+    openPanel('#panel-business');
+  }
+
+  $('#btn-business').addEventListener('click', openBusinessPanel);
+  $('#business-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const H = window.BusinessHours;
+    const f = e.target;
+    const hours = {};
+    for (const d of H.DAYS) {
+      const mode = f[`mode-${d}`].value;
+      hours[d] = mode === 'hours' ? { mode, open: f[`open-${d}`].value, close: f[`close-${d}`].value } : { mode };
+    }
+    try {
+      const { business } = await emit('business:set', {
+        category: f.category.value,
+        description: f.description.value,
+        address: f.address.value,
+        email: f.email.value,
+        website: f.website.value,
+        timezone: f.timezone.value,
+        hours,
+        greeting: { enabled: f.greetingEnabled.checked, text: f.greetingText.value },
+        away: { enabled: f.awayEnabled.checked, text: f.awayText.value },
+      });
+      const wasBusiness = !!state.myBusiness;
+      state.myBusiness = business;
+      renderProfileExtras();
+      $('#business-save').textContent = 'Save changes';
+      $('#business-remove').classList.remove('hidden');
+      $('#business-error').textContent = '';
+      toast(wasBusiness ? 'Business profile saved' : 'You now have a business account');
+    } catch (err) {
+      $('#business-error').textContent = err.message;
+    }
+  });
+  $('#business-remove').addEventListener('click', async () => {
+    if (!confirm('Switch back to a personal account? Your business details, hours and automatic messages will be removed.')) return;
+    try {
+      await emit('business:remove');
+      state.myBusiness = null;
+      renderProfileExtras();
+      $('#panel-business').classList.add('hidden');
+      toast('Switched to a personal account');
+    } catch (err) {
+      $('#business-error').textContent = err.message;
+    }
+  });
 
   // ---------- chat lock ----------
 

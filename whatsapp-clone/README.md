@@ -11,6 +11,8 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Starred messages**: star any message, find them all in the starred list (stars are private to you)
+- **Disappearing messages**: per chat, with presets (24 hours, 7 days, 90 days) or any custom time from 1 minute to 365 days (days + hours + minutes); a default timer for new chats you start
+- **Business profiles**: business category, description, address, email, website and opening hours (with time zone and "Open now"), a business badge, a contact-info panel, and automatic **greeting** and **away** messages
 - **Chat lock**: lock specific chats with a secret code; the code is required again in every new session (each time the app is opened or you log in), and the server withholds the chat's content until then
 - **Block contacts**: blocked contacts can't message or call you and don't see your online status or last seen
 - Offline banner while the connection is down; unsent messages go out automatically when you're back
@@ -50,6 +52,31 @@ Calls use WebRTC, so audio/video goes directly between the two browsers; the ser
   ```
 - Group calls connect every participant to every other one (a "mesh"), so they're limited to 6 people; larger calls would need a media server (SFU).
 - Hold stops sending your audio/video and mutes theirs until you resume.
+
+## Disappearing messages
+
+Turn it on from the chat menu (**⋮ → Disappearing messages**), the banner in the chat, or the contact info panel. Pick **Off**, **24 hours**, **7 days**, **90 days** or **Custom** (any number of days, hours and minutes, from 1 minute to 365 days).
+
+- It applies to **new** messages in that chat, for everyone in it. Anyone in the chat can change it, and everyone sees a notice ("Alice turned on disappearing messages…").
+- When a message's time is up it is deleted from the server (voice notes included) and disappears live from every open app, the chat list, starred messages and the API.
+- **Default message timer** (Profile): new one-to-one chats and groups **you start** get your timer automatically. Existing chats keep theirs.
+- Messages with a timer show a small ⏱ with the exact time they will disappear; chats with a timer show ⏱ in the chat list and header.
+
+API: `PUT /conversations/{id}/disappearing` `{ "seconds": 187200 }` (0 = off), `PUT /me/default-disappearing`; messages carry `expiresAt`, and the `message:expired` event / webhook lists removed ids. Like any app, this can't stop someone copying a message before it disappears.
+
+## Business profile
+
+**Profile → Switch to a business account** turns any account into a business account:
+
+- **Business details**: category (Restaurant, Retail, …), description, address (links to a map), email, website.
+- **Business hours** per weekday (open/close times, open 24 hours, or closed; past-midnight hours like 6 PM–2 AM work) in the business's **time zone**. Customers see "Open now" / "Closed now", today's hours and the full week, in the business's local time.
+- **Business badge** next to the name in the chat list, the chat header, search results and group member lists. People can search for businesses by category.
+- **Contact info**: tap a chat's header to see the business card (or a contact's/group's info).
+- **Greeting message**: sent automatically when someone messages you for the first time, or after 14 days without messages.
+- **Away message**: sent automatically when someone messages you outside your business hours (at most once every 6 hours per chat).
+- Automatic messages are marked "Automated", follow disappearing timers, and are never sent to or from blocked contacts. Their texts stay private until sent.
+
+Switch back to a personal account at any time. API: `GET/PUT/DELETE /me/business`; business details appear as `user.business` everywhere users are returned. `public/business-hours.js` contains the opening-hours logic, shared by the server and the browser.
 
 ## Chat lock
 
@@ -111,6 +138,8 @@ Main endpoints (all under `/api/v1`; full details in `/api/docs`):
 | People | `GET /users?q=`, `GET /users/{username}`, `GET /blocked`, `PUT/DELETE /blocked/{username}` |
 | Chats | `GET/POST /conversations`, `GET /conversations/{id}`, `GET /conversations/{id}/call` |
 | Messages | `GET/POST /conversations/{id}/messages`, `POST /conversations/{id}/voice` (raw audio body), `POST /conversations/{id}/read`, `POST /conversations/{id}/typing`, `DELETE /messages/{id}`, `PUT/DELETE /messages/{id}/star`, `GET /starred`, `GET /media/{id}` |
+| Disappearing | `PUT /conversations/{id}/disappearing`, `PUT /me/default-disappearing` |
+| Business | `GET/PUT/DELETE /me/business` |
 | Chat lock | `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset`, `POST /chat-lock/relock`, `PUT/DELETE /conversations/{id}/lock`, `POST /conversations/{id}/unlock` |
 | Status | `GET/POST /statuses` (JSON text, or a raw image body with `?caption=`), `DELETE /statuses/{id}`, `POST /statuses/{id}/view`, `POST /statuses/{id}/replies` |
 
@@ -125,7 +154,7 @@ Each event is POSTed to your URL as JSON:
   "user": "alice", "data": { "message": { "id": "…", "convId": "dm:alice:bob", "from": "bob", "text": "Hi" } } }
 ```
 
-`data` is the same payload as the Socket.IO event of that name. Events: `message:new`, `message:status`, `message:deleted`, `message:starred`, `conversation:new`, `typing`, `presence`, `user:updated`, `blocked:update`, `call:incoming`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `chatlock:update`, `ping`. Messages from chats you've locked arrive redacted (`{ "locked": true }`, no content). Subscribing to `*` (the default) means everything except the chatty `typing` and `presence`.
+`data` is the same payload as the Socket.IO event of that name. Events: `message:new`, `message:status`, `message:deleted`, `message:starred`, `conversation:new`, `typing`, `presence`, `user:updated`, `blocked:update`, `call:incoming`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `chatlock:update`, `conversation:updated`, `message:expired`, `ping`. Messages from chats you've locked arrive redacted (`{ "locked": true }`, no content). Subscribing to `*` (the default) means everything except the chatty `typing` and `presence`.
 
 **Verify every delivery**: `X-ChatApp-Signature` is `sha256=` + the hex HMAC-SHA256 of `"<X-ChatApp-Timestamp>.<raw body>"` using the webhook's secret (shown once when you create it). Reject old timestamps to stop replays.
 
@@ -224,6 +253,7 @@ whatsapp-clone/
 │   ├── app.js       # Client logic
 │   ├── call.js      # WebRTC call controller and call screen
 │   ├── status.js    # Status updates: list, composer and viewer
+│   ├── business-hours.js # Opening hours / "open now" (shared with the server)
 │   └── api-docs.html # Interactive API docs (/api/docs)
 ├── examples/
 │   └── echo-bot.js  # Example integration: API key + webhooks + REST
@@ -235,7 +265,9 @@ whatsapp-clone/
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js
-    └── chatlock.test.js
+    ├── chatlock.test.js
+    ├── disappearing.test.js
+    └── business.test.js
 ```
 
 ## Socket events
@@ -259,6 +291,9 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `status:view`       | Mark an update as seen                   |
 | `status:delete`     | Delete one of my updates                 |
 | `status:reply`      | Reply to an update (sent as a chat message) |
+| `chat:disappearing` | Set a chat's timer (`seconds`, 0 = off) |
+| `settings:default-disappear` | My default timer for new chats |
+| `business:get` / `business:set` / `business:remove` | My business profile |
 | `chatlock:settings` | Whether a secret code is set, and my locked chats |
 | `chatlock:set-code` / `chatlock:reset-code` | Create/change the secret code, or reset it with the password |
 | `chatlock:lock` / `chatlock:remove` | Lock a chat / remove its lock (needs the code) |
