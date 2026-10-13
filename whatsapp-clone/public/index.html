@@ -153,10 +153,6 @@
       </div>
 
       <!-- Contact / group info -->
-      <div class="panel overlay hidden" id="panel-contact">
-        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="contact-title">Contact info</h2></header>
-        <div class="contact-scroll" id="contact-body"></div>
-      </div>
 
       <!-- Business settings -->
       <div class="panel overlay hidden" id="panel-business">
@@ -228,7 +224,7 @@
         <div class="pad stack">
           <div class="link-row static">
             <svg viewBox="0 0 24 24"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg>
-            <span><strong>Default message timer</strong><small id="default-timer-summary">Off</small></span>
+            <span><strong>Default auto-delete</strong><small id="default-timer-summary">Off</small></span>
             <button class="link" type="button" id="btn-default-timer">Change</button>
           </div>
           <button class="link-row" id="btn-business" type="button">
@@ -331,7 +327,7 @@
             </button>
             <div class="menu hidden" id="chat-menu" role="menu">
               <button role="menuitem" id="menu-info"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M11 7h2v2h-2V7Zm0 4h2v6h-2v-6Zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg><span>Contact info</span></button>
-              <button role="menuitem" id="menu-timer"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span>Disappearing messages</span></button>
+              <button role="menuitem" id="menu-timer"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span>Auto-delete</span></button>
               <button role="menuitem" id="menu-lock"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg><span>Lock chat</span></button>
               <button role="menuitem" id="menu-block"><img src="icons/blocked.png" alt="" /><span>Block contact</span></button>
             </div>
@@ -391,6 +387,11 @@
         </form>
       </div>
     </section>
+  <!-- Contact info opens over the chat (same screen), so Back returns to the chat. -->
+        <div class="panel overlay hidden" id="panel-contact">
+          <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="contact-title">Contact info</h2></header>
+          <div class="contact-scroll" id="contact-body"></div>
+        </div>
   </main>
 
   <!-- ========== Status: new update ========== -->
@@ -452,7 +453,7 @@
   <!-- ========== Disappearing messages timer ========== -->
   <div class="modal hidden" id="timer-modal" role="dialog" aria-modal="true" aria-labelledby="timer-title">
     <form class="modal-card" id="timer-form">
-      <h3 id="timer-title">Disappearing messages</h3>
+      <h3 id="timer-title">Auto-delete</h3>
       <p class="muted" id="timer-text"></p>
       <div class="timer-options" role="radiogroup">
         <label><input type="radio" name="preset" value="0" /> Off</label>

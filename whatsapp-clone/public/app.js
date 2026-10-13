@@ -653,7 +653,7 @@
       const top = el('div', 'row');
       top.appendChild(el('span', 'name', convTitle(c)));
       if (peer && state.users[peer]?.business) top.appendChild(businessBadge());
-      if (c.disappearAfter) top.appendChild(timerIcon(`Disappearing messages: ${fmtTimer(c.disappearAfter)}`));
+      if (c.disappearAfter) top.appendChild(timerIcon(`Auto-delete: ${fmtTimer(c.disappearAfter)}`));
       if (c.locked) top.appendChild(lockIcon(c.unlocked ? 'Locked chat (unlocked for now)' : 'Locked chat'));
       if (peer && state.blocked.has(peer)) top.appendChild(icon('blocked'));
       top.appendChild(el('span', 'time', c.lastMessage ? listTime(c.lastMessage.ts) : ''));
@@ -795,7 +795,7 @@
     const badgesEl = $('#chat-badges');
     badgesEl.textContent = '';
     if (peer && state.users[peer]?.business) badgesEl.appendChild(businessBadge());
-    if (conv.disappearAfter) badgesEl.appendChild(timerIcon(`Disappearing messages: ${fmtTimer(conv.disappearAfter)}`));
+    if (conv.disappearAfter) badgesEl.appendChild(timerIcon(`Auto-delete: ${fmtTimer(conv.disappearAfter)}`));
     $('#menu-info span').textContent = conv.type === 'group' ? 'Group info' : 'Contact info';
     $('#chat-title-btn').title = conv.type === 'group' ? 'Group info' : 'Contact info';
     const group = conv.type === 'group';
@@ -814,7 +814,7 @@
     if (lockedView) forgetChatContent(conv.id);
     $('#timer-banner').classList.toggle('hidden', !conv.disappearAfter || lockedView);
     if (conv.disappearAfter) {
-      $('#timer-banner-text').textContent = `Disappearing messages are on: new messages disappear ${fmtTimer(conv.disappearAfter)} after they're sent. Tap to change.`;
+      $('#timer-banner-text').textContent = `Auto-delete is on. Sent messages are removed ${fmtTimer(conv.disappearAfter)} after sending. Tap to change.`;
     }
 
     const status = $('#chat-status');
@@ -931,7 +931,7 @@
       }
       const meta = el('span', 'meta');
       if (m.auto && !m.deleted) meta.appendChild(el('span', 'auto-label', 'Automated'));
-      if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Disappears ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
+      if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Removed on ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
       if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
       if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
       meta.appendChild(document.createTextNode(timeOf(m.ts)));
@@ -1701,10 +1701,10 @@
     const who = m.from === state.me.username ? 'You' : displayName(m.from);
     const s = m.system || {};
     if (s.event !== 'disappearing') return 'Chat settings changed';
-    if (!s.seconds) return `${who} turned off disappearing messages.`;
+    if (!s.seconds) return `${who} switched off auto-delete.`;
     return short
-      ? `${who} set messages to disappear after ${fmtTimer(s.seconds)}`
-      : `${who} turned on disappearing messages. New messages will disappear ${fmtTimer(s.seconds)} after they're sent.`;
+      ? `${who} set auto-delete to ${fmtTimer(s.seconds)}.`
+      : `${who} switched on auto-delete. Sent messages are removed ${fmtTimer(s.seconds)} after sending.`;
   }
 
   /** Remove messages (expired or deleted) from a chat, here and in the chat list. */
@@ -1764,10 +1764,10 @@
     if (mode === 'chat' && !conv) return;
     const current = (mode === 'chat' ? conv.disappearAfter : state.defaultDisappear) || 0;
     const form = $('#timer-form');
-    $('#timer-title').textContent = mode === 'chat' ? 'Disappearing messages' : 'Default message timer';
+    $('#timer-title').textContent = mode === 'chat' ? 'Auto-delete' : 'Default auto-delete';
     $('#timer-text').textContent = mode === 'chat'
-      ? `New messages in this chat will disappear for everyone after the time you choose. Anyone in the chat can change it. Messages already sent aren't affected.`
-      : `New one-to-one chats and groups you start will have disappearing messages turned on. Existing chats aren't affected.`;
+      ? `Messages sent in this chat are removed for everyone once the timer runs out. Anyone here can change it. Messages sent before a change keep their original timer.`
+      : `Chats you start will use this auto-delete timer. Chats that already exist keep theirs.`;
     $('#timer-error').textContent = '';
     const presets = ['0', '86400', '604800', '7776000'];
     const isPreset = presets.includes(String(current));
@@ -1781,7 +1781,7 @@
       for (const f of ['days', 'hours', 'minutes']) form[f].disabled = !custom;
       try {
         const sec = timerFromForm(form);
-        $('#timer-preview').textContent = sec ? `Messages will disappear ${fmtTimer(sec)} after they're sent.` : 'Messages will not disappear.';
+        $('#timer-preview').textContent = sec ? `Sent messages are removed ${fmtTimer(sec)} after sending.` : 'Auto-delete is off.';
         $('#timer-error').textContent = '';
       } catch (err) {
         $('#timer-preview').textContent = '';
@@ -1812,7 +1812,7 @@
           renderProfileExtras();
         }
         close();
-        toast(seconds ? `Messages will disappear after ${fmtTimer(seconds)}` : 'Disappearing messages turned off');
+        toast(seconds ? `Auto-delete set to ${fmtTimer(seconds)}` : 'Auto-delete switched off');
       } catch (err) {
         $('#timer-error').textContent = err.message;
       }
@@ -1883,7 +1883,7 @@
     $('#btn-contact-phone').textContent = c.phone ? 'Change' : 'Add';
     $('#btn-contact-email').textContent = c.email ? 'Change' : 'Add';
     $('#default-timer-summary').textContent = state.defaultDisappear
-      ? `${fmtTimer(state.defaultDisappear)} for new chats you start`
+      ? `${fmtTimer(state.defaultDisappear)} for chats you start`
       : 'Off';
     const b = state.myBusiness;
     $('#business-row-title').textContent = b ? `Business account · ${b.category}` : 'Switch to a business account';
@@ -1967,7 +1967,7 @@
     const timer = el('section', 'info-card info-action');
     timer.appendChild(timerIcon(''));
     const tbody = el('div', 'grow');
-    tbody.append(el('div', '', 'Disappearing messages'), el('div', 'muted small-note', conv.disappearAfter ? fmtTimer(conv.disappearAfter) : 'Off'));
+    tbody.append(el('div', '', 'Auto-delete'), el('div', 'muted small-note', conv.disappearAfter ? fmtTimer(conv.disappearAfter) : 'Off'));
     const change = el('button', 'link', 'Change');
     change.type = 'button';
     change.addEventListener('click', () => openTimerDialog('chat'));
