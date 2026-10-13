@@ -42,6 +42,7 @@
         <header class="bar">
           <button class="avatar-btn" id="btn-profile" title="Profile"></button>
           <div class="bar-actions">
+            <button class="icon-btn img-btn" id="btn-starred" title="Starred messages"><img src="icons/starred.png" alt="Starred messages" /></button>
             <button class="icon-btn" id="btn-new-group" title="New group">
               <svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13Zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5Z"/></svg>
             </button>
@@ -53,6 +54,10 @@
             </button>
           </div>
         </header>
+        <div class="offline-banner hidden" id="offline-banner" role="status">
+          <img src="icons/offline.png" alt="" />
+          <div><strong>You're offline</strong><span>Reconnecting… messages you send will go out when you're back.</span></div>
+        </div>
         <div class="search"><input id="chat-filter" placeholder="Search chats" /></div>
         <ul id="chat-list" class="list"></ul>
         <p id="chat-list-empty" class="muted pad hidden">No chats yet. Tap the + icon to start one.</p>
@@ -75,6 +80,16 @@
         </div>
         <ul id="group-results" class="list"></ul>
         <div class="pad"><p id="group-error" class="error"></p><button class="primary wide" id="btn-create-group">Create group</button></div>
+      </div>
+
+      <!-- Starred messages -->
+      <div class="panel overlay hidden" id="panel-starred">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Starred messages</h2></header>
+        <ul id="starred-list" class="list starred-list"></ul>
+        <div class="pad center stack hidden" id="starred-empty">
+          <img src="icons/starred.png" class="empty-icon" alt="" />
+          <p class="muted">Tap the star on any message to find it here later.</p>
+        </div>
       </div>
 
       <!-- Profile -->
@@ -109,15 +124,42 @@
             <div id="chat-status" class="sub"></div>
           </div>
           <div class="bar-actions" id="call-buttons">
+            <button class="icon-btn img-btn" id="btn-group-call" title="Group voice call"><img src="icons/group-call.png" alt="Group call" /></button>
             <button class="icon-btn" id="btn-video-call" title="Video call">
               <svg viewBox="0 0 24 24"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/></svg>
             </button>
-            <button class="icon-btn" id="btn-voice-call" title="Voice call">
-              <svg viewBox="0 0 24 24"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8Z"/></svg>
+            <button class="icon-btn img-btn" id="btn-voice-call" title="Voice call"><img src="icons/call.png" alt="Voice call" /></button>
+          </div>
+          <div class="menu-wrap">
+            <button class="icon-btn" id="btn-chat-menu" title="Menu" aria-haspopup="true">
+              <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
             </button>
+            <div class="menu hidden" id="chat-menu" role="menu">
+              <button role="menuitem" id="menu-block"><img src="icons/blocked.png" alt="" /><span>Block contact</span></button>
+            </div>
           </div>
         </header>
+        <div class="call-banner hidden" id="call-banner">
+          <img src="icons/calling.png" alt="" />
+          <span id="call-banner-text"></span>
+          <button class="primary small" id="btn-join-call">Join</button>
+        </div>
         <div class="messages" id="messages"></div>
+        <button class="blocked-banner hidden" id="blocked-banner" type="button">
+          <img src="icons/blocked.png" alt="" />
+          <span id="blocked-banner-text"></span>
+        </button>
+        <div class="recorder hidden" id="recorder">
+          <button type="button" class="icon-btn" id="btn-rec-cancel" title="Cancel recording">
+            <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+          </button>
+          <img src="icons/recording.png" class="rec-icon" alt="Recording" />
+          <span id="rec-time" class="rec-time">0:00</span>
+          <span class="muted rec-hint">Recording voice message…</span>
+          <button type="button" class="send" id="btn-rec-send" title="Send voice message">
+            <svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2v7Z"/></svg>
+          </button>
+        </div>
         <form class="composer" id="composer">
           <div class="emoji-wrap">
             <button type="button" class="icon-btn" id="btn-emoji" title="Emoji">&#128578;</button>
@@ -127,8 +169,11 @@
             <img src="icons/masked.png" alt="Masked" draggable="false" />
           </button>
           <textarea id="message-input" rows="1" placeholder="Type a message" maxlength="4000"></textarea>
-          <button type="submit" class="send" title="Send">
+          <button type="submit" class="send hidden" id="btn-send" title="Send">
             <svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2v7Z"/></svg>
+          </button>
+          <button type="button" class="mic" id="btn-record" title="Record voice message">
+            <img src="icons/recording.png" alt="Record voice message" />
           </button>
         </form>
       </div>
@@ -137,11 +182,11 @@
 
   <!-- ========== Voice / video call screen ========== -->
   <section id="call" class="call hidden" aria-live="polite">
-    <video id="remote-video" class="remote-video" autoplay playsinline></video>
+    <div id="call-grid" class="call-grid"></div>
     <div class="call-info">
       <div id="call-avatar" class="avatar xl"></div>
       <h2 id="call-name"></h2>
-      <p id="call-status"></p>
+      <p class="call-state"><img id="call-state-icon" class="call-state-icon" alt="" /><span id="call-status"></span></p>
     </div>
     <video id="local-video" class="local-video" autoplay playsinline muted></video>
     <div class="call-controls">
@@ -151,12 +196,10 @@
       <button class="round" id="call-mute" title="Mute microphone">
         <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
       </button>
-      <button class="round red" id="call-hangup" title="End call">
-        <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-.56.9 11.4 11.4 0 0 0-2.66 1.85 1 1 0 0 1-1.41 0L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67a1 1 0 0 1 0 1.41l-2.48 2.49a1 1 0 0 1-1.41 0 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9Z"/></svg>
-      </button>
-      <button class="round green" id="call-accept" title="Accept">
-        <svg viewBox="0 0 24 24"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8Z"/></svg>
-      </button>
+      <button class="round img" id="call-hold" title="Put call on hold"><img src="icons/on-hold.png" alt="Hold" /></button>
+      <button class="round img" id="call-hangup" title="End call"><img src="icons/call-end.png" alt="End call" /></button>
+      <button class="round img" id="call-decline" title="Decline"><img src="icons/call-declined.png" alt="Decline" /></button>
+      <button class="round img" id="call-accept" title="Accept"><img src="icons/call.png" alt="Accept" /></button>
     </div>
   </section>
 

@@ -2,27 +2,50 @@
 
 const crypto = require('crypto');
 
+/** Mesh calls send every participant's media to every other participant; keep groups small. */
+const MAX_PARTICIPANTS = 6;
+
 /**
- * One-to-one voice/video call signalling.
+ * Voice/video call signalling for 1:1 and group calls.
  *
- * The server never touches media: it rings the callee, relays WebRTC
- * offers/answers/ICE candidates between the two sockets taking part, and
- * writes a call entry into the chat history when the call finishes.
+ * The server never touches media: it rings the invitees, tells participants who
+ * joins and leaves, relays WebRTC offers/answers/ICE candidates between
+ * participants, and writes a call entry into the chat history at the end.
+ * Every participant connects directly to every other one (a "mesh"); whoever
+ * joins sends the offers to those already in the call.
  *
- * Flow:
- *   caller  call:start  -> callee gets call:incoming (on every device)
- *   callee  call:accept -> caller gets call:accepted, other callee devices get call:ended
- *   both    call:signal -> relayed to the other participant's socket
- *   either  call:end / call:reject / disconnect / ring timeout -> both get call:ended
+ *   call:start   ring the chat's other members (or join the group call already running)
+ *   call:accept  join a call I'm being rung for; ack lists who is already in it
+ *   call:reject  decline ringing
+ *   call:end     leave the call (a 1:1 call ends when either side leaves)
+ *   call:signal  { to, data } relayed to that participant
+ *   call:hold    { onHold } shown to the other participants
+ *
+ * Server -> client: call:incoming, call:joined, call:left, call:signal,
+ * call:hold, call:ended, and call:state (to every chat member, so group
+ * members can see and join a running call).
  */
 function createCallManager({ io, store, isOnline, userRoom, postMessage, handle, ringTimeoutMs = 30000 }) {
   const calls = new Map(); // callId -> call
 
-  const inCall = (u) => [...calls.values()].some((c) => c.from === u || c.to === u);
+  const inCall = (u) => [...calls.values()].some((c) => c.participants.has(u) || c.ringing.has(u));
+  const callForConv = (convId) => [...calls.values()].find((c) => c.convId === convId) || null;
 
-  function logCall(convId, from, kind, status, duration = 0) {
-    const conv = store.getConversation(convId);
-    postMessage(conv, store.addCallMessage(convId, from, { kind, status, duration }));
+  /** Summary of a running call, for chat members who are not in it. */
+  const describe = (call) => ({
+    callId: call.id,
+    kind: call.kind,
+    group: call.group,
+    participants: [...call.participants.keys()],
+    startedBy: call.from,
+  });
+
+  function announce(call, active = calls.has(call.id)) {
+    const conv = store.getConversation(call.convId);
+    if (!conv) return;
+    for (const m of conv.members) {
+      io.to(userRoom(m)).emit('call:state', { convId: call.convId, call: active ? describe(call) : null });
+    }
   }
 
   function finish(call, reason) {
@@ -39,16 +62,56 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
       status = reason === 'declined' ? 'declined' : 'missed';
     }
 
-    // Every device of both users: dismisses ringing on devices that didn't answer.
-    for (const u of [call.from, call.to]) {
+    // Every device of everyone involved: also dismisses ringing on devices that didn't answer.
+    for (const u of new Set([call.from, ...call.invited, ...call.joined])) {
       io.to(userRoom(u)).emit('call:ended', { callId: call.id, reason, status, duration });
     }
-    logCall(call.convId, call.from, call.kind, status, duration);
+    announce(call, false);
+    const conv = store.getConversation(call.convId);
+    postMessage(conv, store.addCallMessage(call.convId, call.from, { kind: call.kind, status, duration, group: call.group }, [...call.joined]));
   }
 
-  const participant = (callId, username) => {
+  /** End the call once nobody (or only one person, with nobody left ringing) remains. */
+  function settle(call, reason) {
+    const n = call.participants.size;
+    if (n === 0 || (n === 1 && call.ringing.size === 0)) finish(call, reason);
+    else announce(call);
+  }
+
+  function stopRinging(call, username, reason) {
+    if (!call.ringing.delete(username)) return;
+    io.to(userRoom(username)).emit('call:ended', { callId: call.id, reason });
+  }
+
+  function join(call, socket, username) {
+    if (call.participants.size >= MAX_PARTICIPANTS) throw new Error(`Calls are limited to ${MAX_PARTICIPANTS} people`);
+    const others = [...call.participants.keys()];
+    call.ringing.delete(username);
+    call.participants.set(username, socket.id);
+    call.joined.add(username);
+    if (!call.answeredAt && others.length) call.answeredAt = Date.now();
+    for (const u of others) io.to(call.participants.get(u)).emit('call:joined', { callId: call.id, username });
+    // Stop ringing on my other devices.
+    socket.to(userRoom(username)).emit('call:ended', { callId: call.id, reason: 'answered-elsewhere' });
+    announce(call);
+    return { participants: others, onHold: [...call.onHold] };
+  }
+
+  function leave(call, username, reason) {
+    if (!call.participants.delete(username)) return;
+    call.onHold.delete(username);
+    for (const sid of call.participants.values()) io.to(sid).emit('call:left', { callId: call.id, username });
+    if (!call.group) {
+      finish(call, call.answeredAt ? reason : 'cancelled');
+      return;
+    }
+    if (call.participants.size === 0) call.ringing.forEach((u) => stopRinging(call, u, 'cancelled'));
+    settle(call, call.answeredAt ? reason : 'cancelled');
+  }
+
+  const participantCall = (callId, username) => {
     const call = calls.get(callId);
-    if (!call || (call.from !== username && call.to !== username)) throw new Error('Call not found');
+    if (!call || !call.participants.has(username)) throw new Error('Call not found');
     return call;
   };
 
@@ -59,87 +122,131 @@ function createCallManager({ io, store, isOnline, userRoom, postMessage, handle,
       if (kind !== 'audio' && kind !== 'video') throw new Error('Invalid call type');
       const conv = store.getConversation(convId);
       if (!conv || !conv.members.includes(me)) throw new Error('Not a member of this chat');
-      if (conv.type !== 'direct') throw new Error('Group calls are not supported yet');
+
+      // A group call is already running in this chat: join it.
+      const running = callForConv(convId);
+      if (running && running.group && !running.participants.has(me)) {
+        if (inCall(me) && !running.ringing.has(me)) throw new Error('You are already in a call');
+        return { callId: running.id, kind: running.kind, group: true, ...join(running, socket, me) };
+      }
       if (inCall(me)) throw new Error('You are already in a call');
 
-      const peer = conv.members.find((m) => m !== me);
-      const name = store.publicUser(peer)?.displayName || peer;
-      if (!isOnline(peer)) {
-        logCall(convId, me, kind, 'missed');
-        throw new Error(`${name} is not available right now`);
-      }
-      if (inCall(peer)) {
-        logCall(convId, me, kind, 'missed');
-        throw new Error(`${name} is on another call`);
+      const others = conv.members.filter((m) => m !== me);
+      const group = conv.type === 'group';
+      const logMissed = () => postMessage(conv, store.addCallMessage(convId, me, { kind, status: 'missed', group }, []));
+      let ring;
+      if (!group) {
+        const peer = others[0];
+        const name = store.publicUser(peer)?.displayName || peer;
+        if (store.hasBlocked(me, peer)) throw new Error(`Unblock ${name} to call them`);
+        // Blocked by them: they're simply never available.
+        if (store.hasBlocked(peer, me) || !isOnline(peer)) {
+          if (!store.hasBlocked(peer, me)) logMissed();
+          throw new Error(`${name} is not available right now`);
+        }
+        if (inCall(peer)) {
+          logMissed();
+          throw new Error(`${name} is on another call`);
+        }
+        ring = [peer];
+      } else {
+        ring = others.filter((u) => isOnline(u) && !inCall(u)).slice(0, MAX_PARTICIPANTS - 1);
+        if (!ring.length) {
+          logMissed();
+          throw new Error('No one in this group is available right now');
+        }
       }
 
       const call = {
         id: crypto.randomBytes(8).toString('hex'),
         convId,
         kind,
+        group,
         from: me,
-        to: peer,
-        callerSocket: socket.id,
-        calleeSocket: null,
+        invited: new Set(ring),
+        ringing: new Set(ring),
+        participants: new Map([[me, socket.id]]), // username -> socket id
+        joined: new Set([me]),
+        onHold: new Set(),
         answeredAt: null,
       };
-      call.timer = setTimeout(() => finish(call, 'no-answer'), ringTimeoutMs);
+      call.timer = setTimeout(() => {
+        call.ringing.forEach((u) => stopRinging(call, u, 'no-answer'));
+        settle(call, 'no-answer');
+      }, ringTimeoutMs);
       calls.set(call.id, call);
 
-      io.to(userRoom(peer)).emit('call:incoming', {
-        callId: call.id,
-        convId,
-        kind,
-        from: me,
-        user: store.publicUser(me),
-      });
-      return { callId: call.id };
+      const title = group ? conv.name : null;
+      for (const u of ring) {
+        io.to(userRoom(u)).emit('call:incoming', {
+          callId: call.id,
+          convId,
+          kind,
+          group,
+          title,
+          from: me,
+          user: store.publicUser(me),
+          participants: [me],
+        });
+      }
+      announce(call);
+      return { callId: call.id, kind, group, participants: [], onHold: [] };
     }));
 
     socket.on('call:accept', handle(({ callId }) => {
-      const call = participant(callId, me);
-      if (call.to !== me) throw new Error('Only the callee can accept');
-      if (call.answeredAt) throw new Error('Call already answered');
-      clearTimeout(call.timer);
-      call.answeredAt = Date.now();
-      call.calleeSocket = socket.id;
-      io.to(call.callerSocket).emit('call:accepted', { callId });
-      // Stop ringing on my other devices.
-      socket.to(userRoom(me)).emit('call:ended', { callId, reason: 'answered-elsewhere' });
-      return {};
+      const call = calls.get(callId);
+      if (!call || !(call.ringing.has(me) || (call.group && store.isMember(call.convId, me)))) {
+        throw new Error('Call not found');
+      }
+      if (call.participants.has(me)) throw new Error('Already in this call');
+      return join(call, socket, me);
     }));
 
     socket.on('call:reject', handle(({ callId }) => {
-      const call = participant(callId, me);
-      if (call.answeredAt) throw new Error('Call already answered');
-      finish(call, 'declined');
+      const call = calls.get(callId);
+      if (!call || !call.ringing.has(me)) throw new Error('Call not found');
+      if (!call.group) {
+        finish(call, 'declined');
+      } else {
+        stopRinging(call, me, 'declined');
+        settle(call, call.answeredAt ? 'ended' : 'declined');
+      }
       return {};
     }));
 
     socket.on('call:end', handle(({ callId }) => {
-      const call = participant(callId, me);
-      finish(call, call.answeredAt ? 'ended' : 'cancelled');
+      const call = participantCall(callId, me);
+      if (call.participants.get(me) !== socket.id) throw new Error('This call is on another device');
+      leave(call, me, 'ended');
       return {};
     }));
 
-    // WebRTC offer/answer/ICE candidate relay.
-    socket.on('call:signal', ({ callId, data } = {}) => {
+    // WebRTC offer/answer/ICE candidate relay between two participants.
+    socket.on('call:signal', ({ callId, to, data } = {}) => {
       const call = calls.get(callId);
-      if (!call || !call.answeredAt || !data) return;
-      let target = null;
-      if (socket.id === call.callerSocket) target = call.calleeSocket;
-      else if (socket.id === call.calleeSocket) target = call.callerSocket;
-      if (target) io.to(target).emit('call:signal', { callId, data });
+      if (!call || !data || call.participants.get(me) !== socket.id) return;
+      const target = call.participants.get(to);
+      if (target) io.to(target).emit('call:signal', { callId, from: me, data });
     });
+
+    socket.on('call:hold', handle(({ callId, onHold }) => {
+      const call = participantCall(callId, me);
+      if (onHold) call.onHold.add(me);
+      else call.onHold.delete(me);
+      for (const [u, sid] of call.participants) {
+        if (u !== me) io.to(sid).emit('call:hold', { callId, username: me, onHold: !!onHold });
+      }
+      return {};
+    }));
 
     socket.on('disconnect', () => {
       for (const call of [...calls.values()]) {
-        if (call.callerSocket === socket.id || call.calleeSocket === socket.id) finish(call, 'disconnected');
+        if (call.participants.get(me) === socket.id) leave(call, me, 'disconnected');
       }
     });
   }
 
-  return { attach, calls };
+  return { attach, calls, activeCallFor: (convId) => { const c = callForConv(convId); return c ? describe(c) : null; } };
 }
 
-module.exports = { createCallManager };
+module.exports = { createCallManager, MAX_PARTICIPANTS };

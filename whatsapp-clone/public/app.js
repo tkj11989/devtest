@@ -29,6 +29,8 @@
     outbox: new Map(), // clientId -> my message not yet confirmed by the server
     revealed: new Set(), // ids of masked messages this viewer chose to reveal
     maskNext: false, // composer: send the next message masked
+    blocked: new Set(), // usernames I have blocked
+    voiceUrls: new Map(), // mediaId -> object URL of downloaded voice audio
   };
 
   // ---------- helpers ----------
@@ -87,17 +89,18 @@
   }
 
   const convTitle = (c) => (c.type === 'group' ? c.name : displayName(c.members.find((m) => m !== state.me.username)));
-  const convPeer = (c) => (c.type === 'direct' ? c.members.find((m) => m !== state.me.username) : null);
+  const convPeer = (c) => (c.type === 'direct' ? c.members?.find((m) => m !== state.me.username) : null);
 
   /**
    * Status of a message I sent:
-   *   'pending'   sending, or on the server but not yet delivered to every recipient
+   *   'sending'   on its way to the server
+   *   'pending'   on the server but not yet delivered to every recipient
    *   'delivered' delivered to every recipient
    *   'read'      read by every recipient
    *   'failed'    could not be sent (tap to retry)
    */
   function statusOf(msg, conv) {
-    if (msg.localStatus) return msg.localStatus === 'failed' ? 'failed' : 'pending';
+    if (msg.localStatus) return msg.localStatus; // 'sending' | 'failed'
     const others = conv.members.filter((m) => m !== msg.from);
     if (others.length && others.every((m) => msg.readBy.includes(m))) return 'read';
     if (others.length && others.every((m) => msg.deliveredTo.includes(m))) return 'delivered';
@@ -106,13 +109,32 @@
 
   // Icons in public/icons/ (cut from the design sheet by tools/extract-status-icons.py)
   const ICON_LABELS = {
+    sending: 'Sending',
     pending: 'Not delivered yet',
     delivered: 'Delivered',
     read: 'Read',
     failed: 'Not sent',
     deleted: 'Deleted',
     masked: 'Masked',
+    typing: 'Typing',
+    recording: 'Recording audio',
+    blocked: 'Blocked',
+    starred: 'Starred',
+    offline: 'Offline',
+    call: 'Call',
+    calling: 'Call in progress',
+    'call-end': 'Missed call',
+    'call-declined': 'Declined call',
+    'group-call': 'Group call',
+    'on-hold': 'On hold',
   };
+  // Load every icon up front so they still show while offline (e.g. "failed").
+  const preloadedIcons = Object.keys(ICON_LABELS).map((name) => {
+    const img = new Image();
+    img.src = `icons/${name}.png`;
+    return img;
+  });
+
   function icon(name, cls = 'status-icon') {
     const img = el('img', `${cls} icon-${name}`);
     img.src = `icons/${name}.png`;
@@ -124,35 +146,25 @@
 
   // ---------- call history entries ----------
 
-  const CALL_ICONS = {
-    audio: 'M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8Z',
-    video: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z',
-  };
-  function callGlyph(kind, cls) {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('class', cls);
-    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    p.setAttribute('d', CALL_ICONS[kind] || CALL_ICONS.audio);
-    svg.appendChild(p);
-    return svg;
-  }
   const fmtDuration = (s) => (s >= 3600
     ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
     : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
 
-  /** Title/subtitle for a call entry from my point of view. */
+  /** Title, subtitle and icon for a call entry from my point of view. */
   function describeCall(m) {
-    const { kind, status, duration } = m.call;
-    const mine = m.from === state.me.username;
-    const noun = kind === 'video' ? 'video call' : 'voice call';
-    const missed = !mine && status !== 'completed';
+    const { kind, status, duration, group, joined = [] } = m.call;
+    const me = state.me.username;
+    const mine = m.from === me;
+    const noun = `${group ? 'group ' : ''}${kind === 'video' ? 'video call' : 'voice call'}`;
+    const missed = group ? !mine && !joined.includes(me) : !mine && status !== 'completed';
     const title = missed ? `Missed ${noun}` : noun[0].toUpperCase() + noun.slice(1);
     let sub;
-    if (status === 'completed') sub = fmtDuration(duration);
-    else if (mine) sub = status === 'declined' ? 'Declined' : 'No answer';
-    else sub = 'Tap to call back';
-    return { title, sub, missed };
+    let iconName;
+    if (missed) [sub, iconName] = ['Tap to call back', 'call-end'];
+    else if (status === 'completed') [sub, iconName] = [fmtDuration(duration), group ? 'group-call' : 'call'];
+    else if (status === 'declined') [sub, iconName] = ['Declined', 'call-declined'];
+    else [sub, iconName] = ['No answer', 'call-end'];
+    return { title, sub, missed, icon: iconName };
   }
 
   const emit = (event, payload) => new Promise((resolve, reject) => {
@@ -210,6 +222,10 @@
     state.messages.clear();
     state.outbox.clear();
     state.revealed.clear();
+    state.blocked.clear();
+    stopRecording(false);
+    state.voiceUrls.forEach((url) => URL.revokeObjectURL(url));
+    state.voiceUrls.clear();
     state.users = {};
     showAuth();
   }
@@ -239,9 +255,11 @@
 
     socket.on('connect', async () => {
       try {
-        const { user: me, iceServers } = await emit('me');
+        const { user: me, iceServers, blocked } = await emit('me');
         state.me = me;
         state.iceServers = iceServers || [];
+        state.blocked = new Set(blocked || []);
+        setOffline(false);
         state.users[me.username] = { ...me, online: true };
         $('#auth').classList.add('hidden');
         $('#app').classList.remove('hidden');
@@ -256,7 +274,26 @@
       }
     });
 
+    socket.on('disconnect', () => setOffline(true));
     socket.on('message:new', ({ message }) => onMessage(message));
+    socket.on('message:starred', ({ convId, id, starred }) => {
+      const m = state.messages.get(convId)?.find((x) => x.id === id);
+      if (m) m.starred = starred;
+      if (convId === state.activeId) renderMessages();
+      if (!$('#panel-starred').classList.contains('hidden')) loadStarred();
+    });
+    socket.on('blocked:update', ({ blocked }) => {
+      state.blocked = new Set(blocked);
+      renderChatList();
+      renderHeader();
+    });
+    socket.on('call:state', ({ convId, call }) => {
+      const conv = state.conversations.get(convId);
+      if (!conv) return;
+      conv.activeCall = call;
+      renderChatList();
+      if (convId === state.activeId) renderHeader();
+    });
     socket.on('message:status', ({ convId, messages }) => {
       const list = state.messages.get(convId);
       const conv = state.conversations.get(convId);
@@ -292,12 +329,15 @@
       renderHeader();
       if (state.activeId) renderMessages();
     });
-    socket.on('typing', ({ convId, username, isTyping }) => {
+    socket.on('typing', ({ convId, username, isTyping, activity = 'typing' }) => {
       if (!state.typing.has(convId)) state.typing.set(convId, new Map());
       const map = state.typing.get(convId);
-      clearTimeout(map.get(username));
-      if (isTyping) map.set(username, setTimeout(() => { map.delete(username); refreshTyping(convId); }, 5000));
-      else map.delete(username);
+      clearTimeout(map.get(username)?.timer);
+      if (isTyping) {
+        map.set(username, { activity, timer: setTimeout(() => { map.delete(username); refreshTyping(convId); }, 5000) });
+      } else {
+        map.delete(username);
+      }
       refreshTyping(convId);
     });
   }
@@ -312,12 +352,20 @@
 
   // ---------- chat list ----------
 
-  function typingText(convId) {
-    const names = [...(state.typing.get(convId)?.keys() || [])];
-    if (!names.length) return '';
-    const conv = state.conversations.get(convId);
-    if (conv?.type === 'direct') return 'typing…';
-    return names.length === 1 ? `${displayName(names[0])} is typing…` : `${names.length} people are typing…`;
+  /** What others are doing in a chat right now: `{ text, activity: 'typing'|'recording' }` or null. */
+  function activityOf(convId) {
+    const map = state.typing.get(convId);
+    if (!map?.size) return null;
+    const entries = [...map.entries()];
+    const recording = entries.filter(([, v]) => v.activity === 'recording');
+    const activity = recording.length ? 'recording' : 'typing';
+    const names = (recording.length ? recording : entries).map(([u]) => u);
+    const verb = activity === 'recording' ? 'recording audio…' : 'typing…';
+    let text;
+    if (state.conversations.get(convId)?.type === 'direct') text = verb;
+    else if (names.length === 1) text = `${displayName(names[0])} is ${verb}`;
+    else text = `${names.length} people are ${verb}`;
+    return { text, activity };
   }
 
   function refreshTyping(convId) {
@@ -349,18 +397,21 @@
       const body = el('div', 'body');
       const top = el('div', 'row');
       top.appendChild(el('span', 'name', convTitle(c)));
+      if (peer && state.blocked.has(peer)) top.appendChild(icon('blocked'));
       top.appendChild(el('span', 'time', c.lastMessage ? listTime(c.lastMessage.ts) : ''));
       body.appendChild(top);
 
       const bottom = el('div', 'row');
-      const typing = typingText(c.id);
-      const preview = el('span', 'preview' + (typing ? ' typing' : ''));
-      if (typing) {
-        preview.textContent = typing;
+      const activity = activityOf(c.id);
+      const live = c.activeCall && c.type === 'group';
+      const preview = el('span', 'preview' + (activity || live ? ' typing' : ''));
+      if (activity) {
+        preview.append(icon(activity.activity), activity.text);
+      } else if (live) {
+        preview.append(icon('calling'), `Ongoing ${c.activeCall.kind === 'video' ? 'video' : 'voice'} call`);
       } else if (c.lastMessage?.type === 'call') {
-        const { title, sub, missed } = describeCall(c.lastMessage);
-        preview.appendChild(callGlyph(c.lastMessage.call.kind, 'call-glyph' + (missed ? ' missed' : '')));
-        preview.appendChild(document.createTextNode(`${title}${c.lastMessage.call.status === 'completed' ? ` · ${sub}` : ''}`));
+        const d = describeCall(c.lastMessage);
+        preview.append(icon(d.icon), `${d.title}${c.lastMessage.call.status === 'completed' && !d.missed ? ` · ${d.sub}` : ''}`);
       } else if (c.lastMessage) {
         const m = c.lastMessage;
         const mine = m.from === state.me.username;
@@ -374,7 +425,8 @@
           if (mine) preview.appendChild(icon(statusOf(m, c)));
           // Masked text never shows in the chat list, not even to the sender.
           if (m.masked) preview.appendChild(icon('masked'));
-          text = prefix + (m.masked ? 'Masked message' : m.text);
+          if (m.type === 'voice') text = `${prefix}🎤 Voice message (${fmtDuration(m.voice.duration)})`;
+          else text = prefix + (m.masked ? 'Masked message' : m.text);
         }
         preview.appendChild(document.createTextNode(text));
       } else if (c.type === 'group') {
@@ -397,9 +449,11 @@
 
   // ---------- chat view ----------
 
-  async function openChat(id) {
+  async function openChat(id, { highlight } = {}) {
     const conv = state.conversations.get(id);
     if (!conv) return;
+    // Switching chats mid-recording sends the recording to the chat it was made in.
+    if (state.recorder && state.recorder.convId !== id) stopRecording(true);
     state.activeId = id;
     $('#empty-state').classList.add('hidden');
     $('#chat-view').classList.remove('hidden');
@@ -419,10 +473,19 @@
       state.messages.set(id, messages);
       renderMessages(true);
       markRead(id);
+      if (highlight) flashMessage(highlight);
     } catch (err) {
       console.error(err);
     }
     $('#message-input').focus();
+  }
+
+  function flashMessage(id) {
+    const node = document.querySelector(`#messages .msg[data-id="${CSS.escape(id)}"]`);
+    if (!node) return;
+    node.scrollIntoView({ block: 'center' });
+    node.classList.add('flash');
+    setTimeout(() => node.classList.remove('flash'), 1600);
   }
 
   function closeChat() {
@@ -454,18 +517,75 @@
       group: conv.type === 'group',
     });
     $('#chat-name').textContent = convTitle(conv);
-    $('#call-buttons').classList.toggle('hidden', conv.type !== 'direct');
+    const group = conv.type === 'group';
+    const blocked = !group && state.blocked.has(peer);
+    $('#call-buttons').classList.toggle('hidden', blocked);
+    $('#btn-voice-call').classList.toggle('hidden', group);
+    $('#btn-group-call').classList.toggle('hidden', !group);
+    $('#chat-menu').parentElement.classList.toggle('hidden', group);
+    $('#menu-block span').textContent = blocked ? 'Unblock contact' : 'Block contact';
+
     const status = $('#chat-status');
-    const typing = typingText(conv.id);
-    status.classList.toggle('typing', !!typing);
-    if (typing) status.textContent = typing;
-    else if (conv.type === 'group') {
+    status.textContent = '';
+    const activity = blocked ? null : activityOf(conv.id);
+    status.classList.toggle('typing', !!activity);
+    if (activity) {
+      status.append(icon(activity.activity), activity.text);
+    } else if (group) {
       status.textContent = conv.members
         .map((m) => (m === state.me.username ? 'You' : displayName(m)))
         .sort((a, b) => (a === 'You') - (b === 'You'))
         .join(', ');
-    } else status.textContent = lastSeenText(peer);
+    } else if (blocked) {
+      status.append(icon('blocked'), 'Blocked');
+    } else if (state.users[peer]?.online) {
+      status.textContent = 'online';
+    } else {
+      status.append(icon('offline'), lastSeenText(peer) || 'offline');
+    }
+
+    // A group call is running that I'm not in: offer to join it.
+    const running = group && conv.activeCall && state.calls?.convId !== conv.id ? conv.activeCall : null;
+    $('#call-banner').classList.toggle('hidden', !running);
+    if (running) {
+      const n = running.participants.length;
+      $('#call-banner-text').textContent = `Ongoing ${running.kind === 'video' ? 'video' : 'voice'} call · ${n} ${n === 1 ? 'person' : 'people'}`;
+    }
+
+    // Blocked contact: the composer is replaced by an unblock banner.
+    $('#blocked-banner').classList.toggle('hidden', !blocked);
+    if (blocked) $('#blocked-banner-text').textContent = `You blocked ${displayName(peer)}. Tap to unblock.`;
+    $('#composer').classList.toggle('hidden', blocked || !!state.recorder);
   }
+
+  // chat menu (block / unblock)
+  $('#btn-chat-menu').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('#chat-menu').classList.toggle('hidden');
+  });
+  document.addEventListener('click', () => $('#chat-menu').classList.add('hidden'));
+  async function setBlocked(username, blocked) {
+    if (blocked && !confirm(`Block ${displayName(username)}? Blocked contacts can't call you or send you messages.`)) return;
+    try {
+      const { blocked: list, user } = await emit('user:block', { username, blocked });
+      state.blocked = new Set(list);
+      state.users[username] = { ...(state.users[username] || {}), ...user };
+      if (blocked) stopRecording(false);
+      renderChatList();
+      renderHeader();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+  $('#menu-block').addEventListener('click', () => {
+    const peer = convPeer(state.conversations.get(state.activeId) || {});
+    if (peer) setBlocked(peer, !state.blocked.has(peer));
+  });
+  $('#blocked-banner').addEventListener('click', () => {
+    const peer = convPeer(state.conversations.get(state.activeId) || {});
+    if (peer) setBlocked(peer, false);
+  });
+  $('#btn-join-call').addEventListener('click', () => startCall(state.conversations.get(state.activeId)?.activeCall?.kind || 'audio'));
 
   function renderMessages(scrollToEnd = false) {
     const box = $('#messages');
@@ -486,7 +606,8 @@
       }
       const status = mine && !m.deleted ? statusOf(m, conv) : null;
       const covered = m.masked && !m.deleted && !mine && !state.revealed.has(m.id);
-      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}`);
+      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}`);
+      bubble.dataset.id = m.id;
       if (conv.type === 'group' && !mine && first) {
         const author = el('div', 'author', displayName(m.from));
         author.style.color = colorFor(m.from);
@@ -496,6 +617,8 @@
         const text = el('span', 'text');
         text.append(icon('deleted', 'inline-icon'), 'This message was deleted');
         bubble.appendChild(text);
+      } else if (m.type === 'voice') {
+        bubble.appendChild(voicePlayer(m));
       } else if (covered) {
         const cover = el('button', 'masked-cover');
         cover.type = 'button';
@@ -507,6 +630,7 @@
         bubble.appendChild(el('span', 'text', m.text));
       }
       const meta = el('span', 'meta');
+      if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
       if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
       meta.appendChild(document.createTextNode(timeOf(m.ts)));
       if (status) meta.appendChild(icon(status));
@@ -517,6 +641,14 @@
         retry.title = m.error || 'Not sent';
         retry.addEventListener('click', () => deliver(m));
         bubble.appendChild(retry);
+      }
+      if (!m.deleted && !m.localStatus) {
+        const star = el('button', `star${m.starred ? ' on' : ''}`);
+        star.type = 'button';
+        star.title = m.starred ? 'Unstar message' : 'Star message';
+        star.appendChild(icon('starred', 'star-icon'));
+        star.addEventListener('click', () => emit('message:star', { id: m.id, starred: !m.starred }).catch((e) => alert(e.message)));
+        bubble.appendChild(star);
       }
       if (mine && !m.deleted && !m.localStatus) {
         const del = el('button', 'del', '✕');
@@ -538,13 +670,12 @@
   }
 
   function callBubble(m, conv, mine, first) {
-    const { title, sub, missed } = describeCall(m);
+    const { title, sub, missed, icon: iconName } = describeCall(m);
     const bubble = el('div', `msg call-entry${mine ? ' out' : ''}${first ? ' first' : ''}${missed ? ' missed' : ''}`);
+    bubble.dataset.id = m.id;
     bubble.title = 'Call again';
     const row = el('div', 'call-row');
-    const icon = el('div', 'call-icon');
-    icon.appendChild(callGlyph(m.call.kind));
-    row.appendChild(icon);
+    row.appendChild(icon(iconName, 'call-entry-icon'));
     const text = el('div');
     text.appendChild(el('div', 'call-title', title));
     text.appendChild(el('div', 'call-sub', sub));
@@ -557,11 +688,90 @@
 
   function startCall(kind, convId = state.activeId) {
     const conv = state.conversations.get(convId);
-    if (!conv || conv.type !== 'direct' || !state.calls) return;
-    state.calls.start(conv.id, convPeer(conv), kind);
+    if (!conv || !state.calls) return;
+    const group = conv.type === 'group';
+    if (!group && state.blocked.has(convPeer(conv))) {
+      alert(`Unblock ${convTitle(conv)} to call them.`);
+      return;
+    }
+    stopRecording(false);
+    state.calls.start(conv.id, {
+      kind: (group && conv.activeCall?.kind) || kind, // joining a running call keeps its kind
+      group,
+      title: convTitle(conv),
+      key: group ? conv.id : convPeer(conv),
+    });
   }
   $('#btn-voice-call').addEventListener('click', () => startCall('audio'));
+  $('#btn-group-call').addEventListener('click', () => startCall('audio'));
   $('#btn-video-call').addEventListener('click', () => startCall('video'));
+
+  // ---------- voice messages: playback ----------
+
+  const player = new Audio();
+  let playingId = null;
+
+  async function voiceUrl(m) {
+    if (m.localUrl) return m.localUrl;
+    const id = m.voice.mediaId;
+    if (!state.voiceUrls.has(id)) {
+      const res = await fetch(`/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!res.ok) throw new Error('Could not load the voice message');
+      state.voiceUrls.set(id, URL.createObjectURL(await res.blob()));
+    }
+    return state.voiceUrls.get(id);
+  }
+
+  function voicePlayer(m) {
+    const wrap = el('div', 'voice-player');
+    const btn = el('button', 'voice-btn');
+    btn.type = 'button';
+    const playing = playingId === m.id && !player.paused;
+    btn.textContent = playing ? '❚❚' : '▶';
+    btn.title = playing ? 'Pause' : 'Play voice message';
+    const bar = el('input', 'voice-bar');
+    bar.type = 'range';
+    bar.min = 0;
+    bar.max = 1000;
+    bar.value = playingId === m.id && player.duration ? Math.round((player.currentTime / player.duration) * 1000) : 0;
+    const time = el('span', 'voice-time', fmtDuration(playingId === m.id ? Math.floor(player.currentTime) : m.voice.duration));
+    wrap.append(btn, bar, time);
+
+    btn.addEventListener('click', async () => {
+      if (playingId === m.id && !player.paused) {
+        player.pause();
+        return;
+      }
+      try {
+        const url = await voiceUrl(m);
+        if (playingId !== m.id) {
+          player.src = url;
+          playingId = m.id;
+        }
+        await player.play();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    bar.addEventListener('input', () => {
+      if (playingId === m.id && player.duration) player.currentTime = (bar.value / 1000) * player.duration;
+    });
+    return wrap;
+  }
+
+  function syncPlayer() {
+    const bubble = playingId && document.querySelector(`.msg[data-id="${CSS.escape(playingId)}"]`);
+    if (!bubble) return;
+    const playing = !player.paused;
+    bubble.querySelector('.voice-btn').textContent = playing ? '❚❚' : '▶';
+    if (player.duration && Number.isFinite(player.duration)) bubble.querySelector('.voice-bar').value = Math.round((player.currentTime / player.duration) * 1000);
+    bubble.querySelector('.voice-time').textContent = fmtDuration(Math.floor(player.currentTime));
+  }
+  ['play', 'pause', 'timeupdate'].forEach((ev) => player.addEventListener(ev, syncPlayer));
+  player.addEventListener('ended', () => {
+    playingId = null;
+    if (state.activeId) renderMessages();
+  });
 
   /** Add a server message, replacing my optimistic copy of it (matched by clientId). */
   function upsertMessage(msg) {
@@ -569,8 +779,14 @@
     const list = state.messages.get(msg.convId);
     if (list) {
       const i = list.findIndex((m) => m.id === msg.id || (msg.clientId && m.id === msg.clientId));
-      if (i >= 0) list[i] = msg;
-      else list.push(msg);
+      if (i >= 0) {
+        // My own voice message: keep playing from the local recording instead of downloading it.
+        if (list[i].localUrl && msg.voice) state.voiceUrls.set(msg.voice.mediaId, list[i].localUrl);
+        if (playingId === list[i].id) playingId = msg.id;
+        list[i] = msg;
+      } else {
+        list.push(msg);
+      }
     }
     if (msg.clientId) state.outbox.delete(msg.clientId);
     if (conv && (!conv.lastMessage || conv.lastMessage.ts <= msg.ts || conv.lastMessage.id === msg.clientId)) {
@@ -586,13 +802,17 @@
   // ---------- sending ----------
 
   const SEND_TIMEOUT_MS = 10000;
+  const VOICE_TIMEOUT_MS = 30000; // uploads take longer
 
   /** Send (or re-send) one of my messages; failures leave it in the chat marked as failed. */
   function deliver(msg) {
     msg.localStatus = 'sending';
     delete msg.error;
     refreshConversation(msg.convId);
-    const payload = { convId: msg.convId, text: msg.text, masked: !!msg.masked, clientId: msg.id };
+    const voice = msg.type === 'voice';
+    const payload = voice
+      ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime, data: msg.audio }
+      : { convId: msg.convId, text: msg.text, masked: !!msg.masked, clientId: msg.id };
     const fail = (error) => {
       if (!state.outbox.has(msg.id)) return; // confirmed meanwhile (e.g. via message:new)
       msg.localStatus = 'failed';
@@ -600,7 +820,7 @@
       refreshConversation(msg.convId);
     };
     if (!state.socket?.connected) return fail('You are offline');
-    state.socket.timeout(SEND_TIMEOUT_MS).emit('message:send', payload, (err, res) => {
+    state.socket.timeout(voice ? VOICE_TIMEOUT_MS : SEND_TIMEOUT_MS).emit(voice ? 'voice:send' : 'message:send', payload, (err, res) => {
       if (err) fail('No response from the server');
       else if (!res?.ok) fail(res?.error || 'Could not send');
       else {
@@ -612,6 +832,7 @@
 
   function discard(msg) {
     state.outbox.delete(msg.id);
+    if (msg.localUrl) URL.revokeObjectURL(msg.localUrl);
     const list = state.messages.get(msg.convId);
     if (list) state.messages.set(msg.convId, list.filter((m) => m !== msg));
     const conv = state.conversations.get(msg.convId);
@@ -619,9 +840,11 @@
     refreshConversation(msg.convId);
   }
 
-  function sendNew(convId, text, masked) {
+  /** Show a new message of mine right away and send it. `extra` holds type-specific fields. */
+  function sendNew(convId, text, masked, extra = {}) {
     const clientId = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const msg = {
+      ...extra,
       id: clientId,
       clientId,
       convId,
@@ -659,7 +882,7 @@
     // Sender stops typing once a message arrives.
     const typingMap = state.typing.get(msg.convId);
     if (typingMap?.has(msg.from)) {
-      clearTimeout(typingMap.get(msg.from));
+      clearTimeout(typingMap.get(msg.from).timer);
       typingMap.delete(msg.from);
       if (msg.convId === state.activeId) renderHeader();
     }
@@ -683,8 +906,16 @@
     isTyping = false;
   }
 
+  /** Empty composer shows the record button; typing shows send. */
+  function updateComposerButtons() {
+    const empty = !input.value.trim();
+    $('#btn-send').classList.toggle('hidden', empty);
+    $('#btn-record').classList.toggle('hidden', !empty);
+  }
+
   input.addEventListener('input', () => {
     autosize();
+    updateComposerButtons();
     if (!state.activeId) return;
     if (!isTyping) {
       isTyping = true;
@@ -708,10 +939,88 @@
     stopTyping();
     input.value = '';
     autosize();
+    updateComposerButtons();
     $('#emoji-picker').classList.add('hidden');
     sendNew(state.activeId, text, state.maskNext);
     setMaskNext(false);
   });
+
+  // ---------- voice messages: recording ----------
+
+  const VOICE_MAX_SECONDS = 5 * 60;
+  state.recorder = null; // { convId, media, stream, chunks, startedAt, clock, keepAlive }
+
+  function pickAudioType() {
+    const types = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'];
+    return types.find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
+  }
+
+  const sendActivity = (convId, on) => state.socket?.emit('typing', { convId, isTyping: on, activity: 'recording' });
+
+  async function startRecording() {
+    if (state.recorder || !state.activeId) return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      alert('Voice messages need a secure connection (https:// or localhost) and a browser that can record audio.');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      alert('Microphone access was denied or no microphone was found.');
+      return;
+    }
+    const convId = state.activeId;
+    const type = pickAudioType();
+    const media = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: 32000 });
+    const rec = { convId, media, stream, chunks: [], startedAt: Date.now() };
+    state.recorder = rec;
+    media.ondataavailable = (e) => { if (e.data.size) rec.chunks.push(e.data); };
+    media.start(250);
+    stopTyping();
+    sendActivity(convId, true);
+    rec.keepAlive = setInterval(() => sendActivity(convId, true), 3000);
+    const tick = () => {
+      const secs = Math.floor((Date.now() - rec.startedAt) / 1000);
+      $('#rec-time').textContent = fmtDuration(secs);
+      if (secs >= VOICE_MAX_SECONDS) stopRecording(true);
+    };
+    tick();
+    rec.clock = setInterval(tick, 250);
+    $('#composer').classList.add('hidden');
+    $('#recorder').classList.remove('hidden');
+  }
+
+  /** Stop recording; `send` uploads it as a voice message, otherwise it is discarded. */
+  function stopRecording(send) {
+    const rec = state.recorder;
+    if (!rec) return;
+    state.recorder = null;
+    clearInterval(rec.clock);
+    clearInterval(rec.keepAlive);
+    sendActivity(rec.convId, false);
+    $('#recorder').classList.add('hidden');
+    $('#composer').classList.remove('hidden');
+    const duration = Math.max(1, Math.round((Date.now() - rec.startedAt) / 1000));
+    rec.media.onstop = async () => {
+      rec.stream.getTracks().forEach((t) => t.stop());
+      if (!send || !rec.chunks.length) return;
+      const blob = new Blob(rec.chunks, { type: rec.media.mimeType || 'audio/webm' });
+      sendNew(rec.convId, '', false, {
+        type: 'voice',
+        voice: { duration, mime: blob.type },
+        audio: await blob.arrayBuffer(),
+        localUrl: URL.createObjectURL(blob),
+      });
+    };
+    if (rec.media.state !== 'inactive') rec.media.stop();
+    else rec.media.onstop();
+    if (state.activeId) renderHeader();
+  }
+
+  $('#btn-record').addEventListener('click', startRecording);
+  $('#btn-rec-send').addEventListener('click', () => stopRecording(true));
+  $('#btn-rec-cancel').addEventListener('click', () => stopRecording(false));
 
   // masked messages: hidden for recipients until they tap to reveal
   function setMaskNext(on) {
@@ -733,6 +1042,7 @@
       const { selectionStart: s, selectionEnd: t, value } = input;
       input.value = value.slice(0, s) + em + value.slice(t);
       input.selectionStart = input.selectionEnd = s + em.length;
+      updateComposerButtons();
       input.focus();
     });
     picker.appendChild(b);
@@ -896,6 +1206,56 @@
   });
 
   $('#btn-logout').addEventListener('click', logout);
+
+  // Starred messages
+  async function loadStarred() {
+    const list = $('#starred-list');
+    try {
+      const { messages } = await emit('messages:starred');
+      list.textContent = '';
+      $('#starred-empty').classList.toggle('hidden', messages.length > 0);
+      for (const m of messages) {
+        const conv = state.conversations.get(m.convId);
+        if (!conv) continue;
+        const li = el('li');
+        li.appendChild(avatar(displayName(m.from), m.from));
+        const body = el('div', 'body');
+        const top = el('div', 'row');
+        const who = m.from === state.me.username ? 'You' : displayName(m.from);
+        top.appendChild(el('span', 'name', conv.type === 'group' ? `${who} ▸ ${convTitle(conv)}` : who));
+        top.appendChild(el('span', 'time', listTime(m.ts)));
+        body.appendChild(top);
+        const bottom = el('div', 'row');
+        const preview = el('span', 'preview');
+        preview.appendChild(icon('starred'));
+        if (m.masked) preview.appendChild(icon('masked'));
+        preview.appendChild(document.createTextNode(
+          m.type === 'voice' ? `🎤 Voice message (${fmtDuration(m.voice.duration)})` : m.masked ? 'Masked message' : m.text,
+        ));
+        bottom.appendChild(preview);
+        body.appendChild(bottom);
+        li.appendChild(body);
+        li.addEventListener('click', () => {
+          $('#panel-starred').classList.add('hidden');
+          openChat(m.convId, { highlight: m.id });
+        });
+        list.appendChild(li);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  $('#btn-starred').addEventListener('click', () => {
+    openPanel('#panel-starred');
+    loadStarred();
+  });
+
+  // Offline banner: shown while the connection to the server is down.
+  function setOffline(offline) {
+    $('#offline-banner').classList.toggle('hidden', !offline);
+  }
+  window.addEventListener('offline', () => setOffline(true));
+  window.addEventListener('online', () => setOffline(!state.socket?.connected));
 
   // Keep "last seen" labels fresh.
   setInterval(() => { if (state.activeId) renderHeader(); }, 60_000);

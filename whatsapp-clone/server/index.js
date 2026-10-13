@@ -25,13 +25,16 @@ function iceServersFromEnv() {
 function createApp({ store = new Store(), tls = null, iceServers = iceServersFromEnv(), ringTimeoutMs } = {}) {
   const app = express();
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
-  const io = new Server(server);
+  // Voice messages are uploaded over the socket.
+  const io = new Server(server, { maxHttpBufferSize: 4 * 1024 * 1024 });
 
   // username -> number of connected sockets
   const online = new Map();
   const isOnline = (u) => (online.get(u) || 0) > 0;
 
   app.use(express.json({ limit: '50kb' }));
+  // Icons rarely change; let browsers keep them so they still render while offline.
+  app.use('/icons', express.static(path.join(__dirname, '..', 'public', 'icons'), { maxAge: '7d' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   app.post('/api/register', (req, res) => {
@@ -52,9 +55,21 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
     }
   });
 
+  const bearer = (req) => req.get('authorization')?.replace(/^Bearer /, '');
+
   app.post('/api/logout', (req, res) => {
-    store.logout(req.get('authorization')?.replace(/^Bearer /, ''));
+    store.logout(bearer(req));
     res.json({ ok: true });
+  });
+
+  // Voice-message audio, for members of the chat it was sent in.
+  app.get('/media/:id', (req, res) => {
+    const username = store.userForToken(bearer(req));
+    if (!username) return res.status(401).end();
+    const media = store.getMedia(req.params.id, username);
+    if (!media) return res.status(404).end();
+    res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
+    res.send(media.buffer);
   });
 
   // ---------- realtime ----------
@@ -72,14 +87,48 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
     for (const m of conv.members) io.to(userRoom(m)).emit(event, payload);
   };
 
-  /** Mark a new message delivered to online members and push it to everyone in the chat. */
+  /** `username` as `viewer` sees them: blocking (either way) hides online status and last seen. */
+  const userView = (username, viewer) => ({
+    ...store.publicUserFor(username, viewer),
+    online: isOnline(username) && !store.blockedEither(username, viewer),
+  });
+  const usersFor = (usernames, viewer) => {
+    const users = {};
+    for (const u of usernames) users[u] = userView(u, viewer);
+    return users;
+  };
+
+  /**
+   * Mark a new message delivered to online members and push it to everyone in the
+   * chat who may see it. Returns the sender's view of the message.
+   */
   const postMessage = (conv, msg) => {
-    for (const m of conv.members) {
+    const recipients = conv.members.filter((m) => Store.visibleTo(msg, m));
+    for (const m of recipients) {
       if (m !== msg.from && isOnline(m)) msg.deliveredTo.push(m);
     }
     store._save();
-    emitToMembers(conv, 'message:new', { message: msg });
-    return msg;
+    for (const m of recipients) io.to(userRoom(m)).emit('message:new', { message: store.viewFor(msg, m) });
+    return store.viewFor(msg, msg.from);
+  };
+
+  /** Store and broadcast a new message from `me`; a retried clientId just gets its message back. */
+  const sendMessage = (me, convId, text, opts) => {
+    const conv = store.getConversation(convId);
+    const dup = conv && store.findByClientId(convId, me, opts.clientId);
+    if (dup) return store.viewFor(dup, me);
+    const isFirst = conv && (store.data.messages[convId] || []).length === 0;
+    const msg = store.addMessage(convId, me, text, opts);
+
+    // A brand new direct chat appears in the recipient's list on first message.
+    if (isFirst && conv.type === 'direct') {
+      for (const m of conv.members) {
+        if (m !== me && Store.visibleTo(msg, m)) {
+          io.to(userRoom(m)).emit('conversation:new', { conversation: store.summarize(conv, m), users: usersFor(conv.members, m) });
+        }
+      }
+    }
+    return postMessage(conv, msg);
   };
 
   const statusPayload = (msgs) =>
@@ -92,13 +141,17 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
     if (conv) emitToMembers(conv, 'message:status', { convId, messages: statusPayload(changed) });
   };
 
-  const presenceFor = (u) => ({ username: u, online: isOnline(u), lastSeen: store.publicUser(u)?.lastSeen });
-
-  const broadcastPresence = (u) => {
-    const payload = presenceFor(u);
+  const peersOf = (u) => {
     const peers = new Set();
     for (const c of store.conversationsFor(u)) c.members.forEach((m) => m !== u && peers.add(m));
-    for (const p of peers) io.to(userRoom(p)).emit('presence', payload);
+    return peers;
+  };
+
+  const broadcastPresence = (u) => {
+    for (const p of peersOf(u)) {
+      const { online: isOn, lastSeen } = userView(u, p);
+      io.to(userRoom(p)).emit('presence', { username: u, online: isOn, lastSeen });
+    }
   };
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -113,6 +166,9 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
 
   const calls = createCallManager({ io, store, isOnline, userRoom, postMessage, handle, ringTimeoutMs });
 
+  const VOICE_MAX_BYTES = 3 * 1024 * 1024;
+  const VOICE_MAX_SECONDS = 5 * 60;
+
   io.on('connection', (socket) => {
     const me = socket.data.username;
     socket.join(userRoom(me));
@@ -124,20 +180,28 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
 
     calls.attach(socket);
 
-    socket.on('me', handle(() => ({ user: store.publicUser(me), iceServers })));
+    socket.on('me', handle(() => ({ user: store.publicUser(me), iceServers, blocked: store.blockedList(me) })));
 
     socket.on('conversations', handle(() => {
-      const conversations = store.conversationsFor(me);
+      const conversations = store.conversationsFor(me).map((c) => ({ ...c, activeCall: calls.activeCallFor(c.id) }));
       const people = new Set();
       conversations.forEach((c) => c.members.forEach((m) => people.add(m)));
-      const users = {};
-      for (const u of people) users[u] = { ...store.publicUser(u), online: isOnline(u) };
-      return { conversations, users };
+      return { conversations, users: usersFor(people, me) };
     }));
 
     socket.on('users:search', handle(({ q }) => ({
-      users: store.searchUsers(q, me).map((u) => ({ ...u, online: isOnline(u.username) })),
+      users: store.searchUsers(q, me).map((u) => userView(u.username, me)),
     })));
+
+    socket.on('user:block', handle(({ username, blocked }) => {
+      const target = String(username || '').toLowerCase();
+      const list = store.setBlocked(me, target, !!blocked);
+      // Sync my other devices, and refresh what each side sees of the other's presence.
+      io.to(userRoom(me)).emit('blocked:update', { blocked: list });
+      const theirView = userView(me, target);
+      io.to(userRoom(target)).emit('presence', { username: me, online: theirView.online, lastSeen: theirView.lastSeen });
+      return { blocked: list, user: userView(target, me) };
+    }));
 
     socket.on('chat:direct', handle(({ username }) => {
       const conv = store.getOrCreateDirect(me, String(username || '').toLowerCase());
@@ -147,10 +211,8 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
 
     socket.on('group:create', handle(({ name, members }) => {
       const conv = store.createGroup(me, name, members);
-      const users = {};
-      conv.members.forEach((u) => (users[u] = { ...store.publicUser(u), online: isOnline(u) }));
       for (const m of conv.members) {
-        io.to(userRoom(m)).emit('conversation:new', { conversation: store.summarize(conv, m), users });
+        io.to(userRoom(m)).emit('conversation:new', { conversation: store.summarize(conv, m), users: usersFor(conv.members, m) });
       }
       return { conversation: store.summarize(conv, me) };
     }));
@@ -159,25 +221,36 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
       messages: store.getMessages(convId, me, { before }),
     })));
 
-    socket.on('message:send', handle(({ convId, text, masked, clientId }) => {
-      const conv = store.getConversation(convId);
-      const isFirst = conv && (store.data.messages[convId] || []).length === 0;
-      const count = (store.data.messages[convId] || []).length;
-      const msg = store.addMessage(convId, me, text, { masked: !!masked, clientId });
-      // A retried send of a message we already have: just acknowledge it again.
-      if ((store.data.messages[convId] || []).length === count) return { message: msg };
+    socket.on('message:send', handle(({ convId, text, masked, clientId }) => ({
+      message: sendMessage(me, convId, text, { masked: !!masked, clientId }),
+    })));
 
-      // A brand new direct chat appears in the recipient's list on first message.
-      if (isFirst && conv.type === 'direct') {
-        const users = {};
-        conv.members.forEach((u) => (users[u] = { ...store.publicUser(u), online: isOnline(u) }));
-        for (const m of conv.members) {
-          if (m !== me) io.to(userRoom(m)).emit('conversation:new', { conversation: store.summarize(conv, m), users });
-        }
+    socket.on('voice:send', handle(({ convId, clientId, duration, mime, data }) => {
+      if (!store.isMember(convId, me)) throw new Error('Not a member of this chat');
+      const dup = store.findByClientId(convId, me, clientId);
+      if (dup) return { message: store.viewFor(dup, me) };
+      if (!Buffer.isBuffer(data) || data.length === 0) throw new Error('Recording is empty');
+      if (data.length > VOICE_MAX_BYTES) throw new Error('Recording is too large');
+      mime = String(mime || '').split(';')[0];
+      if (!/^audio\/[a-z0-9.+-]+$/.test(mime)) throw new Error('Unsupported audio format');
+      duration = Math.min(Number(duration) || 0, VOICE_MAX_SECONDS);
+      const mediaId = store.saveMedia(convId, data, mime);
+      try {
+        return { message: sendMessage(me, convId, '', { clientId, voice: { mediaId, duration, mime } }) };
+      } catch (err) {
+        store.deleteMedia(mediaId);
+        throw err;
       }
-
-      return { message: postMessage(conv, msg) };
     }));
+
+    socket.on('message:star', handle(({ id, starred }) => {
+      const { convId, message } = store.setStarred(id, me, !!starred);
+      // Stars are private: only my own devices hear about it.
+      io.to(userRoom(me)).emit('message:starred', { convId, id: message.id, starred: !!message.starred });
+      return { message };
+    }));
+
+    socket.on('messages:starred', handle(() => ({ messages: store.starredFor(me) })));
 
     socket.on('messages:read', handle(({ convId }) => {
       notifyStatus(convId, store.markRead(convId, me));
@@ -190,19 +263,21 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
       return {};
     }));
 
-    socket.on('typing', ({ convId, isTyping } = {}) => {
+    // What I'm doing in a chat: 'typing' or 'recording' (a voice message); isTyping=false clears it.
+    socket.on('typing', ({ convId, isTyping, activity } = {}) => {
       const conv = store.getConversation(convId);
       if (!conv || !conv.members.includes(me)) return;
+      activity = activity === 'recording' ? 'recording' : 'typing';
       for (const m of conv.members) {
-        if (m !== me) io.to(userRoom(m)).emit('typing', { convId, username: me, isTyping: !!isTyping });
+        if (m === me || (conv.type === 'direct' && store.blockedEither(me, m))) continue;
+        io.to(userRoom(m)).emit('typing', { convId, username: me, isTyping: !!isTyping, activity });
       }
     });
 
     socket.on('profile:update', handle(({ displayName, about }) => {
       const user = store.updateProfile(me, { displayName, about });
-      const peers = new Set();
-      for (const c of store.conversationsFor(me)) c.members.forEach((m) => peers.add(m));
-      for (const p of peers) io.to(userRoom(p)).emit('user:updated', { user: { ...user, online: true } });
+      io.to(userRoom(me)).emit('user:updated', { user: { ...user, online: true } });
+      for (const p of peersOf(me)) io.to(userRoom(p)).emit('user:updated', { user: userView(me, p) });
       return { user };
     }));
 

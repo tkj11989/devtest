@@ -12,8 +12,11 @@ const crypto = require('crypto');
 class Store {
   constructor({ file } = {}) {
     this.file = file === undefined ? path.join(__dirname, '..', 'data', 'db.json') : file;
-    this.data = { users: {}, conversations: {}, messages: {} };
+    this.data = { users: {}, conversations: {}, messages: {}, media: {} };
     this.sessions = new Map(); // token -> username
+    // Voice-message audio lives next to the data file (or in memory without one).
+    this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
+    this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
     this._saveTimer = null;
     this._load();
   }
@@ -22,7 +25,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, conversations: {}, messages: {}, ...parsed };
+      this.data = { users: {}, conversations: {}, messages: {}, media: {}, ...parsed };
     } catch (err) {
       console.error('Could not read data file, starting fresh:', err.message);
     }
@@ -101,6 +104,40 @@ class Store {
     const u = this.data.users[username];
     if (!u) return null;
     return { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
+  }
+
+  /** Public profile as seen by `viewer`: blocking hides "last seen" in both directions. */
+  publicUserFor(username, viewer) {
+    const u = this.publicUser(username);
+    if (u && viewer && this.blockedEither(username, viewer)) u.lastSeen = null;
+    return u;
+  }
+
+  // ---------- blocking ----------
+
+  hasBlocked(username, target) {
+    return !!this.data.users[username]?.blocked?.includes(target);
+  }
+
+  blockedEither(a, b) {
+    return this.hasBlocked(a, b) || this.hasBlocked(b, a);
+  }
+
+  blockedList(username) {
+    return [...(this.data.users[username]?.blocked || [])];
+  }
+
+  setBlocked(username, target, blocked) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    if (!this.data.users[target]) throw new Error('User not found');
+    if (target === username) throw new Error('You cannot block yourself');
+    const list = new Set(u.blocked || []);
+    if (blocked) list.add(target);
+    else list.delete(target);
+    u.blocked = [...list];
+    this._save();
+    return u.blocked;
   }
 
   updateProfile(username, { displayName, about }) {
@@ -190,13 +227,78 @@ class Store {
   }
 
   summarize(conv, username) {
-    const msgs = this.data.messages[conv.id] || [];
+    const msgs = (this.data.messages[conv.id] || []).filter((m) => Store.visibleTo(m, username));
     const unread = msgs.filter((m) => m.from !== username && !m.readBy.includes(username)).length;
+    const last = msgs[msgs.length - 1];
     return {
       ...conv,
-      lastMessage: msgs[msgs.length - 1] || null,
+      lastMessage: last ? this.viewFor(last, username) : null,
       unread,
     };
+  }
+
+  /** Messages from someone `username` has blocked are stored but never shown to them. */
+  static visibleTo(msg, username) {
+    return !msg.hiddenFor?.includes(username);
+  }
+
+  /** A message as `username` may see it: per-user fields are reduced to their own view. */
+  viewFor(msg, username) {
+    const { starredBy, hiddenFor, ...rest } = msg;
+    if (starredBy?.includes(username)) rest.starred = true;
+    return rest;
+  }
+
+  findMessage(msgId) {
+    for (const [convId, msgs] of Object.entries(this.data.messages)) {
+      const m = msgs.find((x) => x.id === msgId);
+      if (m) return { convId, message: m };
+    }
+    return null;
+  }
+
+  findByClientId(convId, from, clientId) {
+    if (!clientId) return null;
+    clientId = String(clientId).slice(0, 64);
+    return (this.data.messages[convId] || []).slice(-200).find((m) => m.from === from && m.clientId === clientId) || null;
+  }
+
+  // ---------- voice-message media ----------
+
+  saveMedia(convId, buffer, mime) {
+    const id = crypto.randomBytes(12).toString('hex');
+    if (this.mediaDir) {
+      fs.mkdirSync(this.mediaDir, { recursive: true });
+      fs.writeFileSync(path.join(this.mediaDir, id), buffer);
+    } else {
+      this.memoryMedia.set(id, buffer);
+    }
+    this.data.media[id] = { convId, mime, size: buffer.length, createdAt: Date.now() };
+    this._save();
+    return id;
+  }
+
+  /** `{ mime, buffer }` if `username` may access the media, else null. */
+  getMedia(id, username) {
+    const meta = this.data.media[id];
+    if (!meta || !this.isMember(meta.convId, username)) return null;
+    let buffer;
+    if (this.mediaDir) {
+      const file = path.join(this.mediaDir, path.basename(id));
+      if (!fs.existsSync(file)) return null;
+      buffer = fs.readFileSync(file);
+    } else {
+      buffer = this.memoryMedia.get(id);
+    }
+    return buffer ? { mime: meta.mime, buffer } : null;
+  }
+
+  deleteMedia(id) {
+    if (!this.data.media[id]) return;
+    delete this.data.media[id];
+    this.memoryMedia.delete(id);
+    if (this.mediaDir) fs.rmSync(path.join(this.mediaDir, path.basename(id)), { force: true });
+    this._save();
   }
 
   // ---------- messages ----------
@@ -205,17 +307,26 @@ class Store {
    * `masked`: hide the text behind a "tap to reveal" cover for recipients.
    * `clientId`: sender-generated id; re-sending the same clientId (a retry after a
    * timeout or reconnect) returns the stored message instead of duplicating it.
+   * `voice`: `{ mediaId, duration, mime }` for a voice message (text is then empty).
    */
-  addMessage(convId, from, text, { masked = false, clientId } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
-    if (clientId) {
-      clientId = String(clientId).slice(0, 64);
-      const existing = this.data.messages[convId].slice(-200).find((m) => m.from === from && m.clientId === clientId);
-      if (existing) return existing;
+    const existing = this.findByClientId(convId, from, clientId);
+    if (existing) return existing;
+
+    let hiddenFor = [];
+    if (conv.type === 'direct') {
+      const peer = conv.members.find((m) => m !== from);
+      if (this.hasBlocked(from, peer)) {
+        throw new Error(`Unblock ${this.publicUser(peer)?.displayName || peer} to send a message`);
+      }
+      // Like WhatsApp: the sender isn't told; the message just never gets delivered.
+      if (this.hasBlocked(peer, from)) hiddenFor = [peer];
     }
-    text = String(text || '').trim();
-    if (!text) throw new Error('Message is empty');
+
+    text = voice ? '' : String(text || '').trim();
+    if (!voice && !text) throw new Error('Message is empty');
     if (text.length > 4000) throw new Error('Message is too long');
     const msg = {
       id: crypto.randomBytes(8).toString('hex'),
@@ -226,8 +337,13 @@ class Store {
       deliveredTo: [],
       readBy: [],
     };
-    if (masked) msg.masked = true;
-    if (clientId) msg.clientId = clientId;
+    if (voice) {
+      msg.type = 'voice';
+      msg.voice = { mediaId: voice.mediaId, duration: Math.max(0, Math.round(Number(voice.duration) || 0)), mime: voice.mime };
+    }
+    if (masked && !voice) msg.masked = true;
+    if (clientId) msg.clientId = String(clientId).slice(0, 64);
+    if (hiddenFor.length) msg.hiddenFor = hiddenFor;
     this.data.messages[convId].push(msg);
     this._save();
     return msg;
@@ -235,9 +351,10 @@ class Store {
 
   /**
    * Record a voice/video call in the conversation history.
-   * `call` is `{ kind: 'audio'|'video', status: 'completed'|'missed'|'declined', duration }`.
+   * `call` is `{ kind: 'audio'|'video', status: 'completed'|'missed'|'declined', duration, group }`.
+   * `joined`: everyone who took part; for them the entry is not unread.
    */
-  addCallMessage(convId, from, { kind, status, duration = 0 }) {
+  addCallMessage(convId, from, { kind, status, duration = 0, group = false }, joined = []) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const msg = {
@@ -246,11 +363,11 @@ class Store {
       from,
       type: 'call',
       text: '',
-      call: { kind, status, duration },
+      call: { kind, status, duration, ...(group ? { group: true, joined: [...joined] } : {}) },
       ts: Date.now(),
       deliveredTo: [],
-      // Only missed/declined calls should show up as unread for the callee.
-      readBy: status === 'completed' ? conv.members.filter((m) => m !== from) : [],
+      // Only calls someone missed should show up as unread for them.
+      readBy: conv.members.filter((m) => m !== from && (joined.includes(m) || (!group && status === 'completed'))),
     };
     this.data.messages[convId].push(msg);
     this._save();
@@ -259,16 +376,43 @@ class Store {
 
   getMessages(convId, username, { before, limit = 50 } = {}) {
     if (!this.isMember(convId, username)) throw new Error('Not a member of this chat');
-    let msgs = this.data.messages[convId] || [];
+    let msgs = (this.data.messages[convId] || []).filter((m) => Store.visibleTo(m, username));
     if (before) msgs = msgs.filter((m) => m.ts < before);
-    return msgs.slice(-limit);
+    return msgs.slice(-limit).map((m) => this.viewFor(m, username));
+  }
+
+  // ---------- starred messages (private to each user) ----------
+
+  setStarred(msgId, username, starred) {
+    const found = this.findMessage(msgId);
+    if (!found || !this.isMember(found.convId, username) || !Store.visibleTo(found.message, username)) {
+      throw new Error('Message not found');
+    }
+    const m = found.message;
+    if (m.deleted) throw new Error('Deleted messages cannot be starred');
+    const set = new Set(m.starredBy || []);
+    if (starred) set.add(username);
+    else set.delete(username);
+    if (set.size) m.starredBy = [...set];
+    else delete m.starredBy;
+    this._save();
+    return { convId: found.convId, message: this.viewFor(m, username) };
+  }
+
+  starredFor(username) {
+    const out = [];
+    for (const [convId, msgs] of Object.entries(this.data.messages)) {
+      if (!this.isMember(convId, username)) continue;
+      for (const m of msgs) if (m.starredBy?.includes(username) && !m.deleted) out.push(this.viewFor(m, username));
+    }
+    return out.sort((a, b) => b.ts - a.ts);
   }
 
   /** Mark messages delivered to `username`. Returns messages whose status changed. */
   markDelivered(convId, username) {
     const changed = [];
     for (const m of this.data.messages[convId] || []) {
-      if (m.from !== username && !m.deliveredTo.includes(username)) {
+      if (m.from !== username && !m.deliveredTo.includes(username) && Store.visibleTo(m, username)) {
         m.deliveredTo.push(username);
         changed.push(m);
       }
@@ -282,7 +426,7 @@ class Store {
     if (!this.isMember(convId, username)) return [];
     const changed = [];
     for (const m of this.data.messages[convId] || []) {
-      if (m.from === username) continue;
+      if (m.from === username || !Store.visibleTo(m, username)) continue;
       let touched = false;
       if (!m.deliveredTo.includes(username)) {
         m.deliveredTo.push(username);
@@ -304,8 +448,12 @@ class Store {
       if (!m) continue;
       if (m.from !== username) throw new Error('You can only delete your own messages');
       if (m.type === 'call') throw new Error('Call history entries cannot be deleted');
+      if (m.voice) this.deleteMedia(m.voice.mediaId);
       m.text = '';
       m.deleted = true;
+      delete m.voice;
+      delete m.masked;
+      delete m.starredBy;
       this._save();
       return { convId, message: m };
     }
