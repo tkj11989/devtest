@@ -168,6 +168,21 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
 
   const VOICE_MAX_BYTES = 3 * 1024 * 1024;
   const VOICE_MAX_SECONDS = 5 * 60;
+  const PHOTO_MAX_BYTES = 3 * 1024 * 1024;
+
+  /** Send each person their own view of a status (only the owner sees who viewed it). */
+  const broadcastStatus = (status, event) => {
+    for (const u of [status.owner, ...store.statusAudience(status.owner)]) {
+      io.to(userRoom(u)).emit(event, event === 'status:deleted' ? { id: status.id } : { status: store.statusView(status, u) });
+    }
+  };
+
+  // Expired status updates disappear for everyone.
+  const pruneTimer = setInterval(() => {
+    for (const s of store.pruneStatuses()) broadcastStatus(s, 'status:deleted');
+  }, 60 * 1000);
+  pruneTimer.unref();
+  server.on('close', () => clearInterval(pruneTimer));
 
   io.on('connection', (socket) => {
     const me = socket.data.username;
@@ -251,6 +266,62 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
     }));
 
     socket.on('messages:starred', handle(() => ({ messages: store.starredFor(me) })));
+
+    // ----- status updates -----
+
+    socket.on('statuses', handle(() => {
+      const statuses = store.statusesFor(me);
+      return { statuses, users: usersFor(new Set(statuses.map((s) => s.owner)), me) };
+    }));
+
+    socket.on('status:post', handle(({ type, text, bg, caption, mime, data }) => {
+      let status;
+      if (type === 'image') {
+        if (!Buffer.isBuffer(data) || data.length === 0) throw new Error('Photo is empty');
+        if (data.length > PHOTO_MAX_BYTES) throw new Error('Photo is too large');
+        if (!/^image\/(jpeg|png|webp|gif)$/.test(String(mime))) throw new Error('Unsupported image format');
+        const id = store.newStatusId();
+        const mediaId = store.saveMedia({ statusId: id }, data, mime);
+        try {
+          status = store.addStatus(me, { type, mediaId, caption }, id);
+        } catch (err) {
+          store.deleteMedia(mediaId);
+          throw err;
+        }
+      } else {
+        status = store.addStatus(me, { type, text, bg });
+      }
+      broadcastStatus(status, 'status:new');
+      return { status: store.statusView(status, me) };
+    }));
+
+    socket.on('status:view', handle(({ id }) => {
+      const ts = store.markStatusViewed(id, me);
+      if (ts) io.to(userRoom(store.data.statuses[id].owner)).emit('status:viewed', { id, username: me, ts });
+      return {};
+    }));
+
+    socket.on('status:delete', handle(({ id }) => {
+      // Everyone who could see it hears about the delete, so look up the audience first.
+      const status = store.data.statuses[id];
+      if (!status || status.owner !== me) throw new Error('Status not found');
+      broadcastStatus(status, 'status:deleted');
+      store.deleteStatus(id, me);
+      return {};
+    }));
+
+    /** Replying to a status sends a message in the one-to-one chat with its owner. */
+    socket.on('status:reply', handle(({ id, text, clientId }) => {
+      const status = store.data.statuses[id];
+      if (!store.canSeeStatus(status, me) || status.owner === me) throw new Error('Status not found');
+      const conv = store.getOrCreateDirect(me, status.owner);
+      const preview = status.type === 'text' ? status.text.slice(0, 120) : status.caption.slice(0, 120);
+      const message = sendMessage(me, conv.id, text, {
+        clientId,
+        statusReply: { statusId: status.id, owner: status.owner, type: status.type, preview, ...(status.bg ? { bg: status.bg } : {}) },
+      });
+      return { message, conversation: store.summarize(conv, me) };
+    }));
 
     socket.on('messages:read', handle(({ convId }) => {
       notifyStatus(convId, store.markRead(convId, me));

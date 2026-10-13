@@ -42,6 +42,9 @@
         <header class="bar">
           <button class="avatar-btn" id="btn-profile" title="Profile"></button>
           <div class="bar-actions">
+            <button class="icon-btn status-btn" id="btn-status" title="Status">
+              <svg viewBox="0 0 24 24"><path d="M12 20.66a8.6 8.6 0 0 1-2.24-.3l.52-1.93a6.7 6.7 0 0 0 3.44 0l.52 1.93a8.6 8.6 0 0 1-2.24.3Zm-5.53-2.02a8.7 8.7 0 0 1-2.75-4.76l1.95-.42a6.7 6.7 0 0 0 2.12 3.67l-1.32 1.51Zm11.06 0-1.32-1.51a6.7 6.7 0 0 0 2.12-3.67l1.95.42a8.7 8.7 0 0 1-2.75 4.76ZM5.67 10.7l-1.95-.42A8.7 8.7 0 0 1 6.47 5.5l1.32 1.51A6.7 6.7 0 0 0 5.67 10.7Zm12.66 0a6.7 6.7 0 0 0-2.12-3.68l1.32-1.51a8.7 8.7 0 0 1 2.75 4.77l-1.95.42ZM10.28 5.57l-.52-1.93a8.7 8.7 0 0 1 4.48 0l-.52 1.93a6.7 6.7 0 0 0-3.44 0ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+            </button>
             <button class="icon-btn img-btn" id="btn-starred" title="Starred messages"><img src="icons/starred.png" alt="Starred messages" /></button>
             <button class="icon-btn" id="btn-new-group" title="New group">
               <svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13Zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5Z"/></svg>
@@ -80,6 +83,33 @@
         </div>
         <ul id="group-results" class="list"></ul>
         <div class="pad"><p id="group-error" class="error"></p><button class="primary wide" id="btn-create-group">Create group</button></div>
+      </div>
+
+      <!-- Status updates -->
+      <div class="panel overlay hidden" id="panel-status">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Status</h2></header>
+        <div class="status-scroll">
+          <div class="my-status" id="my-status" role="button" tabindex="0">
+            <div class="body">
+              <div class="name">My status</div>
+              <div class="sub" id="my-status-sub"></div>
+            </div>
+            <div class="status-actions">
+              <button class="icon-btn" id="btn-status-text" title="Text status">
+                <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25Zm17.7-10.2a1 1 0 0 0 0-1.42l-2.33-2.33a1 1 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>
+              </button>
+              <button class="icon-btn" id="btn-status-photo" title="Photo status">
+                <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4ZM9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17L15 2H9Zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z"/></svg>
+              </button>
+              <input type="file" id="status-photo-input" accept="image/*" hidden />
+            </div>
+          </div>
+          <h3 class="section-title hidden" id="status-recent-title">Recent updates</h3>
+          <ul class="list status-list" id="status-recent"></ul>
+          <h3 class="section-title hidden" id="status-viewed-title">Viewed updates</h3>
+          <ul class="list status-list" id="status-viewed"></ul>
+          <p class="muted pad hidden" id="status-empty">No updates yet. Status updates from people you chat with one-to-one appear here and disappear after 24 hours.</p>
+        </div>
       </div>
 
       <!-- Starred messages -->
@@ -180,6 +210,62 @@
     </section>
   </main>
 
+  <!-- ========== Status: new update ========== -->
+  <section id="status-composer" class="status-composer hidden" data-mode="text">
+    <header class="sc-top">
+      <button class="icon-btn light" id="btn-status-cancel" title="Cancel">&#10005;</button>
+      <button class="icon-btn light text-only" id="btn-status-bg" title="Change colour">
+        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01a1.5 1.5 0 0 1 1.12-2.49H16a5 5 0 0 0 5-5C21 6.58 16.97 3 12 3Zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
+      </button>
+    </header>
+    <textarea id="status-text-input" class="text-only" maxlength="700" placeholder="Type a status"></textarea>
+    <img id="status-photo-preview" class="photo-only" alt="Photo preview" />
+    <footer class="sc-bottom">
+      <input id="status-caption" class="photo-only" maxlength="700" placeholder="Add a caption…" />
+      <span class="error" id="status-compose-error"></span>
+      <button class="send" id="btn-status-post" title="Post status">
+        <svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2v7Z"/></svg>
+      </button>
+    </footer>
+  </section>
+
+  <!-- ========== Status: viewer ========== -->
+  <section id="status-viewer" class="status-viewer hidden">
+    <div class="sv-top">
+      <div class="sv-bars" id="sv-bars"></div>
+      <div class="sv-head">
+        <div class="avatar" id="sv-avatar"></div>
+        <div class="sv-who"><div id="sv-name"></div><div id="sv-time" class="sv-time"></div></div>
+        <button class="icon-btn light mine-only" id="sv-delete" title="Delete status">
+          <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+        </button>
+        <button class="icon-btn light" id="sv-close" title="Close">&#10005;</button>
+      </div>
+    </div>
+    <div class="sv-stage" id="sv-stage">
+      <div class="sv-text" id="sv-text"></div>
+      <img class="sv-media" id="sv-media" alt="" draggable="false" />
+    </div>
+    <div class="sv-caption hidden" id="sv-caption"></div>
+    <div class="sv-bottom">
+      <button class="sv-views mine-only" id="sv-views" title="Viewed by">
+        <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+        <span id="sv-views-count">0</span>
+      </button>
+      <form class="sv-reply others-only" id="sv-reply">
+        <input id="sv-reply-input" maxlength="4000" placeholder="Reply…" autocomplete="off" />
+        <button class="send" title="Send reply"><svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2v7Z"/></svg></button>
+      </form>
+    </div>
+    <div class="sv-viewers hidden" id="sv-viewers">
+      <header><h3>Viewed by</h3><button class="icon-btn" id="sv-viewers-close" title="Close">&#10005;</button></header>
+      <ul class="list" id="sv-viewers-list"></ul>
+      <p class="muted pad hidden" id="sv-viewers-empty">No views yet</p>
+    </div>
+  </section>
+
+  <div class="toast hidden" id="toast" role="status"></div>
+
   <!-- ========== Voice / video call screen ========== -->
   <section id="call" class="call hidden" aria-live="polite">
     <div id="call-grid" class="call-grid"></div>
@@ -205,6 +291,7 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="call.js"></script>
+  <script src="status.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

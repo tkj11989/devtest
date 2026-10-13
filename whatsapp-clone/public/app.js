@@ -216,6 +216,7 @@
     if (state.token) fetch('/api/logout', { method: 'POST', headers: { Authorization: `Bearer ${state.token}` } }).catch(() => {});
     storage.del('chat.token');
     state.calls?.dispose();
+    statusUpdates.reset();
     state.socket?.disconnect();
     Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null });
     state.conversations.clear();
@@ -244,6 +245,7 @@
       displayName,
       paintAvatar,
     });
+    statusUpdates.attach(socket);
 
     socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') {
@@ -265,6 +267,7 @@
         $('#app').classList.remove('hidden');
         paintAvatar($('#btn-profile'), me.displayName, me.username);
         await loadConversations();
+        statusUpdates.load();
         // Refresh the open chat after a reconnect.
         if (state.activeId) openChat(state.activeId);
         // Back online: resend anything that failed while we were offline.
@@ -613,6 +616,7 @@
         author.style.color = colorFor(m.from);
         bubble.appendChild(author);
       }
+      if (m.statusReply && !m.deleted) bubble.appendChild(statusQuote(m.statusReply));
       if (m.deleted) {
         const text = el('span', 'text');
         text.append(icon('deleted', 'inline-icon'), 'This message was deleted');
@@ -669,6 +673,27 @@
     if (scrollToEnd || nearBottom) box.scrollTop = box.scrollHeight;
   }
 
+  /** The status update a message replies to, shown above the reply. */
+  function statusQuote(r) {
+    const q = el('button', 'status-quote');
+    q.type = 'button';
+    q.title = 'View status';
+    const who = r.owner === state.me.username ? 'You' : displayName(r.owner);
+    const body = el('div', 'sq-body');
+    body.appendChild(el('div', 'sq-who', `${who} · Status`));
+    body.appendChild(el('div', 'sq-text', r.type === 'image' ? `📷 ${r.preview || 'Photo'}` : r.preview));
+    q.appendChild(body);
+    if (r.type === 'text') {
+      const sw = el('div', 'sq-swatch', r.preview.slice(0, 2));
+      sw.style.background = r.bg || 'var(--green)';
+      q.appendChild(sw);
+    }
+    q.addEventListener('click', () => {
+      if (!statusUpdates.openById(r.statusId)) toast('This status update is no longer available');
+    });
+    return q;
+  }
+
   function callBubble(m, conv, mine, first) {
     const { title, sub, missed, icon: iconName } = describeCall(m);
     const bubble = el('div', `msg call-entry${mine ? ' out' : ''}${first ? ' first' : ''}${missed ? ' missed' : ''}`);
@@ -711,16 +736,17 @@
   const player = new Audio();
   let playingId = null;
 
-  async function voiceUrl(m) {
-    if (m.localUrl) return m.localUrl;
-    const id = m.voice.mediaId;
+  /** Object URL for uploaded media (voice audio, status photos); downloaded once with my token. */
+  async function mediaUrl(id) {
     if (!state.voiceUrls.has(id)) {
       const res = await fetch(`/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } });
-      if (!res.ok) throw new Error('Could not load the voice message');
+      if (!res.ok) throw new Error('Could not load media');
       state.voiceUrls.set(id, URL.createObjectURL(await res.blob()));
     }
     return state.voiceUrls.get(id);
   }
+
+  const voiceUrl = (m) => (m.localUrl ? Promise.resolve(m.localUrl) : mediaUrl(m.voice.mediaId));
 
   function voicePlayer(m) {
     const wrap = el('div', 'voice-player');
@@ -1206,6 +1232,33 @@
   });
 
   $('#btn-logout').addEventListener('click', logout);
+
+  // Short notices at the bottom of the screen.
+  function toast(text) {
+    const t = $('#toast');
+    t.textContent = text;
+    t.classList.remove('hidden');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => t.classList.add('hidden'), 2600);
+  }
+
+  // Status updates (see status.js)
+  const statusUpdates = window.createStatusController({
+    emit,
+    me: () => state.me,
+    displayName,
+    paintAvatar,
+    mediaUrl,
+    toast,
+    mergeUsers: (users) => {
+      for (const [u, info] of Object.entries(users || {})) state.users[u] = { ...(state.users[u] || {}), ...info };
+    },
+  });
+  $('#btn-status').addEventListener('click', () => {
+    openPanel('#panel-status');
+    statusUpdates.renderPanel();
+    statusUpdates.load();
+  });
 
   // Starred messages
   async function loadStarred() {

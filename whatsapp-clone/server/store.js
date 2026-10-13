@@ -10,9 +10,11 @@ const crypto = require('crypto');
  * Pass `file: null` to keep data in memory only (used by tests).
  */
 class Store {
-  constructor({ file } = {}) {
+  /** `statusTtlMs`: how long a status update stays up (24 hours, shorter in tests). */
+  constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000 } = {}) {
+    this.statusTtlMs = statusTtlMs;
     this.file = file === undefined ? path.join(__dirname, '..', 'data', 'db.json') : file;
-    this.data = { users: {}, conversations: {}, messages: {}, media: {} };
+    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {} };
     this.sessions = new Map(); // token -> username
     // Voice-message audio lives next to the data file (or in memory without one).
     this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
@@ -25,7 +27,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, conversations: {}, messages: {}, media: {}, ...parsed };
+      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, ...parsed };
     } catch (err) {
       console.error('Could not read data file, starting fresh:', err.message);
     }
@@ -265,7 +267,8 @@ class Store {
 
   // ---------- voice-message media ----------
 
-  saveMedia(convId, buffer, mime) {
+  /** `scope` is a conversation id (voice messages) or `{ statusId }` (status photos). */
+  saveMedia(scope, buffer, mime) {
     const id = crypto.randomBytes(12).toString('hex');
     if (this.mediaDir) {
       fs.mkdirSync(this.mediaDir, { recursive: true });
@@ -273,7 +276,8 @@ class Store {
     } else {
       this.memoryMedia.set(id, buffer);
     }
-    this.data.media[id] = { convId, mime, size: buffer.length, createdAt: Date.now() };
+    const where = typeof scope === 'string' ? { convId: scope } : { statusId: scope.statusId };
+    this.data.media[id] = { ...where, mime, size: buffer.length, createdAt: Date.now() };
     this._save();
     return id;
   }
@@ -281,7 +285,11 @@ class Store {
   /** `{ mime, buffer }` if `username` may access the media, else null. */
   getMedia(id, username) {
     const meta = this.data.media[id];
-    if (!meta || !this.isMember(meta.convId, username)) return null;
+    if (!meta) return null;
+    const allowed = meta.statusId
+      ? this.canSeeStatus(this.data.statuses[meta.statusId], username)
+      : this.isMember(meta.convId, username);
+    if (!allowed) return null;
     let buffer;
     if (this.mediaDir) {
       const file = path.join(this.mediaDir, path.basename(id));
@@ -308,8 +316,9 @@ class Store {
    * `clientId`: sender-generated id; re-sending the same clientId (a retry after a
    * timeout or reconnect) returns the stored message instead of duplicating it.
    * `voice`: `{ mediaId, duration, mime }` for a voice message (text is then empty).
+   * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -342,6 +351,7 @@ class Store {
       msg.voice = { mediaId: voice.mediaId, duration: Math.max(0, Math.round(Number(voice.duration) || 0)), mime: voice.mime };
     }
     if (masked && !voice) msg.masked = true;
+    if (statusReply) msg.statusReply = statusReply;
     if (clientId) msg.clientId = String(clientId).slice(0, 64);
     if (hiddenFor.length) msg.hiddenFor = hiddenFor;
     this.data.messages[convId].push(msg);
@@ -397,6 +407,103 @@ class Store {
     else delete m.starredBy;
     this._save();
     return { convId: found.convId, message: this.viewFor(m, username) };
+  }
+
+  // ---------- status updates (disappear after statusTtlMs) ----------
+
+  /** Everyone `username` has a one-to-one chat with: the audience for their status updates. */
+  directPeers(username) {
+    const peers = new Set();
+    for (const c of Object.values(this.data.conversations)) {
+      if (c.type === 'direct' && c.members.includes(username)) c.members.forEach((m) => m !== username && peers.add(m));
+    }
+    return peers;
+  }
+
+  /** Who sees `owner`'s status updates right now. */
+  statusAudience(owner) {
+    return [...this.directPeers(owner)].filter((u) => !this.blockedEither(owner, u));
+  }
+
+  canSeeStatus(status, viewer) {
+    if (!status || status.expiresAt <= Date.now()) return false;
+    if (status.owner === viewer) return true;
+    return this.directPeers(status.owner).has(viewer) && !this.blockedEither(status.owner, viewer);
+  }
+
+  newStatusId() {
+    return crypto.randomBytes(8).toString('hex');
+  }
+
+  /**
+   * `fields`: `{ type: 'text', text, bg }` or `{ type: 'image', mediaId, caption }`.
+   * Pass `id` when media was already saved for it (see newStatusId).
+   */
+  addStatus(owner, fields, id = this.newStatusId()) {
+    if (!this.data.users[owner]) throw new Error('No such user');
+    const status = { id, owner, ts: Date.now(), expiresAt: Date.now() + this.statusTtlMs, views: {} };
+    if (fields.type === 'text') {
+      const text = String(fields.text || '').trim();
+      if (!text) throw new Error('Status is empty');
+      if (text.length > 700) throw new Error('Status is too long');
+      Object.assign(status, { type: 'text', text, bg: /^#[0-9a-f]{6}$/i.test(fields.bg || '') ? fields.bg : '#00a884' });
+    } else if (fields.type === 'image') {
+      if (!fields.mediaId) throw new Error('Photo is missing');
+      Object.assign(status, { type: 'image', mediaId: fields.mediaId, caption: String(fields.caption || '').trim().slice(0, 700) });
+    } else {
+      throw new Error('Invalid status type');
+    }
+    this.data.statuses[id] = status;
+    this._save();
+    return status;
+  }
+
+  /** A status as `viewer` may see it: only the owner gets the list of viewers. */
+  statusView(status, viewer) {
+    const { views, ...rest } = status;
+    if (status.owner === viewer) {
+      rest.views = Object.entries(views).map(([username, ts]) => ({ username, ts })).sort((a, b) => b.ts - a.ts);
+    } else if (views[viewer]) {
+      rest.viewed = true;
+    }
+    return rest;
+  }
+
+  statusesFor(viewer) {
+    return Object.values(this.data.statuses)
+      .filter((s) => this.canSeeStatus(s, viewer))
+      .sort((a, b) => a.ts - b.ts)
+      .map((s) => this.statusView(s, viewer));
+  }
+
+  /** Record that `viewer` saw a status. Returns the view time if this is their first view, else null. */
+  markStatusViewed(id, viewer) {
+    const status = this.data.statuses[id];
+    if (!this.canSeeStatus(status, viewer)) throw new Error('Status not found');
+    if (status.owner === viewer || status.views[viewer]) return null;
+    status.views[viewer] = Date.now();
+    this._save();
+    return status.views[viewer];
+  }
+
+  deleteStatus(id, owner) {
+    const status = this.data.statuses[id];
+    if (!status || status.owner !== owner) throw new Error('Status not found');
+    this._removeStatus(status);
+    return status;
+  }
+
+  /** Drop expired updates (and their photos). Returns the removed statuses. */
+  pruneStatuses(now = Date.now()) {
+    const expired = Object.values(this.data.statuses).filter((s) => s.expiresAt <= now);
+    expired.forEach((s) => this._removeStatus(s));
+    return expired;
+  }
+
+  _removeStatus(status) {
+    delete this.data.statuses[status.id];
+    if (status.mediaId) this.deleteMedia(status.mediaId);
+    this._save();
   }
 
   starredFor(username) {

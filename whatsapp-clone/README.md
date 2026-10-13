@@ -8,6 +8,7 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - One-to-one chats and group chats
 - Real-time messaging over WebSockets
 - **Voice and video calls**, 1:1 and **group calls** (up to 6 people, peer-to-peer WebRTC): ringing on all devices, accept/decline, mute, camera on/off, **hold**, call timer, join a group call that's already running, and call history in the chat (missed / declined / duration, tap to call back)
+- **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Starred messages**: star any message, find them all in the starred list (stars are private to you)
 - **Block contacts**: blocked contacts can't message or call you and don't see your online status or last seen
@@ -20,7 +21,7 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - Delete your own messages ("This message was deleted")
 - Editable profile (display name and about)
 - Emoji picker, day separators, responsive layout (mobile + desktop), dark mode
-- Data persisted to `data/db.json` (voice-message audio in `data/media/`)
+- Data persisted to `data/db.json` (voice-message audio and status photos in `data/media/`)
 
 ## Getting started
 
@@ -47,6 +48,13 @@ Calls use WebRTC, so audio/video goes directly between the two browsers; the ser
   ```
 - Group calls connect every participant to every other one (a "mesh"), so they're limited to 6 people; larger calls would need a media server (SFU).
 - Hold stops sending your audio/video and mutes theirs until you resume.
+
+### Status updates
+
+- Your updates are shared with everyone you have a **one-to-one chat** with (there is no separate contact list), except people blocked either way. Group members don't see them unless you also chat one-to-one.
+- Updates expire after 24 hours; the server removes them (and their photos) automatically.
+- Only you can see who viewed your updates.
+- Photos are resized in the browser (longest side 1600px, JPEG) before upload, and only people who can see the update can download them.
 
 ### Icons
 
@@ -102,13 +110,15 @@ whatsapp-clone/
 │   ├── index.html   # UI markup
 │   ├── styles.css   # WhatsApp-style theme (light/dark)
 │   ├── app.js       # Client logic
-│   └── call.js      # WebRTC call controller and call screen
+│   ├── call.js      # WebRTC call controller and call screen
+│   └── status.js    # Status updates: list, composer and viewer
 ├── design/          # Source design sheets for the icons
 ├── tools/
 │   └── extract-icons.py
 └── test/
     ├── app.test.js
-    └── calls.test.js
+    ├── calls.test.js
+    └── status.test.js
 ```
 
 ## Socket events
@@ -125,6 +135,11 @@ whatsapp-clone/
 | `message:star`      | Star / unstar a message                  |
 | `messages:starred`  | List my starred messages                 |
 | `user:block`        | Block / unblock a contact                |
+| `statuses`          | Status updates I can see (my own include who viewed them) |
+| `status:post`       | Post a text or photo status update       |
+| `status:view`       | Mark an update as seen                   |
+| `status:delete`     | Delete one of my updates                 |
+| `status:reply`      | Reply to an update (sent as a chat message) |
 | `messages:read`     | Mark a chat as read                      |
 | `message:delete`    | Delete my message                        |
 | `typing`            | Typing or recording started/stopped (`activity`) |
@@ -135,9 +150,9 @@ whatsapp-clone/
 | `call:hold`         | Put the call on hold / resume            |
 | `call:end`          | Leave / hang up                          |
 
-Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`.
+Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`.
 
-Voice-message audio is downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
+Voice-message audio and status photos are downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
 
 ## Notes / next steps
 
