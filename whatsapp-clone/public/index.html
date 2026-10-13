@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChatApp</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ========== Auth screen ========== -->
+  <section id="auth" class="auth hidden">
+    <div class="auth-card">
+      <div class="brand">
+        <svg viewBox="0 0 24 24" class="brand-logo" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Z"/></svg>
+        <h1>ChatApp</h1>
+      </div>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-mode="login" role="tab">Log in</button>
+        <button class="tab" data-mode="register" role="tab">Sign up</button>
+      </div>
+      <form id="auth-form" autocomplete="on">
+        <label>Username
+          <input name="username" required minlength="3" maxlength="20" autocomplete="username" />
+        </label>
+        <label class="register-only hidden">Display name
+          <input name="displayName" maxlength="40" />
+        </label>
+        <label>Password
+          <input name="password" type="password" required minlength="4" autocomplete="current-password" />
+        </label>
+        <p id="auth-error" class="error" role="alert"></p>
+        <button type="submit" class="primary" id="auth-submit">Log in</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ========== Main app ========== -->
+  <main id="app" class="app hidden">
+    <aside class="sidebar">
+      <!-- Chats list -->
+      <div class="panel" id="panel-chats">
+        <header class="bar">
+          <button class="avatar-btn" id="btn-profile" title="Profile"></button>
+          <div class="bar-actions">
+            <button class="icon-btn" id="btn-new-group" title="New group">
+              <svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13Zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5Z"/></svg>
+            </button>
+            <button class="icon-btn" id="btn-new-chat" title="New chat">
+              <svg viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-2 7h-4v4h-2v-4H7V8h4V4h2v4h4v2Z"/></svg>
+            </button>
+            <button class="icon-btn" id="btn-logout" title="Log out">
+              <svg viewBox="0 0 24 24"><path d="M10 17v-3H3v-4h7V7l5 5-5 5Zm9-14H12v2h7v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z"/></svg>
+            </button>
+          </div>
+        </header>
+        <div class="search"><input id="chat-filter" placeholder="Search chats" /></div>
+        <ul id="chat-list" class="list"></ul>
+        <p id="chat-list-empty" class="muted pad hidden">No chats yet. Tap the + icon to start one.</p>
+      </div>
+
+      <!-- New chat -->
+      <div class="panel overlay hidden" id="panel-new-chat">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>New chat</h2></header>
+        <div class="search"><input id="user-search" placeholder="Search people by name or username" /></div>
+        <ul id="user-results" class="list"></ul>
+      </div>
+
+      <!-- New group -->
+      <div class="panel overlay hidden" id="panel-new-group">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>New group</h2></header>
+        <div class="pad stack">
+          <input id="group-name" placeholder="Group name" maxlength="50" />
+          <div id="group-chips" class="chips"></div>
+          <input id="group-search" placeholder="Add participants" />
+        </div>
+        <ul id="group-results" class="list"></ul>
+        <div class="pad"><p id="group-error" class="error"></p><button class="primary wide" id="btn-create-group">Create group</button></div>
+      </div>
+
+      <!-- Profile -->
+      <div class="panel overlay hidden" id="panel-profile">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Profile</h2></header>
+        <div class="pad stack center">
+          <div id="profile-avatar" class="avatar xl"></div>
+          <p class="muted" id="profile-username"></p>
+        </div>
+        <form id="profile-form" class="pad stack">
+          <label>Your name <input name="displayName" maxlength="40" /></label>
+          <label>About <input name="about" maxlength="140" /></label>
+          <button class="primary" type="submit">Save</button>
+          <p id="profile-msg" class="muted"></p>
+        </form>
+      </div>
+    </aside>
+
+    <section class="chat" id="chat">
+      <div class="empty-state" id="empty-state">
+        <svg viewBox="0 0 24 24" class="brand-logo big" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Z"/></svg>
+        <h2>ChatApp</h2>
+        <p class="muted">Send and receive messages in real time.<br />Select a chat or start a new one.</p>
+      </div>
+
+      <div class="chat-view hidden" id="chat-view">
+        <header class="bar">
+          <button class="icon-btn back mobile-only" id="btn-back">&larr;</button>
+          <div class="avatar" id="chat-avatar"></div>
+          <div class="chat-title">
+            <div id="chat-name" class="name"></div>
+            <div id="chat-status" class="sub"></div>
+          </div>
+        </header>
+        <div class="messages" id="messages"></div>
+        <form class="composer" id="composer">
+          <div class="emoji-wrap">
+            <button type="button" class="icon-btn" id="btn-emoji" title="Emoji">&#128578;</button>
+            <div class="emoji-picker hidden" id="emoji-picker"></div>
+          </div>
+          <textarea id="message-input" rows="1" placeholder="Type a message" maxlength="4000"></textarea>
+          <button type="submit" class="send" title="Send">
+            <svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2v7Z"/></svg>
+          </button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
