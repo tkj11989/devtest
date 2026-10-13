@@ -159,10 +159,13 @@ function createApp({ store = new Store(), tls = null, iceServers = iceServersFro
       messages: store.getMessages(convId, me, { before }),
     })));
 
-    socket.on('message:send', handle(({ convId, text }) => {
+    socket.on('message:send', handle(({ convId, text, masked, clientId }) => {
       const conv = store.getConversation(convId);
       const isFirst = conv && (store.data.messages[convId] || []).length === 0;
-      const msg = store.addMessage(convId, me, text);
+      const count = (store.data.messages[convId] || []).length;
+      const msg = store.addMessage(convId, me, text, { masked: !!masked, clientId });
+      // A retried send of a message we already have: just acknowledge it again.
+      if ((store.data.messages[convId] || []).length === count) return { message: msg };
 
       // A brand new direct chat appears in the recipient's list on first message.
       if (isFirst && conv.type === 'direct') {

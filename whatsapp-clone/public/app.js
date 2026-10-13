@@ -26,6 +26,9 @@
     groupMembers: new Set(),
     iceServers: [],
     calls: null, // call controller (see call.js)
+    outbox: new Map(), // clientId -> my message not yet confirmed by the server
+    revealed: new Set(), // ids of masked messages this viewer chose to reveal
+    maskNext: false, // composer: send the next message masked
   };
 
   // ---------- helpers ----------
@@ -86,23 +89,37 @@
   const convTitle = (c) => (c.type === 'group' ? c.name : displayName(c.members.find((m) => m !== state.me.username)));
   const convPeer = (c) => (c.type === 'direct' ? c.members.find((m) => m !== state.me.username) : null);
 
-  /** 'sent' | 'delivered' | 'read' for a message I sent. */
+  /**
+   * Status of a message I sent:
+   *   'pending'   sending, or on the server but not yet delivered to every recipient
+   *   'delivered' delivered to every recipient
+   *   'read'      read by every recipient
+   *   'failed'    could not be sent (tap to retry)
+   */
   function statusOf(msg, conv) {
+    if (msg.localStatus) return msg.localStatus === 'failed' ? 'failed' : 'pending';
     const others = conv.members.filter((m) => m !== msg.from);
     if (others.length && others.every((m) => msg.readBy.includes(m))) return 'read';
     if (others.length && others.every((m) => msg.deliveredTo.includes(m))) return 'delivered';
-    return 'sent';
+    return 'pending';
   }
-  function ticks(status) {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 16 11');
-    svg.setAttribute('class', 'ticks' + (status === 'read' ? ' read' : ''));
-    svg.setAttribute('aria-label', status);
-    const d = status === 'sent' ? 'M1.5 6 4.5 9 10.5 2' : 'M1 6 4 9 10 2 M6 8.2 7 9 13 2';
-    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    p.setAttribute('d', d);
-    svg.appendChild(p);
-    return svg;
+
+  // Icons in public/icons/ (cut from the design sheet by tools/extract-status-icons.py)
+  const ICON_LABELS = {
+    pending: 'Not delivered yet',
+    delivered: 'Delivered',
+    read: 'Read',
+    failed: 'Not sent',
+    deleted: 'Deleted',
+    masked: 'Masked',
+  };
+  function icon(name, cls = 'status-icon') {
+    const img = el('img', `${cls} icon-${name}`);
+    img.src = `icons/${name}.png`;
+    img.alt = ICON_LABELS[name];
+    img.title = ICON_LABELS[name];
+    img.draggable = false;
+    return img;
   }
 
   // ---------- call history entries ----------
@@ -191,6 +208,8 @@
     Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null });
     state.conversations.clear();
     state.messages.clear();
+    state.outbox.clear();
+    state.revealed.clear();
     state.users = {};
     showAuth();
   }
@@ -230,6 +249,8 @@
         await loadConversations();
         // Refresh the open chat after a reconnect.
         if (state.activeId) openChat(state.activeId);
+        // Back online: resend anything that failed while we were offline.
+        for (const m of state.outbox.values()) if (m.localStatus === 'failed') deliver(m);
       } catch (err) {
         console.error(err);
       }
@@ -343,12 +364,19 @@
       } else if (c.lastMessage) {
         const m = c.lastMessage;
         const mine = m.from === state.me.username;
-        if (mine && !m.deleted) preview.appendChild(ticks(statusOf(m, c)));
         let prefix = '';
         if (c.type === 'group') prefix = mine ? 'You: ' : `${displayName(m.from)}: `;
-        preview.appendChild(document.createTextNode(
-          (mine && !m.deleted ? ' ' : '') + (m.deleted ? '🚫 This message was deleted' : prefix + m.text),
-        ));
+        let text;
+        if (m.deleted) {
+          preview.appendChild(icon('deleted'));
+          text = 'This message was deleted';
+        } else {
+          if (mine) preview.appendChild(icon(statusOf(m, c)));
+          // Masked text never shows in the chat list, not even to the sender.
+          if (m.masked) preview.appendChild(icon('masked'));
+          text = prefix + (m.masked ? 'Masked message' : m.text);
+        }
+        preview.appendChild(document.createTextNode(text));
       } else if (c.type === 'group') {
         preview.textContent = `${c.members.length} participants`;
       }
@@ -382,6 +410,12 @@
     try {
       const { messages } = await emit('messages:get', { convId: id });
       if (state.activeId !== id) return;
+      // Keep my unconfirmed / failed messages visible across reloads of the chat.
+      for (const m of state.outbox.values()) {
+        if (m.convId !== id) continue;
+        if (messages.some((x) => x.clientId === m.id)) state.outbox.delete(m.id);
+        else messages.push(m);
+      }
       state.messages.set(id, messages);
       renderMessages(true);
       markRead(id);
@@ -450,22 +484,51 @@
         prev = m;
         continue;
       }
-      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}`);
+      const status = mine && !m.deleted ? statusOf(m, conv) : null;
+      const covered = m.masked && !m.deleted && !mine && !state.revealed.has(m.id);
+      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}`);
       if (conv.type === 'group' && !mine && first) {
         const author = el('div', 'author', displayName(m.from));
         author.style.color = colorFor(m.from);
         bubble.appendChild(author);
       }
-      bubble.appendChild(el('span', 'text', m.deleted ? '🚫 This message was deleted' : m.text));
-      const meta = el('span', 'meta', timeOf(m.ts));
-      if (mine && !m.deleted) meta.appendChild(ticks(statusOf(m, conv)));
+      if (m.deleted) {
+        const text = el('span', 'text');
+        text.append(icon('deleted', 'inline-icon'), 'This message was deleted');
+        bubble.appendChild(text);
+      } else if (covered) {
+        const cover = el('button', 'masked-cover');
+        cover.type = 'button';
+        cover.title = 'Reveal message';
+        cover.append(icon('masked', 'inline-icon'), el('span', '', 'Masked message'), el('small', '', 'Tap to reveal'));
+        cover.addEventListener('click', () => { state.revealed.add(m.id); renderMessages(); });
+        bubble.appendChild(cover);
+      } else {
+        bubble.appendChild(el('span', 'text', m.text));
+      }
+      const meta = el('span', 'meta');
+      if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
+      meta.appendChild(document.createTextNode(timeOf(m.ts)));
+      if (status) meta.appendChild(icon(status));
       bubble.appendChild(meta);
-      if (mine && !m.deleted) {
+      if (status === 'failed') {
+        const retry = el('button', 'retry', 'Not sent. Tap to retry');
+        retry.type = 'button';
+        retry.title = m.error || 'Not sent';
+        retry.addEventListener('click', () => deliver(m));
+        bubble.appendChild(retry);
+      }
+      if (mine && !m.deleted && !m.localStatus) {
         const del = el('button', 'del', '✕');
         del.title = 'Delete message';
         del.addEventListener('click', () => {
           if (confirm('Delete this message for everyone?')) emit('message:delete', { id: m.id }).catch((e) => alert(e.message));
         });
+        bubble.appendChild(del);
+      } else if (status === 'failed') {
+        const del = el('button', 'del', '✕');
+        del.title = 'Discard message';
+        del.addEventListener('click', () => discard(m));
         bubble.appendChild(del);
       }
       box.appendChild(bubble);
@@ -500,6 +563,84 @@
   $('#btn-voice-call').addEventListener('click', () => startCall('audio'));
   $('#btn-video-call').addEventListener('click', () => startCall('video'));
 
+  /** Add a server message, replacing my optimistic copy of it (matched by clientId). */
+  function upsertMessage(msg) {
+    const conv = state.conversations.get(msg.convId);
+    const list = state.messages.get(msg.convId);
+    if (list) {
+      const i = list.findIndex((m) => m.id === msg.id || (msg.clientId && m.id === msg.clientId));
+      if (i >= 0) list[i] = msg;
+      else list.push(msg);
+    }
+    if (msg.clientId) state.outbox.delete(msg.clientId);
+    if (conv && (!conv.lastMessage || conv.lastMessage.ts <= msg.ts || conv.lastMessage.id === msg.clientId)) {
+      conv.lastMessage = msg;
+    }
+  }
+
+  function refreshConversation(convId) {
+    if (convId === state.activeId) renderMessages(true);
+    renderChatList();
+  }
+
+  // ---------- sending ----------
+
+  const SEND_TIMEOUT_MS = 10000;
+
+  /** Send (or re-send) one of my messages; failures leave it in the chat marked as failed. */
+  function deliver(msg) {
+    msg.localStatus = 'sending';
+    delete msg.error;
+    refreshConversation(msg.convId);
+    const payload = { convId: msg.convId, text: msg.text, masked: !!msg.masked, clientId: msg.id };
+    const fail = (error) => {
+      if (!state.outbox.has(msg.id)) return; // confirmed meanwhile (e.g. via message:new)
+      msg.localStatus = 'failed';
+      msg.error = error;
+      refreshConversation(msg.convId);
+    };
+    if (!state.socket?.connected) return fail('You are offline');
+    state.socket.timeout(SEND_TIMEOUT_MS).emit('message:send', payload, (err, res) => {
+      if (err) fail('No response from the server');
+      else if (!res?.ok) fail(res?.error || 'Could not send');
+      else {
+        upsertMessage(res.message);
+        refreshConversation(msg.convId);
+      }
+    });
+  }
+
+  function discard(msg) {
+    state.outbox.delete(msg.id);
+    const list = state.messages.get(msg.convId);
+    if (list) state.messages.set(msg.convId, list.filter((m) => m !== msg));
+    const conv = state.conversations.get(msg.convId);
+    if (conv?.lastMessage === msg) conv.lastMessage = (state.messages.get(msg.convId) || []).filter((m) => !m.localStatus).pop() || null;
+    refreshConversation(msg.convId);
+  }
+
+  function sendNew(convId, text, masked) {
+    const clientId = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const msg = {
+      id: clientId,
+      clientId,
+      convId,
+      from: state.me.username,
+      text,
+      ts: Date.now(),
+      deliveredTo: [],
+      readBy: [],
+      localStatus: 'sending',
+    };
+    if (masked) msg.masked = true;
+    state.outbox.set(clientId, msg);
+    if (!state.messages.has(convId)) state.messages.set(convId, []);
+    state.messages.get(convId).push(msg);
+    const conv = state.conversations.get(convId);
+    if (conv) conv.lastMessage = msg;
+    deliver(msg);
+  }
+
   function onMessage(msg) {
     const conv = state.conversations.get(msg.convId);
     if (!conv) {
@@ -507,9 +648,7 @@
       loadConversations();
       return;
     }
-    const list = state.messages.get(msg.convId);
-    if (list && !list.some((m) => m.id === msg.id)) list.push(msg);
-    conv.lastMessage = msg;
+    upsertMessage(msg);
     const mine = msg.from === state.me.username;
     if (msg.convId === state.activeId) {
       renderMessages(mine);
@@ -570,13 +709,20 @@
     input.value = '';
     autosize();
     $('#emoji-picker').classList.add('hidden');
-    try {
-      await emit('message:send', { convId: state.activeId, text });
-    } catch (err) {
-      alert(err.message);
-      input.value = text;
-    }
+    sendNew(state.activeId, text, state.maskNext);
+    setMaskNext(false);
   });
+
+  // masked messages: hidden for recipients until they tap to reveal
+  function setMaskNext(on) {
+    state.maskNext = on;
+    const btn = $('#btn-mask');
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
+    btn.title = on ? 'Masked: recipients must tap to reveal (click to turn off)' : 'Send as masked message';
+    input.placeholder = on ? 'Type a masked message' : 'Type a message';
+  }
+  $('#btn-mask').addEventListener('click', () => { setMaskNext(!state.maskNext); input.focus(); });
 
   // emoji picker
   const picker = $('#emoji-picker');

@@ -306,8 +306,38 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color:
   white-space: nowrap;
 }
 .msg.deleted .text { font-style: italic; color: var(--muted); }
-.ticks { width: 16px; height: 11px; fill: none; stroke: var(--muted); stroke-width: 1.6; }
-.ticks.read { stroke: var(--tick-read); }
+/* ---------- status icons (public/icons) ---------- */
+.status-icon { width: 17px; height: 17px; flex: none; }
+.meta .status-icon { margin-left: 1px; }
+.preview .status-icon { vertical-align: -4px; margin-right: 4px; width: 19px; height: 19px; }
+.inline-icon { width: 20px; height: 20px; vertical-align: -5px; margin-right: 6px; }
+.msg.failed { box-shadow: 0 0 0 1px rgba(208, 52, 44, .45); }
+.msg .retry {
+  display: block;
+  clear: both;
+  background: none;
+  border: 0;
+  padding: 4px 0 0;
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.msg .retry:hover { text-decoration: underline; }
+.masked-cover {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  color: var(--muted);
+  font-style: italic;
+  text-align: left;
+}
+.masked-cover small { margin-left: 8px; font-style: normal; color: var(--green); font-weight: 500; }
+.mask-btn img { width: 26px; height: 26px; opacity: .75; }
+.mask-btn.active { background: var(--active); box-shadow: inset 0 0 0 2px var(--green); }
+.mask-btn.active img { opacity: 1; }
 .msg .del {
   position: absolute;
   top: 2px;

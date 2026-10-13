@@ -8,7 +8,8 @@ A real-time chat application inspired by WhatsApp, built with **Node.js**, **Exp
 - One-to-one chats and group chats
 - Real-time messaging over WebSockets
 - **Voice and video calls** (1:1, peer-to-peer WebRTC): ringing on all of the callee's devices, accept/decline, mute, camera on/off, call timer, and call history in the chat (missed / declined / duration, tap to call back)
-- Message status ticks: ✓ sent, ✓✓ delivered, blue ✓✓ read
+- Message status icons (see below): not delivered, delivered, read, failed (tap to retry; auto-resent on reconnect), deleted, masked
+- Masked messages: toggle the eye button before sending; recipients see a cover until they tap to reveal, and the text never shows in chat-list previews
 - Typing indicators ("typing…") in the chat list and chat header
 - Online status and "last seen"
 - Unread message badges, chat search, people search
@@ -42,6 +43,21 @@ Calls use WebRTC, so audio/video goes directly between the two browsers; the ser
   ```
 - Group calls are not supported yet (1:1 chats only).
 
+### Message status icons
+
+| Icon | File | Shown when |
+|------|------|------------|
+| Non delivered (hourglass) | `public/icons/pending.png` | Your message is sending, or is on the server but not yet delivered to every recipient (e.g. they're offline) |
+| Delivered (blue) | `public/icons/delivered.png` | Delivered to every recipient's device |
+| Read (green) | `public/icons/read.png` | Read by every recipient |
+| Failed (red) | `public/icons/failed.png` | Could not be sent — tap "Not sent. Tap to retry", or ✕ to discard |
+| Deleted (trash) | `public/icons/deleted.png` | "This message was deleted" in the chat and the chat list |
+| Masked (blindfolded eye) | `public/icons/masked.png` | A masked message: the composer toggle, the cover recipients tap to reveal, and the chat-list preview |
+
+The PNGs are cut from `design/status-icons-sheet.png` with `python3 tools/extract-status-icons.py design/status-icons-sheet.png` (needs Pillow + NumPy). Re-run it if the sheet changes.
+
+Masking is a privacy cover in the UI (against shoulder-surfing and previews), not encryption: the text is still sent to and stored on the server.
+
 ```bash
 npm run dev        # restart automatically on file changes
 npm test           # unit + realtime integration tests
@@ -56,10 +72,14 @@ whatsapp-clone/
 │   ├── calls.js     # Voice/video call signalling (ring, accept, relay, end, call log)
 │   └── store.js     # Users, sessions, conversations, messages (JSON file storage)
 ├── public/
+│   ├── icons/       # Message status icons
 │   ├── index.html   # UI markup
 │   ├── styles.css   # WhatsApp-style theme (light/dark)
 │   ├── app.js       # Client logic
 │   └── call.js      # WebRTC call controller and call screen
+├── design/          # Source design sheet for the status icons
+├── tools/
+│   └── extract-status-icons.py
 └── test/
     ├── app.test.js
     └── calls.test.js
@@ -74,7 +94,7 @@ whatsapp-clone/
 | `chat:direct`       | Open (or create) a 1:1 chat              |
 | `group:create`      | Create a group                           |
 | `messages:get`      | Load chat history                        |
-| `message:send`      | Send a message                           |
+| `message:send`      | Send a message (`masked`, `clientId` for safe retries) |
 | `messages:read`     | Mark a chat as read                      |
 | `message:delete`    | Delete my message                        |
 | `typing`            | Typing started/stopped                   |

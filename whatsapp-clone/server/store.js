@@ -201,9 +201,19 @@ class Store {
 
   // ---------- messages ----------
 
-  addMessage(convId, from, text) {
+  /**
+   * `masked`: hide the text behind a "tap to reveal" cover for recipients.
+   * `clientId`: sender-generated id; re-sending the same clientId (a retry after a
+   * timeout or reconnect) returns the stored message instead of duplicating it.
+   */
+  addMessage(convId, from, text, { masked = false, clientId } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
+    if (clientId) {
+      clientId = String(clientId).slice(0, 64);
+      const existing = this.data.messages[convId].slice(-200).find((m) => m.from === from && m.clientId === clientId);
+      if (existing) return existing;
+    }
     text = String(text || '').trim();
     if (!text) throw new Error('Message is empty');
     if (text.length > 4000) throw new Error('Message is too long');
@@ -216,6 +226,8 @@ class Store {
       deliveredTo: [],
       readBy: [],
     };
+    if (masked) msg.masked = true;
+    if (clientId) msg.clientId = clientId;
     this.data.messages[convId].push(msg);
     this._save();
     return msg;
