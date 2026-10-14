@@ -336,7 +336,22 @@ class Store {
     if (!u) return null;
     const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
     if (u.business) out.business = Store._publicBusiness(u.business);
+    if (u.verifiedAt) out.verified = true; // the only KYC fact kept: yes, verified
     return out;
+  }
+
+  // ---------- verified badge ----------
+
+  isVerified(username) {
+    return !!this.data.users[username]?.verifiedAt;
+  }
+
+  /** Mark the account verified. This is all that is stored: no ID type, number or name. */
+  setVerified(username) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.verifiedAt = Date.now();
+    this._save();
   }
 
   // ---------- business profile ----------
@@ -663,7 +678,12 @@ class Store {
   updateProfile(username, { displayName, about }) {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
-    if (typeof displayName === 'string' && displayName.trim()) u.displayName = displayName.trim().slice(0, 40);
+    if (typeof displayName === 'string' && displayName.trim()) {
+      const name = displayName.trim().slice(0, 40);
+      // A verified identity belongs to a name: changing it means verifying again.
+      if (name !== u.displayName) delete u.verifiedAt;
+      u.displayName = name;
+    }
     if (typeof about === 'string') u.about = about.trim().slice(0, 140);
     this._save();
     return this.publicUser(username);

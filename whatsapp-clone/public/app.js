@@ -647,7 +647,8 @@
       const prev = state.users[user.username] || {};
       state.users[user.username] = { ...user, online: user.online ?? prev.online };
       if (user.username === state.me?.username) {
-        state.me = { ...state.me, ...user, business: user.business };
+        state.me = { ...state.me, ...user, business: user.business, verified: user.verified };
+        renderVerifyRow();
         if (!user.business) state.myBusiness = null;
       }
       refreshContactInfo();
@@ -738,7 +739,7 @@
       const body = el('div', 'body');
       const top = el('div', 'row');
       top.appendChild(el('span', 'name', convTitle(c)));
-      if (peer && state.users[peer]?.business) top.appendChild(businessBadge());
+      if (peer && state.users[peer]) top.append(...userBadges(state.users[peer]));
       if (c.disappearAfter) top.appendChild(timerIcon(`Auto-delete: ${fmtTimer(c.disappearAfter)}`));
       if (c.locked) top.appendChild(lockIcon(c.unlocked ? 'Locked chat (unlocked for now)' : 'Locked chat'));
       if (peer && state.blocked.has(peer)) top.appendChild(icon('blocked'));
@@ -880,7 +881,7 @@
     $('#chat-name').textContent = convTitle(conv);
     const badgesEl = $('#chat-badges');
     badgesEl.textContent = '';
-    if (peer && state.users[peer]?.business) badgesEl.appendChild(businessBadge());
+    if (peer && state.users[peer]) badgesEl.append(...userBadges(state.users[peer]));
     if (conv.disappearAfter) badgesEl.appendChild(timerIcon(`Auto-delete: ${fmtTimer(conv.disappearAfter)}`));
     $('#menu-info span').textContent = conv.type === 'group' ? 'Group info' : 'Contact info';
     $('#chat-title-btn').title = conv.type === 'group' ? 'Group info' : 'Contact info';
@@ -1554,7 +1555,7 @@
     const body = el('div', 'body');
     const top = el('div', 'row');
     top.appendChild(el('span', 'name', u.displayName));
-    if (u.business) top.appendChild(businessBadge());
+    top.append(...userBadges(u));
     if (checkbox) {
       const cb = el('input', 'check');
       cb.type = 'checkbox';
@@ -1680,11 +1681,14 @@
     $('#profile-msg').textContent = '';
     paintAvatar($('#profile-avatar'), state.me.displayName, state.me.username);
     $('#profile-username').textContent = '@' + state.me.username;
+    renderVerifyRow();
     renderLockSummary();
     renderProfileExtras();
   });
   $('#profile-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (state.me.verified && e.target.displayName.value.trim() !== state.me.displayName
+      && !confirm('Your Verified badge belongs to your current name. If you change it, the badge is removed until you verify again. Continue?')) return;
     try {
       const { user } = await emit('profile:update', {
         displayName: e.target.displayName.value,
@@ -1695,6 +1699,7 @@
       paintAvatar($('#btn-profile'), user.displayName, user.username);
       paintAvatar($('#profile-avatar'), user.displayName, user.username);
       $('#profile-msg').textContent = 'Saved ✓';
+      renderVerifyRow();
     } catch (err) {
       $('#profile-msg').textContent = err.message;
     }
@@ -1855,6 +1860,31 @@
   }
   const timerIcon = (title) => svgIcon(TIMER_PATH, 'timer-icon', title);
   const businessBadge = () => svgIcon(BRIEFCASE_PATH, 'biz-badge', 'Business account');
+  // Verified (identity checked with a KYC ID) or not: everyone gets one of the two next to their name.
+  const SEAL = 'M12 1 9.5 3.2 6.2 3 5.4 6.2 2.6 7.9l1.2 3.1L2.6 14l2.8 1.7.8 3.2 3.3-.2L12 21l2.5-2.3 3.3.2.8-3.2 2.8-1.7-1.2-3 1.2-3.1-2.8-1.7-.8-3.2-3.3.2L12 1Z';
+  const CHECK = 'm10.5 15.5-3-3 1.2-1.2 1.8 1.8 4.3-4.3 1.2 1.2-5.5 5.5Z';
+  function trustBadge(u) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const verified = !!u?.verified;
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', `trust-badge ${verified ? 'verified' : 'unverified'}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', verified ? 'Verified' : 'Not verified');
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    t.textContent = verified ? 'Verified: identity checked with a government ID' : 'Not verified';
+    const seal = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    seal.setAttribute('d', SEAL);
+    svg.append(t, seal);
+    if (verified) {
+      const check = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      check.setAttribute('d', CHECK);
+      check.setAttribute('class', 'check');
+      svg.appendChild(check);
+    }
+    return svg;
+  }
+  /** The badges for a person: Verified / Not verified, then Business. */
+  const userBadges = (u) => (u ? [trustBadge(u), ...(u.business ? [businessBadge()] : [])] : []);
 
   /** 189000 -> "2 days 4 hours 30 minutes" */
   function fmtTimer(sec) {
@@ -2120,7 +2150,7 @@
     const av = el('div', 'avatar xl');
     paintAvatar(av, convTitle(conv), group ? conv.id : peer, { group });
     const name = el('h2', 'info-name', convTitle(conv));
-    if (user?.business) name.appendChild(businessBadge());
+    if (user && !group) name.append(...userBadges(user));
     top.append(av, name, el('p', 'muted', group ? `Group · ${conv.members.length} members` : `@${peer}`));
     if (user && !group) top.appendChild(el('p', 'muted', user.online ? 'online' : lastSeenText(peer) || ''));
     body.appendChild(top);
@@ -2188,7 +2218,7 @@
         const b = el('div', 'body');
         const row = el('div', 'row');
         row.appendChild(el('span', 'name', m === state.me.username ? 'You' : u.displayName));
-        if (u.business) row.appendChild(businessBadge());
+        row.append(...userBadges(u));
         if (conv.admins?.includes(m)) row.appendChild(el('span', 'admin-tag', 'Admin'));
         b.append(row, el('div', 'sub', u.business ? u.business.category : `@${m}`));
         li.appendChild(b);
@@ -2414,8 +2444,16 @@
       box.textContent = '';
       for (const f of fields) {
         const label = el('label', '', f.label);
-        const input = el('input');
-        Object.assign(input, { name: f.name, type: f.type || 'password', required: true, maxLength: 64, autocomplete: f.autocomplete || 'off' });
+        let input;
+        if (f.options) {
+          input = el('select');
+          for (const [value, text] of f.options) input.appendChild(new Option(text, value));
+          input.name = f.name;
+        } else {
+          input = el('input');
+          Object.assign(input, { name: f.name, type: f.type || 'password', required: true, maxLength: f.maxLength || 64, autocomplete: f.autocomplete || 'off' });
+          if (f.placeholder) input.placeholder = f.placeholder;
+        }
         label.appendChild(input);
         box.appendChild(label);
       }
@@ -2437,6 +2475,7 @@
       box.querySelector('input')?.focus();
       const close = (result) => {
         modal.classList.add('hidden');
+        box.textContent = ''; // whatever was typed (a secret code, an ID number) is gone from the page
         form.onsubmit = null;
         $('#modal-cancel').onclick = null;
         resolve(result);
@@ -2716,6 +2755,64 @@
       },
     });
   });
+
+  // ---------- verified badge (KYC) ----------
+
+  function renderVerifyRow() {
+    const verified = !!state.me?.verified;
+    $('#verify-summary').textContent = verified
+      ? 'Verified · your identity was checked with a government ID'
+      : 'Not verified · verify with a government ID to get the Verified badge';
+    const btn = $('#btn-verify');
+    btn.textContent = verified ? 'Verified ✓' : 'Verify';
+    btn.disabled = verified;
+    const name = $('#verify-name');
+    name.textContent = '';
+    name.appendChild(trustBadge(state.me));
+  }
+
+  /** Pick an ID type, enter its number (sent straight to the verification service, never stored), then the OTP. */
+  async function startVerification() {
+    let info;
+    try {
+      info = await emit('kyc:status');
+    } catch (err) {
+      return toast(err.message);
+    }
+    if (info.verified) return toast('You are already verified');
+    if (!info.available) return toast('Identity verification is not available on this server yet');
+    let sent;
+    const first = await dialog({
+      title: 'Get the Verified badge',
+      text: 'Verify with any government ID. We pass the number to the verification service, which sends a one-time code to the mobile number linked to the ID. We do not store your ID number or any KYC details: only that you are verified.',
+      fields: [
+        { name: 'type', label: 'ID type', options: info.types.map((t) => [t.id, `${t.label} (${t.hint})`]) },
+        { name: 'idNumber', label: 'ID number', type: 'text', maxLength: 30, autocomplete: 'off' },
+      ],
+      submit: 'Send code',
+      onSubmit: async (v) => {
+        sent = await emit('kyc:start', { type: v.type, idNumber: v.idNumber });
+      },
+    });
+    if (!first || !sent) return;
+    const done = await dialog({
+      title: 'Enter the code',
+      text: `Enter the one-time code sent to the mobile number linked to your ID${sent.sentTo ? ` (${sent.sentTo})` : ''}.${sent.devCode ? ` (Sandbox code: ${sent.devCode})` : ''}`,
+      fields: [{ name: 'otp', label: 'One-time code', type: 'text', maxLength: 8, autocomplete: 'one-time-code' }],
+      submit: 'Verify',
+      onSubmit: async (v) => {
+        const res = await emit('kyc:verify', { requestId: sent.requestId, otp: v.otp.trim() });
+        state.me = { ...state.me, ...res.user, verified: res.user.verified };
+        state.users[state.me.username] = { ...res.user, online: true };
+      },
+    });
+    if (done) {
+      renderVerifyRow();
+      renderChatList();
+      toast('You are verified ✓');
+    }
+  }
+  $('#btn-verify').addEventListener('click', startVerification);
 
   // ---------- encryption: security code and devices ----------
 

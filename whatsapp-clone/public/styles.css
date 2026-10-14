@@ -1225,3 +1225,13 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .safety { font-variant-numeric: tabular-nums; letter-spacing: .04em; line-height: 1.7; word-spacing: .3em; }
 .device-this { color: var(--online); font-size: 12.5px; }
 #modal-text { white-space: pre-line; }
+
+/* Verified / not verified badge (next to names) */
+.trust-badge { width: 16px; height: 16px; flex: none; vertical-align: -3px; margin-left: 2px; }
+.trust-badge.verified path:not(.check) { fill: var(--primary); }
+.trust-badge.verified .check { fill: #fff; }
+.trust-badge.unverified path { fill: none; stroke: var(--muted); stroke-width: 1.6; opacity: .75; }
+.info-name .trust-badge { width: 22px; height: 22px; vertical-align: -4px; }
+.verify-name .trust-badge { width: 28px; height: 28px; margin: 0; }
+.link-row .verify-name { display: grid; place-items: center; width: 24px; }
+#modal select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 8px; width: 100%; }

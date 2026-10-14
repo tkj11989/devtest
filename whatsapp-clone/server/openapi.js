@@ -39,6 +39,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       lastSeen: { type: ['integer', 'null'], description: 'ms since epoch; null when hidden by blocking' },
       online: { type: 'boolean' },
       business: ref('BusinessPublic'),
+      verified: { type: 'boolean', description: 'present (true) when the person passed identity verification; absent = not verified' },
     }, ['username', 'displayName']),
     DayHours: {
       oneOf: [
@@ -210,6 +211,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E415: errorResponse('Unsupported media type'),
     E423: errorResponse('The chat is locked: unlock it with POST /conversations/{id}/unlock (code `chat_locked`)'),
     E429: errorResponse('Rate limited, or a code was requested too soon (`otp_too_soon`, `otp_limit`); see Retry-After'),
+    E503: errorResponse('Identity verification is not configured on this server (`kyc_unavailable`)'),
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
@@ -300,6 +302,24 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/me/verification': {
+      get: op(T.me, 'Verified-badge status', {
+        description: 'Whether the account is verified, whether verification is available on this server, and the ID types accepted (personal accounts and business accounts accept different ones).',
+        responses: { 200: ok(obj({ verified: { type: 'boolean' }, available: { type: 'boolean' }, sandbox: { type: 'boolean', description: 'development stand-in: verifies anyone' }, types: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, hint: { type: 'string' } })) })), ...errors(401) },
+      }),
+      post: op(T.me, 'Finish verification with the code', {
+        description: 'Send the `requestId` from `POST /me/verification/otp` and the code the person received. On success the account gets the **Verified** badge (`user.verified: true`, visible to everyone). **No KYC information is stored**: only the fact that it is verified. Changing the display name removes the badge until the person verifies again.',
+        body: jsonBody(obj({ requestId: { type: 'string' }, otp: { type: 'string' } }, ['requestId', 'otp']), { requestId: 'kyc_…', otp: '482913' }),
+        responses: { 200: ok(obj({ verified: { type: 'boolean' }, user: ref('User') })), ...errors(400, 401, 502, 503) },
+      }),
+    },
+    '/me/verification/otp': {
+      post: op(T.me, 'Start identity verification (KYC)', {
+        description: 'Send the ID `type` (e.g. `aadhaar`, `pan`, `passport`; business accounts: `gstin`, `cin`, `pan`) and `idNumber`. The number is checked for format and passed to the verification gateway, which sends a one-time code to the mobile number linked to the ID; it is **never stored or logged** by ChatApp. 3 attempts per hour. Finish with `POST /me/verification`.',
+        body: jsonBody(obj({ type: { type: 'string' }, idNumber: { type: 'string' } }, ['type', 'idNumber']), { type: 'pan', idNumber: 'ABCDE1234F' }),
+        responses: { 200: ok(obj({ requestId: { type: 'string' }, expiresIn: { type: 'integer' }, sentTo: { type: 'string' }, devCode: { type: 'string', description: 'sandbox with OTP_DEV_CODES=1 only' } }, ['requestId', 'expiresIn'])), ...errors(400, 401, 409, 429, 502, 503) },
+      }),
+    },
     '/me/contact/otp': {
       post: op(T.me, 'Send a code to add or change my mobile number or email', {
         description: 'Send `phone` or `email`. Then confirm with `PUT /me/contact`. A business account needs both a verified mobile number and email.',
@@ -669,6 +689,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'get /me/verification': 'getVerification',
+    'post /me/verification/otp': 'startVerification',
+    'post /me/verification': 'finishVerification',
     'post /me/contact/otp': 'requestContactOtp',
     'put /me/contact': 'verifyContact',
     'put /me/default-disappearing': 'setDefaultDisappearing',

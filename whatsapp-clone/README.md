@@ -141,6 +141,25 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Verified badge (KYC)
+
+Everyone has a badge next to their name: a **blue Verified seal** once they have verified their identity, or a **grey outlined "Not verified" seal** otherwise (business accounts also keep their briefcase badge). It shows in the chat list, chat header, contact info, search results and group members, and updates live.
+
+**Profile → Verified badge → Verify**: pick any ID (personal accounts: Aadhaar, PAN, passport, driving licence, voter ID; business accounts: GSTIN, CIN, business PAN), enter its number, then enter the **one-time code** sent to the mobile number linked to that ID. That is all: the badge turns blue.
+
+**No KYC information is stored, anywhere.** The ID number goes from the form to the verification gateway and is dropped: it is not saved on the server, not kept in the app (the field is cleared from the page when the dialog closes), and not logged. The only thing kept on the account is a "verified" yes/no with the time (`verifiedAt`). Not the ID type, number, name or gateway reply. Changing your display name removes the badge until you verify again, because a verified identity belongs to a name.
+
+ChatApp doesn't do KYC itself; it needs a verification service (DigiLocker, Aadhaar eKYC, Signzy, IDfy, Onfido…) behind a small relay. Set `KYC_WEBHOOK_URL` and ChatApp POSTs JSON to it (with `Authorization: Bearer $KYC_WEBHOOK_TOKEN` if set):
+
+```
+{ "action": "start",  "type": "pan", "idNumber": "ABCDE1234F" }  ->  { "requestId": "…" }   (the service sends the code)
+{ "action": "verify", "requestId": "…", "otp": "482913" }        ->  { "verified": true }
+```
+
+Rules: the number's format is checked first (bad numbers never reach the service); 3 attempts per hour; 5 wrong codes end an attempt; the code expires after 10 minutes. Without `KYC_WEBHOOK_URL` verification is **unavailable** (nobody gets a badge). For development, `KYC_SANDBOX=1` accepts any well-formed ID and sends the code to the account's own mobile number (shown in the app with `OTP_DEV_CODES=1`). **Never use the sandbox in production: it verifies anyone.**
+
+API: `GET /me/verification`, `POST /me/verification/otp`, `POST /me/verification`; `user.verified` appears wherever users are returned. Socket: `kyc:status`, `kyc:start`, `kyc:verify`.
+
 ## End-to-end encryption
 
 Messages typed in the web app are **end-to-end encrypted**: they are encrypted on the sender's device and can only be decrypted on the devices of people in that chat. The server stores and relays ciphertext and **cannot read message text or voice recordings** (verified in the tests: the database dump, the API history and previews contain no plaintext).
@@ -337,6 +356,7 @@ whatsapp-clone/
 │   ├── openapi.js   # OpenAPI 3.1 spec (served at /api/v1/openapi.json)
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
+│   ├── kyc.js       # Verified badge: ID check through a KYC gateway (nothing stored)
 │   ├── webauthn.js  # Fingerprint / face lock: challenges and signature checks
 │   ├── webhooks.js  # Signed webhook delivery with retries
 │   ├── calls.js     # 1:1 and group call signalling (ring, join, relay, hold, end, call log)
@@ -361,6 +381,7 @@ whatsapp-clone/
     ├── auth.test.js
     ├── hidden.test.js
     ├── e2ee.test.js
+    ├── kyc.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

@@ -14,7 +14,7 @@ const crypto = require('crypto');
  * codes are printed to the server console (development). See `createOtpSender`.
  */
 
-const PURPOSES = ['register', 'login', 'contact', 'chatlock-reset'];
+const PURPOSES = ['register', 'login', 'contact', 'chatlock-reset', 'kyc'];
 
 /** Mobile numbers in international (E.164) form, e.g. "+919876543210". */
 function normalisePhone(input) {

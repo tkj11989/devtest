@@ -26,7 +26,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
+function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) {
   const userRoom = (u) => `user:${u}`;
 
   // ---------- chat lock ----------
@@ -354,6 +354,25 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
         business: store.getBusiness(me),
         contact: store.contactOf(me),
       };
+    },
+
+    // ----- verified badge (KYC) -----
+
+    kycStatus(me) {
+      return { verified: store.isVerified(me), available: !!kyc?.available, sandbox: !!kyc?.sandbox, types: kyc ? kyc.listTypes(me) : [] };
+    },
+
+    /** Send the ID number to the verification gateway, which texts a code. The ID is not kept. */
+    async kycStart(me, { type, idNumber }) {
+      if (!kyc) throw new ApiError(503, 'kyc_unavailable', 'Identity verification is not available right now');
+      return kyc.start(me, { type, idNumber });
+    },
+
+    /** Check the code once; success gives the account the Verified badge. */
+    async kycVerify(me, { requestId, otp: code }) {
+      if (!kyc) throw new ApiError(503, 'kyc_unavailable', 'Identity verification is not available right now');
+      await kyc.verify(me, { requestId, otp: code });
+      return { verified: true, user: announceProfile(me) };
     },
 
     // ----- verified mobile number and email -----

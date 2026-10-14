@@ -13,6 +13,7 @@ const { createWebhookDispatcher } = require('./webhooks');
 const { createApiRouter } = require('./api');
 const { createOtpService, createOtpSender } = require('./otp');
 const { createAuth } = require('./auth');
+const { createKyc, createKycGateway } = require('./kyc');
 
 // STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
 // e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'
@@ -68,6 +69,9 @@ const SOCKET_ACTIONS = {
   'me:contact-verify': 'verifyContact',
   'chatlock:reset-sms': 'requestLockResetCode',
   'chatlock:clear': 'clearChatLocks',
+  'kyc:status': 'kycStatus',
+  'kyc:start': 'kycStart',
+  'kyc:verify': 'kycVerify',
   'e2ee:register': 'registerDevice',
   'e2ee:devices': 'e2eeDevices',
   'e2ee:remove': 'removeDevice',
@@ -93,6 +97,7 @@ const SOCKET_ACTIONS = {
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
  *   messageSweepMs   how often expired disappearing messages are removed
+ *   kyc              { gateway, sandbox } for identity verification (see kyc.js; KYC_WEBHOOK_URL, KYC_SANDBOX=1)
  *   otp              { sender, exposeCodes, ttlMs, resendMs, … } for one-time login codes
  *                    (see otp.js; by default codes go to OTP_WEBHOOK_URL or the console)
  */
@@ -106,6 +111,7 @@ function createApp({
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
   messageSweepMs = 5000,
   otp: otpOptions = {},
+  kyc: kycOptions = {},
 } = {}) {
   const app = express();
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
@@ -119,7 +125,8 @@ function createApp({
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
   const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
   const auth = createAuth({ store, otp });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp });
+  const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -181,6 +188,7 @@ function createApp({
     clearInterval(expiryTimer);
     webhooks.stop();
     otp.stop();
+    kyc.stop();
   });
 
   // ---------- realtime ----------
