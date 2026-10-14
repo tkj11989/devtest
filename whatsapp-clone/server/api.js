@@ -126,6 +126,24 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+  // ---------- public channels ----------
+
+  router.get('/channels', ...authed, run((req) => actions.channelsSearch(req.user, { q: req.query.q })));
+  router.post('/channels', ...authed, json, run((req) => actions.channelCreate(req.user, req.body || {}), 201));
+  router.get('/me/channels', ...authed, run((req) => actions.channelsMine(req.user)));
+  router.get('/channels/:id', ...authed, run((req) => actions.channelGet(req.user, { id: p(req, 'id') })));
+  router.patch('/channels/:id', ...authed, json, run((req) => actions.channelUpdate(req.user, { ...(req.body || {}), id: p(req, 'id') })));
+  router.delete('/channels/:id', ...authed, run((req) => { actions.channelDelete(req.user, { id: p(req, 'id') }); return undefined; }));
+  router.put('/channels/:id/follow', ...authed, run((req) => actions.channelFollow(req.user, { id: p(req, 'id') })));
+  router.delete('/channels/:id/follow', ...authed, run((req) => actions.channelUnfollow(req.user, { id: p(req, 'id') })));
+  router.put('/channels/:id/admins/:username', ...authed, run((req) => actions.channelAdmin(req.user, { id: p(req, 'id'), username: p(req, 'username'), admin: true })));
+  router.delete('/channels/:id/admins/:username', ...authed, run((req) => actions.channelAdmin(req.user, { id: p(req, 'id'), username: p(req, 'username'), admin: false })));
+  router.get('/channels/:id/posts', ...authed, run((req) => actions.channelPosts(req.user, { id: p(req, 'id'), before: req.query.before, limit: req.query.limit })));
+  router.post('/channels/:id/posts', ...authed, json, run((req) => actions.channelPost(req.user, { id: p(req, 'id'), text: req.body?.text }), 201));
+  router.delete('/channels/:id/posts/:postId', ...authed, run((req) => { actions.channelPostDelete(req.user, { id: p(req, 'id'), postId: p(req, 'postId') }); return undefined; }));
+  router.post('/channels/:id/read', ...authed, run((req) => { actions.channelRead(req.user, { id: p(req, 'id') }); return undefined; }));
+  router.post('/channels/:id/report', ...authed, json, run((req) => { actions.channelReport(req.user, { id: p(req, 'id'), reason: req.body?.reason }); return undefined; }));
+
   // ---------- product catalogue ----------
 
   router.get('/users/:username/catalogue', ...authed, run((req) => actions.catalogue(req.user, { username: p(req, 'username') })));

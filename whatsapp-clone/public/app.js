@@ -492,6 +492,7 @@
     storage.del('chat.token');
     state.calls?.dispose();
     statusUpdates.reset();
+    channelsUI.reset();
     state.socket?.disconnect();
     Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null, privacy: null, profileCard: null });
     state.conversations.clear();
@@ -523,6 +524,7 @@
       paintAvatar,
     });
     statusUpdates.attach(socket);
+    channelsUI.attach(socket);
 
     // Events that carry (or refer to) messages are handled one at a time, in order, after decryption.
     let inbox = Promise.resolve();
@@ -562,6 +564,7 @@
         paintAvatar($('#btn-profile'), me.displayName, me.username);
         await loadConversations();
         statusUpdates.load();
+        channelsUI.load();
         // Refresh the open chat after a reconnect.
         if (state.activeId) openChat(state.activeId);
         // Back online: resend anything that failed while we were offline.
@@ -820,6 +823,7 @@
     // Switching chats mid-recording sends the recording to the chat it was made in.
     if (state.recorder && state.recorder.convId !== id) stopRecording(true);
     state.activeId = id;
+    channelsUI?.hide();
     $('#empty-state').classList.add('hidden');
     $('#chat-view').classList.remove('hidden');
     $('#app').classList.add('chat-open');
@@ -2556,10 +2560,12 @@
           input = el('select');
           for (const [value, text] of f.options) input.appendChild(new Option(text, value));
           input.name = f.name;
+          if (f.value !== undefined) input.value = f.value;
         } else {
           input = el('input');
-          Object.assign(input, { name: f.name, type: f.type || 'password', required: true, maxLength: f.maxLength || 64, autocomplete: f.autocomplete || 'off' });
+          Object.assign(input, { name: f.name, type: f.type || 'password', required: f.required !== false, maxLength: f.maxLength || 64, autocomplete: f.autocomplete || 'off' });
           if (f.placeholder) input.placeholder = f.placeholder;
+          if (f.value !== undefined) input.value = f.value;
         }
         label.appendChild(input);
         box.appendChild(label);
@@ -3570,6 +3576,34 @@
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => t.classList.add('hidden'), 2600);
   }
+
+  // Public channels (see channels.js)
+  const channelsUI = window.createChannelsController({
+    emit,
+    me: () => state.me,
+    displayName,
+    avatar,
+    userBadges,
+    toast,
+    dialog,
+    openPanel,
+    mergeUsers: (users) => {
+      for (const [u, info] of Object.entries(users || {})) state.users[u] = { ...(state.users[u] || {}), ...info };
+    },
+    // A channel took over the main area (or gave it back).
+    onShow(show) {
+      if (show) {
+        state.activeId = null;
+        $('#chat-view').classList.add('hidden');
+        $('#empty-state').classList.add('hidden');
+        $('#app').classList.add('chat-open');
+        renderChatList();
+      } else {
+        $('#app').classList.remove('chat-open');
+        $('#empty-state').classList.remove('hidden');
+      }
+    },
+  });
 
   // Status updates (see status.js)
   const statusUpdates = window.createStatusController({

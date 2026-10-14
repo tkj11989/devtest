@@ -85,6 +85,10 @@
             <button class="icon-btn status-btn" id="btn-status" title="Status">
               <svg viewBox="0 0 24 24"><path d="M12 20.66a8.6 8.6 0 0 1-2.24-.3l.52-1.93a6.7 6.7 0 0 0 3.44 0l.52 1.93a8.6 8.6 0 0 1-2.24.3Zm-5.53-2.02a8.7 8.7 0 0 1-2.75-4.76l1.95-.42a6.7 6.7 0 0 0 2.12 3.67l-1.32 1.51Zm11.06 0-1.32-1.51a6.7 6.7 0 0 0 2.12-3.67l1.95.42a8.7 8.7 0 0 1-2.75 4.76ZM5.67 10.7l-1.95-.42A8.7 8.7 0 0 1 6.47 5.5l1.32 1.51A6.7 6.7 0 0 0 5.67 10.7Zm12.66 0a6.7 6.7 0 0 0-2.12-3.68l1.32-1.51a8.7 8.7 0 0 1 2.75 4.77l-1.95.42ZM10.28 5.57l-.52-1.93a8.7 8.7 0 0 1 4.48 0l-.52 1.93a6.7 6.7 0 0 0-3.44 0ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
             </button>
+            <button class="icon-btn channels-btn" id="btn-channels" title="Channels">
+              <svg viewBox="0 0 24 24"><path d="M20 2 4 8.5V9H2v6h2v.5L9 17.5V20a2 2 0 0 0 4 0v-1.5l7 2.9V2Zm-2 3.1v11.3L6 11.6V8.9l12-3.8Z"/></svg>
+              <span class="badge-dot hidden" id="channels-unread">0</span>
+            </button>
             <button class="icon-btn img-btn" id="btn-starred" title="Starred messages"><img src="icons/starred.png" alt="Starred messages" /></button>
             <button class="icon-btn" id="btn-new-group" title="New group">
               <svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13Zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5Z"/></svg>
@@ -104,6 +108,20 @@
         <div class="search"><input id="chat-filter" placeholder="Search chats" /></div>
         <ul id="chat-list" class="list"></ul>
         <p id="chat-list-empty" class="muted pad hidden">No chats yet. Tap the + icon to start one.</p>
+      </div>
+
+      <!-- Channels: followed + discover -->
+      <div class="panel overlay hidden" id="panel-channels">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Channels</h2>
+          <div class="bar-actions"><button class="icon-btn" id="btn-channel-create" title="Create a channel"><svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg></button></div>
+        </header>
+        <div class="tabs" role="tablist">
+          <button class="chan-tab tab-style active" data-tab="following" role="tab">Following</button>
+          <button class="chan-tab tab-style" data-tab="discover" role="tab">Discover</button>
+        </div>
+        <div class="search hidden" id="channel-search-wrap"><input id="channel-search" placeholder="Search public channels" /></div>
+        <ul id="channel-list" class="list"></ul>
+        <p id="channels-empty" class="muted pad hidden"></p>
       </div>
 
       <!-- New chat -->
@@ -407,6 +425,42 @@
         <p class="muted">Send and receive messages in real time.<br />Select a chat or start a new one.</p>
       </div>
 
+      <div class="chat-view hidden" id="channel-view">
+        <header class="bar">
+          <button class="icon-btn back mobile-only" id="btn-channel-back">&larr;</button>
+          <button class="chat-title-btn" id="channel-title-btn" type="button" title="Channel info">
+            <div class="avatar" id="channel-avatar"></div>
+            <div class="chat-title">
+              <div class="name-row"><span id="channel-name" class="name"></span><span id="channel-owner-badges" class="badges"></span></div>
+              <div id="channel-sub" class="sub"></div>
+            </div>
+          </button>
+          <button class="primary small" type="button" id="channel-follow">Follow</button>
+          <div class="menu-wrap">
+            <button class="icon-btn" id="btn-channel-menu" title="Menu" aria-haspopup="true">
+              <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
+            </button>
+            <div class="menu hidden" id="channel-menu" role="menu">
+              <button role="menuitem" id="channel-menu-info"><span>Channel info</span></button>
+              <button role="menuitem" id="channel-menu-edit"><span>Edit channel</span></button>
+              <button role="menuitem" id="channel-menu-admins"><span>Manage admins</span></button>
+              <button role="menuitem" id="channel-menu-report"><span>Report channel</span></button>
+              <button role="menuitem" id="channel-menu-delete"><span>Delete channel</span></button>
+            </div>
+          </div>
+        </header>
+        <button class="link hidden channel-more" type="button" id="channel-more">Load older posts</button>
+        <div class="messages channel-posts" id="channel-posts"></div>
+        <form class="composer" id="channel-composer" autocomplete="off">
+          <textarea id="channel-input" rows="1" maxlength="4000" placeholder="Write a post for your followers"></textarea>
+          <button class="send" type="submit" title="Post"><svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2v7Z"/></svg></button>
+        </form>
+        <div class="channel-readonly hidden" id="channel-readonly">
+          <span id="channel-readonly-text"></span>
+          <button class="link" type="button" id="channel-readonly-follow">Follow / unfollow</button>
+        </div>
+      </div>
+
       <div class="chat-view hidden" id="chat-view">
         <header class="bar">
           <button class="icon-btn back mobile-only" id="btn-back">&larr;</button>
@@ -628,6 +682,7 @@
   <script src="e2ee.js"></script>
   <script src="call.js"></script>
   <script src="status.js"></script>
+  <script src="channels.js"></script>
   <script src="business-hours.js"></script>
   <script src="app.js"></script>
 </body>

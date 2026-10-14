@@ -15,7 +15,7 @@ class Store {
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000 } = {}) {
     this.statusTtlMs = statusTtlMs;
     this.file = file === undefined ? path.join(__dirname, '..', 'data', 'db.json') : file;
-    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {} };
+    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [] };
     this.sessions = new Map(); // token -> username
     // Voice-message audio lives next to the data file (or in memory without one).
     this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
@@ -28,7 +28,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, ...parsed };
+      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], ...parsed };
     } catch (err) {
       console.error('Could not read data file, starting fresh:', err.message);
     }
@@ -511,6 +511,211 @@ class Store {
     // The catalogue belongs to the business profile: it goes too (with its images).
     for (const p of u.catalogue?.products || []) if (p.image) this.deleteMedia(p.image);
     delete u.catalogue;
+    this._save();
+  }
+
+  // ---------- public channels ----------
+  //
+  // A channel is a one-to-many feed: its owner and admins post, anyone can read it and follow
+  // it. Channel posts are public, so they are NOT end-to-end encrypted.
+
+  getChannel(idOrHandle) {
+    const key = String(idOrHandle || '').replace(/^@/, '').toLowerCase();
+    return this.data.channels[key] || Object.values(this.data.channels).find((c) => c.handle === key) || null;
+  }
+
+  static channelRole(ch, username) {
+    if (ch.owner === username) return 'owner';
+    return ch.admins.includes(username) ? 'admin' : null;
+  }
+
+  /** What a person sees of a channel. `unread` only for followers. */
+  channelView(ch, viewer) {
+    const posts = this.data.channelPosts[ch.id] || [];
+    const last = posts[posts.length - 1];
+    const f = ch.followers[viewer];
+    return {
+      id: ch.id,
+      handle: ch.handle,
+      name: ch.name,
+      description: ch.description,
+      ...(ch.category ? { category: ch.category } : {}),
+      owner: ch.owner,
+      admins: ch.admins,
+      followers: Object.keys(ch.followers).length,
+      following: !!f,
+      role: Store.channelRole(ch, viewer),
+      createdAt: ch.createdAt,
+      lastPost: last ? { text: last.text.slice(0, 140), ts: last.ts } : null,
+      ...(f ? { unread: posts.filter((p) => p.ts > f.lastRead && p.by !== viewer).length } : {}),
+    };
+  }
+
+  createChannel(owner, { handle, name, description, category }) {
+    if (!this.data.users[owner]) throw new Error('No such user');
+    handle = String(handle || '').trim().replace(/^@/, '').toLowerCase();
+    if (!/^[a-z0-9_]{3,30}$/.test(handle)) throw new Error('Handle must be 3-30 characters: letters, numbers or "_"');
+    if (this.getChannel(handle)) throw new Error('That channel handle is already taken');
+    const mine = Object.values(this.data.channels).filter((c) => c.owner === owner).length;
+    if (mine >= Store.CHANNELS_PER_OWNER) throw new Error(`You can have at most ${Store.CHANNELS_PER_OWNER} channels`);
+    const ch = {
+      id: crypto.randomBytes(5).toString('hex'),
+      handle,
+      ...Store._checkChannel({ name, description, category }),
+      owner,
+      admins: [],
+      followers: {},
+      createdAt: Date.now(),
+    };
+    ch.followers[owner] = { since: ch.createdAt, lastRead: ch.createdAt };
+    this.data.channels[ch.id] = ch;
+    this.data.channelPosts[ch.id] = [];
+    this._save();
+    return ch;
+  }
+
+  static _checkChannel(input, base = {}) {
+    const str = (v, max, field, required = false) => {
+      const t = String(v ?? '').trim();
+      if (required && !t) throw new Error(`${field} is required`);
+      if (t.length > max) throw new Error(`${field} is too long (max ${max} characters)`);
+      return t;
+    };
+    const out = { ...base };
+    if (input.name !== undefined || !base.name) out.name = str(input.name, 60, 'name', true);
+    if (input.description !== undefined || base.description === undefined) out.description = str(input.description, 300, 'description');
+    if (input.category !== undefined) {
+      const c = str(input.category, 30, 'category');
+      if (c) out.category = c;
+      else delete out.category;
+    }
+    return out;
+  }
+
+  updateChannel(by, id, input) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (!Store.channelRole(ch, by)) throw Object.assign(new Error('Only the channel owner or admins can change it'), { status: 403 });
+    Object.assign(ch, Store._checkChannel(input, ch));
+    this._save();
+    return ch;
+  }
+
+  deleteChannel(by, id) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (ch.owner !== by) throw Object.assign(new Error('Only the owner can delete a channel'), { status: 403 });
+    delete this.data.channels[id];
+    delete this.data.channelPosts[id];
+    this.data.reports = this.data.reports.filter((r) => r.channelId !== id);
+    this._save();
+    return Object.keys(ch.followers);
+  }
+
+  followChannel(username, id) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (!ch.followers[username]) ch.followers[username] = { since: Date.now(), lastRead: Date.now() };
+    this._save();
+    return ch;
+  }
+
+  unfollowChannel(username, id) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (ch.owner === username) throw Object.assign(new Error('The owner cannot unfollow their own channel. Delete it instead.'), { status: 403 });
+    delete ch.followers[username];
+    ch.admins = ch.admins.filter((a) => a !== username);
+    this._save();
+    return ch;
+  }
+
+  setChannelAdmin(owner, id, username, isAdmin) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (ch.owner !== owner) throw Object.assign(new Error('Only the owner can manage admins'), { status: 403 });
+    if (!this.data.users[username]) throw new Error('User not found');
+    if (isAdmin) {
+      if (username === owner) throw new Error('The owner is already in charge');
+      if (!ch.admins.includes(username)) {
+        if (ch.admins.length >= Store.CHANNEL_ADMINS_MAX) throw new Error(`A channel can have at most ${Store.CHANNEL_ADMINS_MAX} admins`);
+        ch.admins.push(username);
+        if (!ch.followers[username]) ch.followers[username] = { since: Date.now(), lastRead: Date.now() };
+      }
+    } else {
+      ch.admins = ch.admins.filter((a) => a !== username);
+    }
+    this._save();
+    return ch;
+  }
+
+  postToChannel(by, id, text) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (!Store.channelRole(ch, by)) throw Object.assign(new Error('Only the channel owner or admins can post'), { status: 403 });
+    text = String(text ?? '').trim();
+    if (!text) throw new Error('Post is empty');
+    if (text.length > 4000) throw new Error('Post is too long (max 4000 characters)');
+    const posts = this.data.channelPosts[id];
+    const post = { id: crypto.randomBytes(6).toString('hex'), channelId: id, text, by, ts: Date.now() };
+    posts.push(post);
+    if (posts.length > Store.CHANNEL_POSTS_MAX) posts.splice(0, posts.length - Store.CHANNEL_POSTS_MAX);
+    if (ch.followers[by]) ch.followers[by].lastRead = post.ts;
+    this._save();
+    return post;
+  }
+
+  deleteChannelPost(by, id, postId) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (!Store.channelRole(ch, by)) throw Object.assign(new Error('Only the channel owner or admins can delete posts'), { status: 403 });
+    const posts = this.data.channelPosts[id];
+    const i = posts.findIndex((p) => p.id === postId);
+    if (i < 0) throw new Error('Post not found');
+    posts.splice(i, 1);
+    this._save();
+  }
+
+  /** Newest `limit` posts (before a timestamp for older pages), oldest first. */
+  channelPostsPage(id, { before, limit = 30 } = {}) {
+    const all = (this.data.channelPosts[id] || []).filter((p) => !before || p.ts < before);
+    const page = all.slice(-limit - 1);
+    const hasMore = page.length > limit;
+    const posts = hasMore ? page.slice(1) : page;
+    return { posts, hasMore, nextBefore: hasMore ? posts[0].ts : null };
+  }
+
+  markChannelRead(username, id) {
+    const f = this.data.channels[id]?.followers[username];
+    if (f) {
+      f.lastRead = Date.now();
+      this._save();
+    }
+  }
+
+  /** Channels matching `q` (name, handle, description, category), biggest first; no `q` = the most followed. */
+  searchChannels(q, limit = 30) {
+    q = String(q || '').trim().toLowerCase().replace(/^@/, '');
+    return Object.values(this.data.channels)
+      .filter((c) => !q || c.handle.includes(q) || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || (c.category || '').toLowerCase().includes(q))
+      .sort((a, b) => Object.keys(b.followers).length - Object.keys(a.followers).length || b.createdAt - a.createdAt)
+      .slice(0, limit);
+  }
+
+  channelsOf(username) {
+    return Object.values(this.data.channels).filter((c) => c.followers[username]);
+  }
+
+  /** One report per person per channel. They are kept for whoever runs the service to review. */
+  reportChannel(reporter, id, reason) {
+    const ch = this.data.channels[id];
+    if (!ch) throw new Error('Channel not found');
+    if (ch.owner === reporter) throw new Error('You cannot report your own channel');
+    reason = String(reason ?? '').trim().slice(0, 200);
+    if (!reason) throw new Error('Say what is wrong');
+    const existing = this.data.reports.find((r) => r.channelId === id && r.reporter === reporter);
+    if (existing) Object.assign(existing, { reason, ts: Date.now() });
+    else this.data.reports.push({ channelId: id, reporter, reason, ts: Date.now() });
     this._save();
   }
 
@@ -1427,6 +1632,9 @@ Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */
 Store.MAX_DEVICES = 5;
+Store.CHANNELS_PER_OWNER = 10;
+Store.CHANNEL_ADMINS_MAX = 5;
+Store.CHANNEL_POSTS_MAX = 5000;
 Store.CATALOGUE_MAX = 100;
 Store.PROFILE_VIEWS_MAX = 500;
 Store.PROFILE_VIEWS_DAYS = 90;

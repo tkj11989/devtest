@@ -186,6 +186,13 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     for (const p of [me, ...peersOf(me)]) io.to(userRoom(p)).emit('e2ee:update', { username: me });
   };
 
+  const channelPostTimes = new Map(); // user -> recent post times (rate limit)
+  const channelOrThrow = (id) => {
+    const ch = store.getChannel(id);
+    if (!ch) throw new ApiError(404, 'not_found', 'Channel not found');
+    return ch;
+  };
+
   /** Free accounts: up to 3 locked chats and 1 hidden chat. Past that needs Premium (402). */
   const requireRoom = (me, kind) => {
     if (store.isPremium(me)) return;
@@ -425,6 +432,100 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       store.setProfileViewsEnabled(me, !!enabled);
       io.to(userRoom(me)).emit('profile:viewed', {});
       return { privacy: { profileViews: store.profileViewsEnabled(me) } };
+    },
+
+    // ----- public channels -----
+
+    /** Search the public directory (no `q`: the most followed channels). */
+    channelsSearch(me, { q }) {
+      const channels = store.searchChannels(q);
+      return { channels: channels.map((c) => store.channelView(c, me)), users: usersFor(new Set(channels.map((c) => c.owner)), me) };
+    },
+
+    /** Channels I follow or own, with unread counts. */
+    channelsMine(me) {
+      const channels = store.channelsOf(me);
+      return { channels: channels.map((c) => store.channelView(c, me)), users: usersFor(new Set(channels.map((c) => c.owner)), me) };
+    },
+
+    channelGet(me, { id }) {
+      const ch = channelOrThrow(id);
+      return { channel: store.channelView(ch, me), users: usersFor(new Set([ch.owner, ...ch.admins]), me) };
+    },
+
+    channelCreate(me, fields) {
+      const ch = store.createChannel(me, fields || {});
+      return { channel: store.channelView(ch, me) };
+    },
+
+    channelUpdate(me, { id, ...fields }) {
+      const ch = store.updateChannel(me, channelOrThrow(id).id, fields);
+      for (const f of Object.keys(ch.followers)) io.to(userRoom(f)).emit('channel:updated', { channel: store.channelView(ch, f) });
+      return { channel: store.channelView(ch, me) };
+    },
+
+    channelDelete(me, { id }) {
+      const channelId = channelOrThrow(id).id;
+      const followers = store.deleteChannel(me, channelId);
+      for (const f of followers) io.to(userRoom(f)).emit('channel:deleted', { id: channelId });
+      return {};
+    },
+
+    channelFollow(me, { id }) {
+      const ch = store.followChannel(me, channelOrThrow(id).id);
+      io.to(userRoom(me)).emit('channel:updated', { channel: store.channelView(ch, me) });
+      return { channel: store.channelView(ch, me) };
+    },
+
+    channelUnfollow(me, { id }) {
+      const ch = store.unfollowChannel(me, channelOrThrow(id).id);
+      io.to(userRoom(me)).emit('channel:updated', { channel: store.channelView(ch, me) });
+      return { channel: store.channelView(ch, me) };
+    },
+
+    /** Owner only: make someone an admin (they can post), or take it away. */
+    channelAdmin(me, { id, username, admin }) {
+      const ch = store.setChannelAdmin(me, channelOrThrow(id).id, String(username || '').toLowerCase(), admin !== false);
+      for (const f of Object.keys(ch.followers)) io.to(userRoom(f)).emit('channel:updated', { channel: store.channelView(ch, f) });
+      return { channel: store.channelView(ch, me) };
+    },
+
+    /** Channels are public: anyone signed in can read the posts, without following. */
+    channelPosts(me, { id, before, limit }) {
+      const ch = channelOrThrow(id);
+      const n = Math.max(1, Math.min(PAGE_MAX, Number(limit) || 30));
+      const page = store.channelPostsPage(ch.id, { before: Number(before) || undefined, limit: n });
+      if (ch.followers[me]) store.markChannelRead(me, ch.id);
+      return { ...page, users: usersFor(new Set(page.posts.map((p) => p.by)), me) };
+    },
+
+    /** Owner or admin: publish a post. Followers get it live. */
+    channelPost(me, { id, text }) {
+      const ch = channelOrThrow(id);
+      const recent = (channelPostTimes.get(me) || []).filter((t) => t > Date.now() - 60000);
+      if (recent.length >= 20) throw new ApiError(429, 'rate_limited', 'Posting too fast. Try again in a minute.');
+      const post = store.postToChannel(me, ch.id, text);
+      recent.push(Date.now());
+      channelPostTimes.set(me, recent);
+      for (const f of Object.keys(ch.followers)) io.to(userRoom(f)).emit('channel:post', { post, channel: store.channelView(ch, f) });
+      return { post };
+    },
+
+    channelPostDelete(me, { id, postId }) {
+      const ch = channelOrThrow(id);
+      store.deleteChannelPost(me, ch.id, postId);
+      for (const f of Object.keys(ch.followers)) io.to(userRoom(f)).emit('channel:post-deleted', { channelId: ch.id, postId, channel: store.channelView(ch, f) });
+      return {};
+    },
+
+    channelRead(me, { id }) {
+      store.markChannelRead(me, channelOrThrow(id).id);
+      return {};
+    },
+
+    channelReport(me, { id, reason }) {
+      store.reportChannel(me, channelOrThrow(id).id, reason);
+      return {};
     },
 
     // ----- product catalogue (business profiles) -----

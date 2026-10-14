@@ -69,6 +69,22 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       })],
     },
     Users: { type: 'object', additionalProperties: ref('User'), description: 'Users keyed by username' },
+    Channel: obj({
+      id: { type: 'string' },
+      handle: { type: 'string', description: 'public name, 3-30 letters, numbers or _' },
+      name: { type: 'string', maxLength: 60 },
+      description: { type: 'string', maxLength: 300 },
+      category: { type: 'string', maxLength: 30 },
+      owner: { type: 'string', description: 'username of the owner' },
+      admins: arrayOf({ type: 'string' }),
+      followers: { type: 'integer' },
+      following: { type: 'boolean' },
+      role: { type: ['string', 'null'], enum: ['owner', 'admin', null], description: 'your role in the channel' },
+      createdAt: { type: 'integer' },
+      lastPost: { oneOf: [obj({ text: { type: 'string' }, ts: { type: 'integer' } }), { type: 'null' }] },
+      unread: { type: 'integer', description: 'followers only: posts you have not read' },
+    }, ['id', 'handle', 'name', 'owner', 'followers', 'following']),
+    ChannelPost: obj({ id: { type: 'string' }, channelId: { type: 'string' }, text: { type: 'string', maxLength: 4000 }, by: { type: 'string' }, ts: { type: 'integer' } }, ['id', 'channelId', 'text', 'by', 'ts']),
     Product: obj({
       id: { type: 'string' },
       name: { type: 'string', maxLength: 80 },
@@ -245,7 +261,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', i18n: 'Translation', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -333,6 +349,59 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/channels': {
+      get: op(T.chan, 'Discover public channels', {
+        description: 'Search by name, handle, description or category; without `q` the most followed channels. Channels are public: anyone signed in can find, read and follow them.',
+        params: [{ name: 'q', in: 'query', schema: { type: 'string' } }],
+        responses: { 200: ok(obj({ channels: arrayOf(ref('Channel')), users: ref('Users') })), ...errors(401) },
+      }),
+      post: op(T.chan, 'Create a channel', {
+        description: 'You become its owner and first follower. Up to 10 channels per person. The handle can\'t be changed later. **Channel posts are public and are not end-to-end encrypted.**',
+        body: jsonBody(obj({ handle: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, category: { type: 'string' } }, ['handle', 'name']), { handle: 'pune_food_news', name: 'Pune Food News', description: 'New openings and offers', category: 'Food' }),
+        responses: { 201: ok(obj({ channel: ref('Channel') })), ...errors(400, 401, 409) },
+      }),
+    },
+    '/me/channels': { get: op(T.chan, 'Channels I follow or own', { responses: { 200: ok(obj({ channels: arrayOf(ref('Channel')), users: ref('Users') })), ...errors(401) } }) },
+    '/channels/{id}': {
+      get: op(T.chan, 'A channel', { description: '`id` is the channel id or its handle.', params: [idParam('id')], responses: { 200: ok(obj({ channel: ref('Channel'), users: ref('Users') })), ...errors(401, 404) } }),
+      patch: op(T.chan, 'Edit a channel (owner or admin)', {
+        params: [idParam('id')],
+        body: jsonBody(obj({ name: { type: 'string' }, description: { type: 'string' }, category: { type: 'string' } })),
+        responses: { 200: ok(obj({ channel: ref('Channel') })), ...errors(400, 401, 403, 404) },
+      }),
+      delete: op(T.chan, 'Delete a channel and its posts (owner)', { params: [idParam('id')], responses: { 204: noContent, ...errors(401, 403, 404) } }),
+    },
+    '/channels/{id}/follow': {
+      put: op(T.chan, 'Follow a channel', { params: [idParam('id')], responses: { 200: ok(obj({ channel: ref('Channel') })), ...errors(401, 404) } }),
+      delete: op(T.chan, 'Unfollow a channel', { params: [idParam('id')], responses: { 200: ok(obj({ channel: ref('Channel') })), ...errors(401, 403, 404) } }),
+    },
+    '/channels/{id}/admins/{username}': {
+      put: op(T.chan, 'Make someone an admin (owner)', { description: 'Admins can post, delete posts and edit the channel. Up to 5; they also follow the channel.', params: [idParam('id'), idParam('username')], responses: { 200: ok(obj({ channel: ref('Channel') })), ...errors(400, 401, 403, 404, 409) } }),
+      delete: op(T.chan, 'Remove an admin (owner)', { params: [idParam('id'), idParam('username')], responses: { 200: ok(obj({ channel: ref('Channel') })), ...errors(401, 403, 404) } }),
+    },
+    '/channels/{id}/posts': {
+      get: op(T.chan, 'Posts of a channel (oldest first)', {
+        description: 'Public: no need to follow. Reading as a follower marks the channel read.',
+        params: [idParam('id'), { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 30 } }, { name: 'before', in: 'query', schema: { type: 'integer' }, description: 'only posts older than this timestamp; pass `nextBefore` to page back' }],
+        responses: { 200: ok(obj({ posts: arrayOf(ref('ChannelPost')), hasMore: { type: 'boolean' }, nextBefore: { type: ['integer', 'null'] }, users: ref('Users') })), ...errors(401, 404) },
+      }),
+      post: op(T.chan, 'Publish a post (owner or admin)', {
+        description: 'Followers receive it live (`channel:post`). 20 posts per minute.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 } }, ['text']), { text: 'We open at 9 tomorrow! 🍕' }),
+        responses: { 201: ok(obj({ post: ref('ChannelPost') })), ...errors(400, 401, 403, 404, 429) },
+      }),
+    },
+    '/channels/{id}/posts/{postId}': { delete: op(T.chan, 'Delete a post (owner or admin)', { params: [idParam('id'), idParam('postId')], responses: { 204: noContent, ...errors(401, 403, 404) } }) },
+    '/channels/{id}/read': { post: op(T.chan, 'Mark a channel read', { params: [idParam('id')], responses: { 204: noContent, ...errors(401, 404) } }) },
+    '/channels/{id}/report': {
+      post: op(T.chan, 'Report a channel', {
+        description: 'One report per person per channel. Reports are kept for whoever runs the service to review (there is no admin screen yet).',
+        params: [idParam('id')],
+        body: jsonBody(obj({ reason: { type: 'string', maxLength: 200 } }, ['reason']), { reason: 'Spam' }),
+        responses: { 204: noContent, ...errors(400, 401, 404) },
+      }),
+    },
     '/users/{username}/catalogue': {
       get: op(T.biz, 'A business\'s product catalogue', {
         description: 'Products with prices, for any business account (the profile\'s `business.productCount` says how many). Anyone signed in can look.',
@@ -823,6 +892,21 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'get /channels': 'searchChannels',
+    'post /channels': 'createChannel',
+    'get /me/channels': 'listMyChannels',
+    'get /channels/{id}': 'getChannel',
+    'patch /channels/{id}': 'updateChannel',
+    'delete /channels/{id}': 'deleteChannel',
+    'put /channels/{id}/follow': 'followChannel',
+    'delete /channels/{id}/follow': 'unfollowChannel',
+    'put /channels/{id}/admins/{username}': 'addChannelAdmin',
+    'delete /channels/{id}/admins/{username}': 'removeChannelAdmin',
+    'get /channels/{id}/posts': 'listChannelPosts',
+    'post /channels/{id}/posts': 'publishChannelPost',
+    'delete /channels/{id}/posts/{postId}': 'deleteChannelPost',
+    'post /channels/{id}/read': 'markChannelRead',
+    'post /channels/{id}/report': 'reportChannel',
     'get /users/{username}/catalogue': 'getCatalogue',
     'get /me/catalogue': 'getMyCatalogue',
     'put /me/catalogue/currency': 'setCatalogueCurrency',
@@ -935,6 +1019,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       '',
       'Not covered: messages sent by the REST API without an envelope, business auto replies, status updates, names, times and who talks to whom. Calls are encrypted peer to peer by WebRTC.',
     ].join('\n'),
+    [T.chan]: 'Public one-to-many channels: owners and admins post, anyone can read and follow (not end-to-end encrypted)',
     [T.i18n]: 'Show received messages of a chat in the language you choose',
     [T.hide]: 'Hide chats from the chat list, opened with the secret code or fingerprint/face lock',
     [T.biz]: 'Business profile, hours, greeting and away messages',

@@ -141,6 +141,19 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Public channels
+
+A **channel** is a public one-to-many feed, like a broadcast or news channel: the owner and admins post, **anyone can find, read and follow it**, and followers can't post. Tap the megaphone in the chat list header.
+
+- **Following / Discover:** *Following* lists the channels you follow or own, with unread counts (and a total on the megaphone). *Discover* is the public directory: search by name, handle, description or category; with no search it shows the most followed channels. Reading needs no follow.
+- **Create** (＋): a name, a unique **handle** (3-30 letters/numbers/`_`, can't be changed), an optional description and category. You become the owner. Up to 10 channels each.
+- **Posts:** text up to 4000 characters, links are clickable. Followers get them **live**; older posts load on demand. The owner and admins can **delete** posts; 20 posts per minute.
+- **Admins:** the owner can appoint up to 5 admins (they can post, delete posts and edit the channel; they also follow it). Only the owner can delete the channel, which removes its posts for everyone.
+- **Safety:** anyone can **report** a channel (one report each, with a reason). Reports are stored for whoever runs the service to review; there is no admin screen yet. The owner's Verified badge shows on the channel.
+- **Not end-to-end encrypted:** channels are public, so the posts are visible to the server and to anyone. The app says so on every channel.
+
+API: `GET/POST /channels`, `GET /me/channels`, `GET/PATCH/DELETE /channels/{id}` (`id` or handle), `PUT/DELETE /channels/{id}/follow`, `PUT/DELETE /channels/{id}/admins/{username}`, `GET/POST /channels/{id}/posts`, `DELETE /channels/{id}/posts/{postId}`, `POST /channels/{id}/read`, `POST /channels/{id}/report`. Socket: `channels:search`, `channels:mine`, `channel:get|create|update|delete|follow|unfollow|admin|posts|post|post-delete|read|report`; server → client `channel:post`, `channel:post-deleted`, `channel:updated`, `channel:deleted`.
+
 ## Product catalogue (business profiles)
 
 Business accounts can list products with prices. **Profile → Business account → Product catalogue** (owner), and **View catalogue (n)** on any business's profile (customers).
@@ -434,6 +447,7 @@ whatsapp-clone/
 │   ├── app.js       # Client logic
 │   ├── call.js      # WebRTC call controller and call screen
 │   ├── e2ee.js      # End-to-end encryption (Web Crypto; also used by the tests)
+│   ├── channels.js  # Public channels: list, discover and channel screen
 │   ├── status.js    # Status updates: list, composer and viewer
 │   ├── business-hours.js # Opening hours / "open now" (shared with the server)
 │   └── api-docs.html # Interactive API docs (/api/docs)
@@ -452,6 +466,7 @@ whatsapp-clone/
     ├── profileviews.test.js
     ├── translate.test.js
     ├── catalogue.test.js
+    ├── channels.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js
