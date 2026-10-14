@@ -143,6 +143,45 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
     throw new ApiError(403, 'wrong_code', `Wrong ${what}${left > 0 ? ` (${left} ${left === 1 ? 'try' : 'tries'} left)` : ''}`);
   };
 
+  // ---------- end-to-end encryption ----------
+
+  const B64U = /^[A-Za-z0-9_-]+$/;
+  const b64len = (s, bytes) => typeof s === 'string' && B64U.test(s) && Buffer.from(s, 'base64url').length === bytes;
+
+  /**
+   * Check an encrypted message's envelope: well-formed, from one of my devices, and with a
+   * key wrap for exactly every device of every member (so nobody is silently left out and
+   * nothing is wrapped for a device that no longer exists). A stale device list is a
+   * 409 `keys_changed`: the sender re-fetches the keys and encrypts again.
+   */
+  const checkEnvelope = (me, conv, env, { media = false } = {}) => {
+    const bad = (why) => new ApiError(400, 'invalid_envelope', `Invalid encrypted message (${why})`);
+    if (!env || typeof env !== 'object' || env.v !== 1) throw bad('version');
+    const own = store.devicesOf(me).map((d) => d.id);
+    if (!own.includes(env.sd)) throw new ApiError(409, 'keys_changed', 'This device is no longer registered for encryption. Reload and try again.');
+    if (!b64len(env.iv, 12) || !b64len(env.eph, 65)) throw bad('iv/eph');
+    if (typeof env.ct !== 'string' || !B64U.test(env.ct) || env.ct.length > 64 * 1024) throw bad('ct');
+    if (media && !b64len(env.mi, 12)) throw bad('mi');
+    if (!env.w || typeof env.w !== 'object') throw bad('w');
+    const expected = new Set(conv.members.flatMap((m) => store.devicesOf(m).map((d) => d.id)));
+    const given = Object.keys(env.w);
+    if (given.length !== expected.size || given.some((id) => !expected.has(id))) {
+      throw new ApiError(409, 'keys_changed', "Someone's encryption keys changed. Try sending again.");
+    }
+    const w = {};
+    for (const id of given) {
+      const e = env.w[id];
+      if (!e || !b64len(e.iv, 12) || !b64len(e.k, 48)) throw bad('wrap');
+      w[id] = { iv: e.iv, k: e.k };
+    }
+    return { v: 1, sd: env.sd, iv: env.iv, ct: env.ct, eph: env.eph, ...(media ? { mi: env.mi } : {}), w };
+  };
+
+  /** Tell everyone who shares a chat with `me` (and my own devices) that my device keys changed. */
+  const announceDevices = (me) => {
+    for (const p of [me, ...peersOf(me)]) io.to(userRoom(p)).emit('e2ee:update', { username: me });
+  };
+
   const contactDestination = (body) => {
     try {
       if (body.phone) return { channel: 'sms', to: normalisePhone(body.phone) };
@@ -443,15 +482,43 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
       return { messages, hasMore, nextBefore: hasMore ? messages[0].ts : null };
     },
 
-    sendText(me, { convId, text, masked, clientId }, ctx) {
-      member(me, convId);
+    sendText(me, { convId, text, masked, clientId, e2ee }, ctx) {
+      const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
-      return { message: sendMessage(me, convId, text, { masked: !!masked, clientId }) };
+      // With `e2ee` the text is inside the encrypted envelope and the server never sees it.
+      const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
+      return { message: sendMessage(me, convId, env ? '' : text, { masked: !!masked, clientId, e2ee: env }) };
     },
 
-    sendVoice(me, { convId, clientId, duration, mime, data }, ctx) {
-      member(me, convId);
+    // ----- end-to-end encryption: device keys -----
+
+    e2eeDevices(me) {
+      return { devices: store.publicDevices(me) };
+    },
+
+    /** Register this device's public key (the private key never leaves the device). */
+    registerDevice(me, { name, publicKey }) {
+      const device = store.addDevice(me, { name, publicKey });
+      announceDevices(me);
+      return { device, devices: store.publicDevices(me) };
+    },
+
+    removeDevice(me, { id }) {
+      store.removeDevice(me, String(id));
+      announceDevices(me);
+      return { devices: store.publicDevices(me) };
+    },
+
+    /** Public keys of every device of every member of a chat, to encrypt for (and to check senders). */
+    conversationKeys(me, { convId }) {
+      const conv = member(me, convId);
+      return { keys: Object.fromEntries(conv.members.map((m) => [m, store.publicDevices(m)])) };
+    },
+
+    sendVoice(me, { convId, clientId, duration, mime, data, e2ee }, ctx) {
+      const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
+      const env = e2ee ? checkEnvelope(me, conv, e2ee, { media: true }) : undefined;
       const dup = store.findByClientId(convId, me, clientId);
       if (dup) return { message: store.viewFor(dup, me) };
       if (!Buffer.isBuffer(data) || data.length === 0) throw new Error('Recording is empty');
@@ -461,7 +528,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
       duration = Math.min(Number(duration) || 0, VOICE_MAX_SECONDS);
       const mediaId = store.saveMedia(convId, data, mime);
       try {
-        return { message: sendMessage(me, convId, '', { clientId, voice: { mediaId, duration, mime } }) };
+        return { message: sendMessage(me, convId, '', { clientId, voice: { mediaId, duration, mime }, e2ee: env }) };
       } catch (err) {
         store.deleteMedia(mediaId);
         throw err;
@@ -746,13 +813,15 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
     },
 
     /** Replying to a status sends a message in the one-to-one chat with its owner. */
-    replyStatus(me, { id, text, clientId }, ctx) {
+    replyStatus(me, { id, text, clientId, e2ee }, ctx) {
       const status = store.data.statuses[id];
       if (!store.canSeeStatus(status, me) || status.owner === me) throw new ApiError(404, 'not_found', 'Status not found');
       const conv = store.getOrCreateDirect(me, status.owner);
       const preview = status.type === 'text' ? status.text.slice(0, 120) : status.caption.slice(0, 120);
-      const message = sendMessage(me, conv.id, text, {
+      const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
+      const message = sendMessage(me, conv.id, env ? '' : text, {
         clientId,
+        e2ee: env,
         statusReply: { statusId: status.id, owner: status.owner, type: status.type, preview, ...(status.bg ? { bg: status.bg } : {}) },
       });
       return { message, conversation: conversationView(me, conv, ctx) };

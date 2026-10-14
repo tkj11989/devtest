@@ -1211,3 +1211,17 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .list li .row-action { flex: none; width: 36px; height: 36px; color: var(--muted); }
 .list li .row-action svg { width: 20px; height: 20px; fill: currentColor; }
 .list li .row-action:hover { color: var(--primary-text); }
+
+/* End-to-end encryption */
+.e2ee-banner {
+  display: flex; align-items: center; gap: 8px; justify-content: center;
+  padding: 6px 14px; font-size: 12.5px; color: var(--muted); background: var(--panel-2);
+  border-bottom: 1px solid var(--border); text-align: center;
+}
+.e2ee-banner svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+.e2ee-banner.warn { background: var(--accent-soft); color: var(--accent-text); }
+.msg .plain-mark { display: inline-block; width: 11px; height: 11px; margin-right: 3px; vertical-align: -1px; fill: currentColor; opacity: .7; }
+.msg .undecryptable { font-style: italic; opacity: .8; }
+.safety { font-variant-numeric: tabular-nums; letter-spacing: .04em; line-height: 1.7; word-spacing: .3em; }
+.device-this { color: var(--online); font-size: 12.5px; }
+#modal-text { white-space: pre-line; }

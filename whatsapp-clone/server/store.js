@@ -778,7 +778,72 @@ class Store {
   viewFor(msg, username) {
     const { starredBy, hiddenFor, ...rest } = msg;
     if (starredBy?.includes(username)) rest.starred = true;
+    // End-to-end encrypted: each person only gets the key wraps meant for their own devices.
+    if (rest.e2ee) {
+      const mine = new Set(this.devicesOf(username).map((d) => d.id));
+      rest.e2ee = { ...rest.e2ee, w: Object.fromEntries(Object.entries(rest.e2ee.w).filter(([id]) => mine.has(id))) };
+    }
     return rest;
+  }
+
+  // ---------- end-to-end encryption: device keys ----------
+  //
+  // Each browser/phone makes its own P-256 key pair and only ever sends the public half here.
+  // Senders encrypt every message separately for each device of each member; the server
+  // keeps this directory and the ciphertext, and cannot read message text.
+
+  devicesOf(username) {
+    return this.data.users[username]?.devices || [];
+  }
+
+  static _publicDevice({ id, name, publicKey, keyId, createdAt }) {
+    return { id, name, publicKey, keyId, createdAt };
+  }
+
+  publicDevices(username) {
+    return this.devicesOf(username).map(Store._publicDevice);
+  }
+
+  /** Register a device's public key (raw P-256 point, base64url). Re-registering the same key returns the same device. */
+  addDevice(username, { name, publicKey }) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const raw = Buffer.from(String(publicKey || ''), 'base64url');
+    try {
+      if (raw.length !== 65 || raw[0] !== 4) throw new Error('bad');
+      crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+    } catch {
+      throw Object.assign(new Error('publicKey must be a P-256 public key (65 bytes, base64url)'), { status: 400 });
+    }
+    const key = raw.toString('base64url');
+    u.devices = u.devices || [];
+    const same = u.devices.find((d) => d.publicKey === key);
+    if (same) return Store._publicDevice(same);
+    if (u.devices.length >= Store.MAX_DEVICES) throw new Error(`You can have at most ${Store.MAX_DEVICES} devices with encryption. Remove one first.`);
+    const device = {
+      id: crypto.randomBytes(8).toString('hex'),
+      name: String(name || 'This device').trim().slice(0, 40) || 'This device',
+      publicKey: key,
+      keyId: crypto.createHash('sha256').update(raw).digest('base64url').slice(0, 16),
+      createdAt: Date.now(),
+    };
+    u.devices.push(device);
+    this._save();
+    return Store._publicDevice(device);
+  }
+
+  removeDevice(username, id) {
+    const u = this.data.users[username];
+    const before = u?.devices?.length || 0;
+    if (u?.devices) u.devices = u.devices.filter((d) => d.id !== id);
+    if (!before || u.devices.length === before) throw new Error('Device not found');
+    this._save();
+  }
+
+  /** Who owns a device id (usernames, or null). */
+  deviceOwner(id) {
+    for (const u of Object.values(this.data.users)) if (u.devices?.some((d) => d.id === id)) return u.username;
+    return null;
   }
 
   findMessage(msgId) {
@@ -853,7 +918,7 @@ class Store {
    * `voice`: `{ mediaId, duration, mime }` for a voice message (text is then empty).
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -869,8 +934,8 @@ class Store {
       if (this.hasBlocked(peer, from)) hiddenFor = [peer];
     }
 
-    text = voice ? '' : String(text || '').trim();
-    if (!voice && !text) throw new Error('Message is empty');
+    text = voice || e2ee ? '' : String(text || '').trim();
+    if (!voice && !e2ee && !text) throw new Error('Message is empty');
     if (text.length > 4000) throw new Error('Message is too long');
     const msg = {
       id: crypto.randomBytes(8).toString('hex'),
@@ -885,6 +950,7 @@ class Store {
       msg.type = 'voice';
       msg.voice = { mediaId: voice.mediaId, duration: Math.max(0, Math.round(Number(voice.duration) || 0)), mime: voice.mime };
     }
+    if (e2ee) msg.e2ee = e2ee; // end-to-end encrypted: the server holds only ciphertext
     if (masked && !voice) msg.masked = true;
     if (statusReply) msg.statusReply = statusReply;
     if (auto) msg.auto = auto; // 'greeting' | 'away' (business automatic replies)
@@ -1098,6 +1164,7 @@ class Store {
       m.text = '';
       m.deleted = true;
       delete m.voice;
+      delete m.e2ee;
       delete m.masked;
       delete m.starredBy;
       this._save();
@@ -1114,6 +1181,7 @@ Store.MAX_API_KEYS = 10;
 Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */
+Store.MAX_DEVICES = 5;
 Store.WEBHOOK_EVENTS = [
   'message:new', 'message:status', 'message:deleted', 'message:starred',
   'conversation:new', 'typing', 'presence', 'user:updated', 'blocked:update',

@@ -178,8 +178,58 @@
   }
 
   const emit = (event, payload) => new Promise((resolve, reject) => {
-    state.socket.emit(event, payload, (res) => (res && res.ok ? resolve(res) : reject(new Error(res?.error || 'Request failed'))));
+    state.socket.emit(event, payload, (res) => {
+      if (!(res && res.ok)) return reject(Object.assign(new Error(res?.error || 'Request failed'), { code: res?.code }));
+      // End-to-end encrypted messages in the reply are decrypted before anyone sees them.
+      decryptPayload(res).then(() => resolve(res), () => resolve(res));
+    });
   });
+
+  // ---------- end-to-end encryption ----------
+
+  /** Decrypt an encrypted message in place: `text` becomes readable; failures are marked `undecryptable`. */
+  async function readMessage(m) {
+    if (!m?.e2ee) return m;
+    m.encrypted = true;
+    if (m.deleted || m.text || m.undecryptable) return m;
+    if (!state.e2ee?.ready || !m.e2ee.w[state.e2ee.deviceId]) {
+      m.undecryptable = true; // sent before this device had its key, or no key here
+      return m;
+    }
+    try {
+      const { payload } = await state.e2ee.decrypt(m);
+      if (m.type !== 'voice') m.text = payload.t ?? '';
+    } catch (err) {
+      console.warn('Could not decrypt a message:', err.message);
+      m.undecryptable = true;
+    }
+    return m;
+  }
+
+  /** Decrypt every message found in a server reply or event (history, previews, stars, new messages). */
+  async function decryptPayload(res) {
+    const jobs = [];
+    const add = (m) => { if (m?.e2ee) jobs.push(readMessage(m)); };
+    res.messages?.forEach(add);
+    add(res.message);
+    add(res.conversation?.lastMessage);
+    res.conversations?.forEach((c) => add(c.lastMessage));
+    if (jobs.length) await Promise.all(jobs);
+  }
+
+  /** Text for a message in lists and previews. */
+  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.masked ? 'Masked message' : m.text);
+
+  const openLockSvg = () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', 'plain-mark');
+    svg.innerHTML = '<path d="M12 1a5 5 0 0 0-5 5h2a3 3 0 1 1 6 0v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Z"/>';
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = 'Not end-to-end encrypted';
+    svg.appendChild(title);
+    return svg;
+  };
 
   // ---------- auth ----------
 
@@ -441,7 +491,7 @@
     state.calls?.dispose();
     statusUpdates.reset();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null });
     state.conversations.clear();
     state.messages.clear();
     state.outbox.clear();
@@ -472,6 +522,12 @@
     });
     statusUpdates.attach(socket);
 
+    // Events that carry (or refer to) messages are handled one at a time, in order, after decryption.
+    let inbox = Promise.resolve();
+    const onOrdered = (event, handler) => socket.on(event, (payload) => {
+      inbox = inbox.then(() => decryptPayload(payload)).then(() => handler(payload)).catch(console.error);
+    });
+
     socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') {
         socket.disconnect();
@@ -488,6 +544,10 @@
         state.myBusiness = business || null;
         setLockSettings(lockSettings);
         state.me = me;
+        // This device's encryption key (made once, kept in the browser) must be ready before any message is read.
+        if (!state.e2ee) state.e2ee = window.E2EE.createClient({ emit, username: me.username, deviceName: deviceName() });
+        await state.e2ee.init();
+        renderE2eeSummary();
         state.iceServers = iceServers || [];
         state.blocked = new Set(blocked || []);
         setOffline(false);
@@ -507,14 +567,14 @@
     });
 
     socket.on('disconnect', () => setOffline(true));
-    socket.on('message:new', ({ message }) => onMessage(message));
-    socket.on('message:starred', ({ convId, id, starred }) => {
+    onOrdered('message:new', ({ message }) => onMessage(message));
+    onOrdered('message:starred', ({ convId, id, starred }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
       if (m) m.starred = starred;
       if (convId === state.activeId) renderMessages();
       if (!$('#panel-starred').classList.contains('hidden')) loadStarred();
     });
-    socket.on('conversation:updated', ({ conversation }) => {
+    onOrdered('conversation:updated', ({ conversation }) => {
       const conv = state.conversations.get(conversation.id);
       if (!conv) {
         loadConversations();
@@ -526,7 +586,13 @@
       if (conversation.id === state.activeId) renderHeader();
       refreshContactInfo();
     });
-    socket.on('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
+    onOrdered('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
+    // Someone added or removed a device: refresh keys so new messages are encrypted for the right devices.
+    socket.on('e2ee:update', () => {
+      state.e2ee?.invalidate();
+      if (!$('#panel-devices').classList.contains('hidden')) renderDevices().catch(() => {});
+      if (state.activeId) renderHeader();
+    });
     // Chats were hidden/unhidden (maybe on another device): reload the list.
     socket.on('hidden:update', () => loadConversations());
     socket.on('chatlock:update', async (settings) => {
@@ -547,7 +613,7 @@
       renderChatList();
       if (convId === state.activeId) renderHeader();
     });
-    socket.on('message:status', ({ convId, messages }) => {
+    onOrdered('message:status', ({ convId, messages }) => {
       const list = state.messages.get(convId);
       const conv = state.conversations.get(convId);
       for (const s of messages) {
@@ -558,7 +624,7 @@
       if (convId === state.activeId) renderMessages();
       renderChatList();
     });
-    socket.on('message:deleted', ({ convId, id }) => {
+    onOrdered('message:deleted', ({ convId, id }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
       if (m) Object.assign(m, { deleted: true, text: '' });
       const conv = state.conversations.get(convId);
@@ -566,7 +632,7 @@
       if (convId === state.activeId) renderMessages();
       renderChatList();
     });
-    socket.on('conversation:new', ({ conversation, users }) => {
+    onOrdered('conversation:new', ({ conversation, users }) => {
       Object.assign(state.users, users);
       if (!state.conversations.has(conversation.id)) state.conversations.set(conversation.id, conversation);
       renderChatList();
@@ -708,7 +774,7 @@
           // Masked text never shows in the chat list, not even to the sender.
           if (m.masked) preview.appendChild(icon('masked'));
           if (m.type === 'voice') text = `${prefix}🎤 Voice message (${fmtDuration(m.voice.duration)})`;
-          else text = prefix + (m.masked ? 'Masked message' : m.text);
+          else text = prefix + previewText(m);
         }
         preview.appendChild(document.createTextNode(text));
       } else if (c.type === 'group') {
@@ -873,6 +939,25 @@
     $('#blocked-banner').classList.toggle('hidden', !blocked);
     if (blocked) $('#blocked-banner-text').textContent = `You blocked ${displayName(peer)}. Tap to unblock.`;
     $('#composer').classList.toggle('hidden', blocked || lockedView || !!state.recorder);
+    paintE2eeBanner(conv, lockedView);
+  }
+
+  /** "Messages in this chat are end-to-end encrypted", or why they are not. */
+  async function paintE2eeBanner(conv, lockedView) {
+    const banner = $('#e2ee-banner');
+    if (lockedView) return banner.classList.add('hidden');
+    let ok = false;
+    try {
+      ok = !!(await state.e2ee?.canEncrypt(conv.id));
+    } catch { /* keys unavailable */ }
+    if (state.activeId !== conv.id) return;
+    banner.classList.toggle('hidden', false);
+    banner.classList.toggle('warn', !ok);
+    $('#e2ee-banner-text').textContent = ok
+      ? 'Messages in this chat are end-to-end encrypted. Only people in this chat can read them.'
+      : state.e2ee?.ready
+        ? "Messages are not end-to-end encrypted yet: someone in this chat hasn't set up encryption."
+        : 'End-to-end encryption is not available in this browser, so messages are not encrypted.';
   }
 
   // chat menu (block / unblock)
@@ -911,6 +996,7 @@
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     box.textContent = '';
     const msgs = state.messages.get(conv.id) || [];
+    const chatEncrypted = msgs.some((x) => x.encrypted);
     let prev = null;
     for (const m of msgs) {
       if (!prev || !sameDay(prev.ts, m.ts)) box.appendChild(el('div', 'day', dayLabel(m.ts)));
@@ -951,10 +1037,14 @@
         cover.append(icon('masked', 'inline-icon'), el('span', '', 'Masked message'), el('small', '', 'Tap to reveal'));
         cover.addEventListener('click', () => { state.revealed.add(m.id); renderMessages(); });
         bubble.appendChild(cover);
+      } else if (m.undecryptable) {
+        bubble.appendChild(el('span', 'text undecryptable', "🔒 This message can't be read on this device (it was sent before this device was set up)."));
       } else {
         bubble.appendChild(el('span', 'text', m.text));
       }
       const meta = el('span', 'meta');
+      // In a chat that is end-to-end encrypted, mark messages that were not (API apps, automatic replies, older messages).
+      if (chatEncrypted && !m.encrypted && !m.deleted && !m.localStatus) meta.appendChild(openLockSvg());
       if (m.auto && !m.deleted) meta.appendChild(el('span', 'auto-label', 'Automated'));
       if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Removed on ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
       if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
@@ -1069,7 +1159,18 @@
     return state.voiceUrls.get(id);
   }
 
-  const voiceUrl = (m) => (m.localUrl ? Promise.resolve(m.localUrl) : mediaUrl(m.voice.mediaId));
+  /** An encrypted voice message: download the ciphertext, decrypt it on this device, play it from memory. */
+  async function encryptedVoiceUrl(m) {
+    const id = m.voice.mediaId;
+    if (!state.voiceUrls.has(id)) {
+      const res = await fetch(`/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}`, 'X-App-Session': APP_SESSION } });
+      if (!res.ok) throw new Error('Could not load media');
+      const { media } = await state.e2ee.decrypt(m, new Uint8Array(await res.arrayBuffer()));
+      state.voiceUrls.set(id, URL.createObjectURL(new Blob([media], { type: m.voice.mime })));
+    }
+    return state.voiceUrls.get(id);
+  }
+  const voiceUrl = (m) => (m.localUrl ? Promise.resolve(m.localUrl) : m.e2ee ? encryptedVoiceUrl(m) : mediaUrl(m.voice.mediaId));
 
   function voicePlayer(m) {
     const wrap = el('div', 'voice-player');
@@ -1153,15 +1254,27 @@
   const SEND_TIMEOUT_MS = 10000;
   const VOICE_TIMEOUT_MS = 30000; // uploads take longer
 
+  /** The payload for the server: encrypted for everyone in the chat when possible, else plain (and marked so). */
+  async function buildPayload(msg, voice) {
+    const conv = state.conversations.get(msg.convId);
+    const base = voice
+      ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime }
+      : { convId: msg.convId, masked: !!msg.masked, clientId: msg.id };
+    if (conv && state.e2ee?.ready && await state.e2ee.canEncrypt(conv.id).catch(() => false)) {
+      const sealed = await state.e2ee.encrypt(conv, voice ? { kind: 'voice' } : { t: msg.text }, voice ? new Uint8Array(msg.audio) : undefined);
+      msg.encrypted = true;
+      return voice ? { ...base, e2ee: sealed.envelope, data: sealed.media } : { ...base, e2ee: sealed.envelope };
+    }
+    msg.encrypted = false;
+    return voice ? { ...base, data: msg.audio } : { ...base, text: msg.text };
+  }
+
   /** Send (or re-send) one of my messages; failures leave it in the chat marked as failed. */
-  function deliver(msg) {
+  async function deliver(msg) {
     msg.localStatus = 'sending';
     delete msg.error;
     refreshConversation(msg.convId);
     const voice = msg.type === 'voice';
-    const payload = voice
-      ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime, data: msg.audio }
-      : { convId: msg.convId, text: msg.text, masked: !!msg.masked, clientId: msg.id };
     const fail = (error) => {
       if (!state.outbox.has(msg.id)) return; // confirmed meanwhile (e.g. via message:new)
       msg.localStatus = 'failed';
@@ -1169,10 +1282,27 @@
       refreshConversation(msg.convId);
     };
     if (!state.socket?.connected) return fail('You are offline');
+    let payload;
+    try {
+      payload = await buildPayload(msg, voice);
+    } catch (err) {
+      console.error(err);
+      return fail('Could not encrypt this message');
+    }
     state.socket.timeout(voice ? VOICE_TIMEOUT_MS : SEND_TIMEOUT_MS).emit(voice ? 'voice:send' : 'message:send', payload, (err, res) => {
       if (err) fail('No response from the server');
-      else if (!res?.ok) fail(res?.error || 'Could not send');
-      else {
+      else if (!res?.ok) {
+        // Someone's keys changed while we were encrypting: fetch the new keys and encrypt again, once.
+        if (res?.code === 'keys_changed' && !msg.keyRetry) {
+          msg.keyRetry = true;
+          state.e2ee?.invalidate();
+          deliver(msg);
+          return;
+        }
+        fail(res?.error || 'Could not send');
+      } else {
+        // The server only has ciphertext: keep the text I typed.
+        if (res.message.e2ee) Object.assign(res.message, { text: msg.text, encrypted: true });
         upsertMessage(res.message);
         refreshConversation(msg.convId);
       }
@@ -2012,6 +2142,26 @@
     timer.append(tbody, change);
     body.appendChild(timer);
 
+    // Encryption: what is protected, and the security code to compare with a contact.
+    if (!isLockedView(conv)) {
+      const encCard = el('section', 'info-card info-action');
+      const ebody = el('div', 'grow');
+      ebody.append(
+        el('div', '', 'Encryption'),
+        el('div', 'muted small-note', group
+          ? 'Messages in this group are end-to-end encrypted when every member has set up encryption.'
+          : 'Messages are end-to-end encrypted. Verify the security code to be sure it is really them.'),
+      );
+      encCard.appendChild(ebody);
+      if (!group) {
+        const verify = el('button', 'link', 'Verify');
+        verify.type = 'button';
+        verify.addEventListener('click', () => showSafetyNumber(conv));
+        encCard.appendChild(verify);
+      }
+      body.appendChild(encCard);
+    }
+
     // Hide this one chat (a contact or a group) from the chat list.
     if (!isLockedView(conv)) {
       const hideCard = el('section', 'info-card info-action');
@@ -2518,8 +2668,9 @@
 
   const deviceName = () => {
     const ua = navigator.userAgent;
-    const os = /iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android phone' : /Windows/.test(ua) ? 'Windows PC' : /Mac/.test(ua) ? 'Mac' : 'This device';
-    return os;
+    const os = /iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'Mac' : /CrOS/.test(ua) ? 'Chromebook' : /Linux/.test(ua) ? 'Linux' : 'Device';
+    const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'browser';
+    return `${os} · ${browser}`;
   };
 
   /** Ask for the secret code (or fingerprint/face when set up); `run(proof)` performs the action. */
@@ -2564,6 +2715,73 @@
         toast('Fingerprint / face lock is on');
       },
     });
+  });
+
+  // ---------- encryption: security code and devices ----------
+
+  async function showSafetyNumber(conv) {
+    const peer = convPeer(conv);
+    try {
+      const keys = await state.e2ee.keysFor(conv.id, { refresh: true });
+      const mine = { username: state.me.username, devices: keys[state.me.username] || [] };
+      const theirs = { username: peer, devices: keys[peer] || [] };
+      if (!theirs.devices.length) return toast(`${displayName(peer)} hasn't set up encryption yet`);
+      const number = await window.E2EE.safetyNumber(mine, theirs);
+      await dialog({
+        title: 'Verify security code',
+        text: `To check that your chat with ${displayName(peer)} is end-to-end encrypted, compare this number with the one on their phone, in person or over a call. It changes if either of you adds or removes a device.\n\n${number}`,
+        fields: [],
+        submit: 'Done',
+        onSubmit: async () => {},
+      });
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  function renderE2eeSummary() {
+    $('#e2ee-summary').textContent = state.e2ee?.ready
+      ? 'Messages are end-to-end encrypted · manage linked devices'
+      : 'Not available in this browser';
+  }
+
+  async function renderDevices() {
+    const list = $('#device-list');
+    const { devices } = await emit('e2ee:devices');
+    list.textContent = '';
+    for (const d of devices) {
+      const li = el('li');
+      const body = el('div', 'body');
+      const top = el('div', 'row');
+      top.appendChild(el('span', 'name', d.name));
+      if (d.id === state.e2ee?.deviceId) top.appendChild(el('span', 'device-this', 'This device'));
+      body.appendChild(top);
+      body.appendChild(el('div', 'row', '')).appendChild(el('span', 'preview', `Added ${new Date(d.createdAt).toLocaleDateString([], { dateStyle: 'medium' })} · key ${d.keyId}`));
+      li.appendChild(body);
+      if (d.id !== state.e2ee?.deviceId) {
+        const rm = el('button', 'link danger-link', 'Remove');
+        rm.type = 'button';
+        rm.addEventListener('click', async () => {
+          if (!confirm(`Remove "${d.name}"? It will no longer be able to read new messages.`)) return;
+          try {
+            await emit('e2ee:remove', { id: d.id });
+            await renderDevices();
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+        li.appendChild(rm);
+      }
+      list.appendChild(li);
+    }
+  }
+  $('#btn-devices').addEventListener('click', async () => {
+    openPanel('#panel-devices');
+    try {
+      await renderDevices();
+    } catch (err) {
+      toast(err.message);
+    }
   });
 
   // ---------- hidden chats ----------
@@ -2693,6 +2911,16 @@
   // Status updates (see status.js)
   const statusUpdates = window.createStatusController({
     emit,
+    // Encrypt a reply to someone's status like any other message to them (null = send it plain).
+    sealReply: async (owner, text) => {
+      try {
+        const conv = { id: dmId(owner) };
+        if (!state.e2ee?.ready || !(await state.e2ee.canEncrypt(conv.id))) return null;
+        return (await state.e2ee.encrypt(conv, { t: text })).envelope;
+      } catch {
+        return null;
+      }
+    },
     me: () => state.me,
     displayName,
     paintAvatar,
@@ -2732,7 +2960,7 @@
         if (m.masked) preview.appendChild(icon('masked'));
         preview.appendChild(document.createTextNode(
           m.locked ? '🔒 In a locked chat'
-            : m.type === 'voice' ? `🎤 Voice message (${fmtDuration(m.voice.duration)})` : m.masked ? 'Masked message' : m.text,
+            : m.type === 'voice' ? `🎤 Voice message (${fmtDuration(m.voice.duration)})` : previewText(m),
         ));
         bottom.appendChild(preview);
         body.appendChild(bottom);

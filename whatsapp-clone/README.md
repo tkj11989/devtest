@@ -141,6 +141,23 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## End-to-end encryption
+
+Messages typed in the web app are **end-to-end encrypted**: they are encrypted on the sender's device and can only be decrypted on the devices of people in that chat. The server stores and relays ciphertext and **cannot read message text or voice recordings** (verified in the tests: the database dump, the API history and previews contain no plaintext).
+
+- **Nothing to turn on.** Each browser/phone makes its own key pair the first time you sign in (the private key stays in that browser's IndexedDB and is never sent anywhere) and registers the public key. Chats show *"Messages in this chat are end-to-end encrypted"*.
+- **Covered:** text and voice messages in one-to-one chats and groups, previews, starred messages, replies to status updates. Calls are encrypted directly between devices by WebRTC.
+- **Multiple devices:** every device has its own key. Senders encrypt for all of a person's devices, so each can read new messages. A device added later **cannot read older messages** (they show "can't be read on this device"); history is not copied between devices. **Profile → Encryption & linked devices** lists devices (up to 5) and removes ones you no longer use. Clearing a browser's site data discards its key, and it re-registers as a new device.
+- **Verify a contact:** Contact info → **Encryption → Verify** shows a 60-digit security code; it is the same on both phones unless someone interfered with the key directory. It changes when either person adds or removes a device.
+- **Not end-to-end encrypted** (and marked with an open padlock in encrypted chats): messages sent through the REST API as plain text (the server sees them), business greeting/away replies (the server writes them), and messages from before encryption existed. Status updates, display names, who talks to whom, and message times are also visible to the server. Webhooks receive ciphertext for encrypted messages.
+- Browsers need HTTPS or `localhost` (Web Crypto). Without it the app says encryption is unavailable and sends plain messages.
+
+**How it works** (`public/e2ee.js`, `server/service.js`): a random 256-bit content key encrypts the message with AES-256-GCM. The key is wrapped per recipient device with AES-256-GCM under a key from HKDF-SHA-256 over two P-256 ECDH secrets: a one-time key (fresh for every message) and the sender device's key (so the server can't forge a sender). Authenticated data is `convId|sender|senderDevice`, so a ciphertext can't be moved to another chat or attributed to someone else. The server checks each envelope names exactly the devices of the chat's members (a stale list is `409 keys_changed`; the app re-fetches keys and retries), but never holds a private key.
+
+Known limits (be honest with users): this is not the Signal protocol. There is no ratcheting, so keys don't heal after a device is compromised and an attacker who steals a device's private key can read past messages sent to it. The key directory is trusted unless contacts compare security codes. Group membership is whatever the server says.
+
+API integrations: `GET/POST /e2ee/devices`, `DELETE /e2ee/devices/{id}`, `GET /conversations/{id}/keys`, and `POST /conversations/{id}/messages` with an `e2ee` envelope instead of `text` (documented in `/api/docs`, tag *Encryption*). Socket events: `e2ee:register`, `e2ee:devices`, `e2ee:remove`, `e2ee:keys`; server → client `e2ee:update`.
+
 ## Hide chat
 
 **Hide chat** (chat menu **⋮ → Hide chat**) takes a chat off your dashboard completely. Hidden chats are opened with your **secret code** or, once set up, your phone's **fingerprint / face lock**.
@@ -330,6 +347,7 @@ whatsapp-clone/
 │   ├── styles.css   # WhatsApp-style theme (light/dark)
 │   ├── app.js       # Client logic
 │   ├── call.js      # WebRTC call controller and call screen
+│   ├── e2ee.js      # End-to-end encryption (Web Crypto; also used by the tests)
 │   ├── status.js    # Status updates: list, composer and viewer
 │   ├── business-hours.js # Opening hours / "open now" (shared with the server)
 │   └── api-docs.html # Interactive API docs (/api/docs)
@@ -342,6 +360,7 @@ whatsapp-clone/
     ├── app.test.js
     ├── auth.test.js
     ├── hidden.test.js
+    ├── e2ee.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

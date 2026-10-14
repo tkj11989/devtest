@@ -68,6 +68,10 @@ const SOCKET_ACTIONS = {
   'me:contact-verify': 'verifyContact',
   'chatlock:reset-sms': 'requestLockResetCode',
   'chatlock:clear': 'clearChatLocks',
+  'e2ee:register': 'registerDevice',
+  'e2ee:devices': 'e2eeDevices',
+  'e2ee:remove': 'removeDevice',
+  'e2ee:keys': 'conversationKeys',
   'hidden:hide': 'hideChat',
   'hidden:unhide': 'unhideChat',
   'hidden:reveal': 'revealHidden',
@@ -124,7 +128,7 @@ function createApp({
     try {
       reply({ ok: true, ...(await fn(payload || {})) });
     } catch (err) {
-      reply({ ok: false, error: err.message });
+      reply({ ok: false, error: err.message, ...(err.code ? { code: err.code } : {}) });
     }
   };
 

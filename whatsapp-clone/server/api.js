@@ -195,7 +195,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   }, req.ctx)));
   router.post('/conversations/:id/messages', ...authed, json, run((req) => {
     const { text, masked } = req.body || {};
-    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req) }, req.ctx);
+    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req), e2ee: req.body?.e2ee }, req.ctx);
   }, 201));
   router.post('/conversations/:id/voice', ...authed,
     express.raw({ type: () => true, limit: '3mb' }),
@@ -264,6 +264,13 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   }, req.ctx)));
   router.post('/chat-lock/clear', ...authed, json, run((req) => actions.clearChatLocks(req.user, proof(req))));
 
+  // ---------- end-to-end encryption ----------
+
+  router.get('/e2ee/devices', ...authed, run((req) => actions.e2eeDevices(req.user)));
+  router.post('/e2ee/devices', ...authed, json, run((req) => actions.registerDevice(req.user, req.body || {}), 201));
+  router.delete('/e2ee/devices/:id', ...authed, run((req) => actions.removeDevice(req.user, { id: p(req, 'id') })));
+  router.get('/conversations/:id/keys', ...authed, run((req) => actions.conversationKeys(req.user, { convId: p(req, 'id') })));
+
   // ---------- hidden chats ----------
 
   router.put('/conversations/:id/hide', ...authed, run((req) => actions.hideChat(req.user, { convId: p(req, 'id') }, req.ctx)));
@@ -310,6 +317,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     id: p(req, 'id'),
     text: req.body?.text,
     clientId: idempotency(req),
+    e2ee: req.body?.e2ee,
   }, req.ctx), 201));
 
   // ---------- errors ----------

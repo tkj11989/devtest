@@ -66,8 +66,25 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       })],
     },
     Users: { type: 'object', additionalProperties: ref('User'), description: 'Users keyed by username' },
+    Envelope: obj({
+      v: { const: 1 },
+      sd: { type: 'string', description: 'id of the sending device' },
+      iv: { type: 'string', description: 'AES-GCM nonce for `ct` (12 bytes, base64url)' },
+      ct: { type: 'string', description: 'AES-GCM ciphertext of the message JSON (base64url)' },
+      eph: { type: 'string', description: 'one-time P-256 public key (65 bytes, base64url) used to wrap the content key' },
+      mi: { type: 'string', description: 'voice messages: nonce for the encrypted audio' },
+      w: { type: 'object', additionalProperties: obj({ iv: { type: 'string' }, k: { type: 'string' } }, ['iv', 'k']), description: 'the content key, wrapped once per recipient device id (a recipient only receives its own devices)' },
+    }, ['v', 'sd', 'iv', 'ct', 'eph', 'w']),
+    Device: obj({
+      id: { type: 'string' },
+      name: { type: 'string' },
+      publicKey: { type: 'string', description: 'P-256 public key, 65 bytes uncompressed, base64url' },
+      keyId: { type: 'string', description: 'short fingerprint of the key' },
+      createdAt: { type: 'integer' },
+    }, ['id', 'name', 'publicKey', 'keyId']),
     Message: obj({
       id: { type: 'string' },
+      e2ee: { oneOf: [{ $ref: '#/components/schemas/Envelope' }], description: 'end-to-end encrypted message: `text` is absent and the content is in this envelope. Messages without it (REST API, business auto replies, older messages) are not end-to-end encrypted.' },
       convId: { type: 'string' },
       from: { type: 'string', description: 'username of the sender' },
       type: { type: 'string', enum: ['text', 'voice', 'call', 'system'], description: 'absent for text messages; `system` = a notice such as a timer change' },
@@ -196,7 +213,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -397,10 +414,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ messages: arrayOf(ref('Message')), hasMore: { type: 'boolean' }, nextBefore: { type: ['integer', 'null'] } })), ...errors(401, 404, 423) },
       }),
       post: op(T.msg, 'Send a text message', {
-        description: 'Send `Idempotency-Key` (or `clientId` in the body) to make retries safe: the same key returns the original message instead of sending twice.',
+        description: 'Send `Idempotency-Key` (or `clientId` in the body) to make retries safe: the same key returns the original message instead of sending twice.\n\nPlain `text` sent through the API is **not** end-to-end encrypted (the server sees it, and it is shown to recipients as unencrypted). To send an end-to-end encrypted message, encrypt on your own device and send an `e2ee` envelope instead of `text` (see **Encryption**). A stale device list answers `409 keys_changed`: fetch `GET /conversations/{id}/keys` and encrypt again.',
         params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
-        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' } }, ['text']), { text: 'Hello from the API 👋' }),
-        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 423, 429) },
+        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' }, e2ee: ref('Envelope') }), { text: 'Hello from the API 👋' }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423, 429) },
       }),
     },
     '/conversations/{id}/voice': {
@@ -528,6 +545,24 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         description: 'The session must have revealed hidden chats (423 `chat_locked` otherwise).',
         params: [CONV_ID],
         responses: { 200: ok(obj({ conversation: ref('Conversation') })), ...errors(401, 404, 423) },
+      }),
+    },
+    '/e2ee/devices': {
+      get: op(T.e2ee, 'My devices with encryption keys', { responses: { 200: ok(obj({ devices: arrayOf(ref('Device')) })), ...errors(401) } }),
+      post: op(T.e2ee, 'Register a device public key', {
+        description: 'Each device (browser, phone, bot) makes its own P-256 key pair and sends only the public key. Registering the same key again returns the same device. Up to 5 devices; a device can only read messages sent after it was registered.',
+        body: jsonBody(obj({ name: { type: 'string', maxLength: 40 }, publicKey: { type: 'string', description: 'raw P-256 point (65 bytes), base64url' } }, ['publicKey']), { name: 'Laptop', publicKey: 'BAcS…' }),
+        responses: { 201: ok(obj({ device: ref('Device'), devices: arrayOf(ref('Device')) })), ...errors(400, 401, 409) },
+      }),
+    },
+    '/e2ee/devices/{id}': {
+      delete: op(T.e2ee, 'Remove a device', { params: [idParam('id')], responses: { 200: ok(obj({ devices: arrayOf(ref('Device')) })), ...errors(401, 404) } }),
+    },
+    '/conversations/{id}/keys': {
+      get: op(T.e2ee, 'Public keys of everyone in a chat', {
+        description: 'The devices of every member (yours included): encrypt for all of them, and use them to check who sent a message. Anyone without a device has not set up encryption.',
+        params: [CONV_ID],
+        responses: { 200: ok(obj({ keys: { type: 'object', additionalProperties: arrayOf(ref('Device')) } })), ...errors(401, 404) },
       }),
     },
     '/hidden-contacts/{username}': {
@@ -678,6 +713,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /conversations/{id}/hide': 'hideChat',
     'delete /conversations/{id}/hide': 'unhideChat',
     'put /hidden-contacts/{username}': 'hideContactChat',
+    'get /e2ee/devices': 'listDevices',
+    'post /e2ee/devices': 'registerDevice',
+    'delete /e2ee/devices/{id}': 'removeDevice',
+    'get /conversations/{id}/keys': 'getConversationKeys',
     'get /hidden-chats': 'listHiddenChats',
     'post /hidden-chats/reveal': 'revealHiddenChats',
     'post /hidden-chats/close': 'closeHiddenChats',
@@ -715,6 +754,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     [T.msg]: 'Sending, reading, starring and deleting messages',
     [T.status]: 'Status updates that disappear after 24 hours',
     [T.lock]: 'Lock chats with a secret code, required again in every new session',
+    [T.e2ee]: [
+      'End-to-end encryption for messages typed in the ChatApp web app. Each device makes a key pair and registers the public key; senders encrypt each message on their device, once per recipient device, so the server stores only ciphertext.',
+      '',
+      '**Scheme (v1)**: a random 256-bit content key encrypts the message JSON (`{"t": "text"}`) with AES-256-GCM. The content key is wrapped for every recipient device with AES-256-GCM under a key from HKDF-SHA-256 over two ECDH (P-256) secrets: one-time key × recipient device key, and sender device key × recipient device key (which proves who sent it). Additional authenticated data is `convId|sender|senderDeviceId`. Voice messages encrypt the audio with the same content key (nonce `mi`).',
+      '',
+      'Not covered: messages sent by the REST API without an envelope, business auto replies, status updates, names, times and who talks to whom. Calls are encrypted peer to peer by WebRTC.',
+    ].join('\n'),
     [T.hide]: 'Hide chats from the chat list, opened with the secret code or fingerprint/face lock',
     [T.biz]: 'Business profile, hours, greeting and away messages',
     [T.meta]: 'Service health and this document',

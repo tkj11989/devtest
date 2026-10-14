@@ -8,7 +8,7 @@
  *   status.attach(socket);   // after each (re)login
  *   status.load();           // after connecting
  */
-window.createStatusController = function createStatusController({ emit, me, displayName, paintAvatar, mediaUrl, toast, mergeUsers }) {
+window.createStatusController = function createStatusController({ emit, me, displayName, paintAvatar, mediaUrl, toast, mergeUsers, sealReply }) {
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -434,7 +434,9 @@ window.createStatusController = function createStatusController({ emit, me, disp
     const text = replyInput.value.trim();
     if (!s || !text) return;
     try {
-      await emit('status:reply', { id: s.id, text, clientId: `sr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` });
+      // End-to-end encrypt the reply when possible (the app provides `sealReply`).
+      const sealed = sealReply ? await sealReply(s.owner, text) : null;
+      await emit('status:reply', { id: s.id, ...(sealed ? { e2ee: sealed } : { text }), clientId: `sr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` });
       replyInput.value = '';
       replyInput.blur();
       toast(`Reply sent to ${displayName(s.owner)}`);
