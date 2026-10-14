@@ -530,6 +530,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ conversation: ref('Conversation') })), ...errors(401, 404, 423) },
       }),
     },
+    '/hidden-contacts/{username}': {
+      put: op(T.hide, 'Hide the chat with a specific contact', {
+        description: 'Like `PUT /conversations/{id}/hide`, but by username, and it works before the contact has ever messaged you: their first message stays hidden too. Returns the settings and the `convId`. Needs a secret code (400 `code_required`).',
+        params: [idParam('username')],
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 404) },
+      }),
+    },
     '/hidden-chats': {
       get: op(T.hide, 'My hidden chats', {
         description: 'Only after `POST /hidden-chats/reveal` in this session (423 `chat_locked` otherwise).',
@@ -670,6 +677,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /chat-lock/clear': 'clearChatLocks',
     'put /conversations/{id}/hide': 'hideChat',
     'delete /conversations/{id}/hide': 'unhideChat',
+    'put /hidden-contacts/{username}': 'hideContactChat',
     'get /hidden-chats': 'listHiddenChats',
     'post /hidden-chats/reveal': 'revealHiddenChats',
     'post /hidden-chats/close': 'closeHiddenChats',

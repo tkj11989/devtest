@@ -148,6 +148,7 @@ Over the REST API, the "session" is the credential (session token or API key), o
 - A hidden chat is not in the chat list, search, or unread badges, and nothing about it (new messages, previews, typing, delivery ticks) reaches the app until you open it. Webhooks never hear about it either.
 - **Profile → Hidden chats** asks for the code (or fingerprint / face) and shows the hidden chats. They **close again** when you leave that screen, tap *Lock all chats now*, close ChatApp or log in again; their messages are removed from the page.
 - **Unhide chat** (chat menu, while the chats are open) puts a chat back in the list. Hiding replaces that chat's own lock; a chat is either locked or hidden.
+- **Hide any specific contact**, not everything: from the chat menu, from **Contact info → Hide chat**, or with the eye icon next to a person in **New chat** (even if you have never chatted). A contact you hid stays hidden *always*: their first and every later message stays out of your chat list. Other chats are unaffected.
 - Hiding needs a secret code (you're asked to create one the first time). Wrong tries share the chat lock's limit (5, then a growing wait).
 
 **Settings** (Profile):
@@ -160,7 +161,7 @@ Over the REST API, the "session" is the credential (session token or API key), o
 
 Fingerprint / face uses WebAuthn platform authenticators (Touch ID, Face ID, Windows Hello, Android biometrics), so it needs HTTPS or `localhost`. The server verifies each check itself: a one-time challenge, the site it was made for, the user-verified flag and the device's signature (`server/webauthn.js`), so it can't be faked from the page. Only the public key is stored.
 
-REST: `PUT/DELETE /conversations/{id}/hide`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
+REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
 
 ## API for other platforms
 

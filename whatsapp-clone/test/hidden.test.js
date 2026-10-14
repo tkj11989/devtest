@@ -285,3 +285,31 @@ test('fingerprint/face: wrong tries share the lockout; removing a device needs p
   assert.strictEqual((await api2('DELETE', `/biometric/${ph2.id}`, { token: bob.token, body: { code: '1357' } })).body.biometric.length, 0);
   assert.strictEqual((await api2('DELETE', `/biometric/${ph2.id}`, { token: bob.token, body: { code: '1357' } })).status, 404);
 });
+
+test('hide a specific contact before they ever write: their first message stays hidden', async (t) => {
+  const { store, client, api } = await setup(t);
+  const alice = store.register('alice', 'pass');
+  const bob = store.register('bob', 'pass');
+  store.register('carol', 'pass');
+  assert.strictEqual((await api('PUT', '/hidden-contacts/bob', { token: alice.token })).body.error.code, 'code_required');
+  store.setLockCode('alice', '2468');
+  assert.strictEqual((await api('PUT', '/hidden-contacts/nobody', { token: alice.token })).status, 404);
+  const res = await api('PUT', '/hidden-contacts/Bob', { token: alice.token });
+  assert.deepStrictEqual([res.status, res.body.hiddenCount, res.body.convId], [200, 1, 'dm:alice:bob']);
+
+  const tab = await client(alice.token, 'A');
+  const seen = [];
+  for (const ev of ['message:new', 'conversation:new', 'conversation:updated']) tab.on(ev, (p) => seen.push(ev, p));
+  const bobApp = await client(bob.token, 'b');
+  await call(bobApp, 'chat:direct', { username: 'alice' }).then((r) => call(bobApp, 'message:send', { convId: r.conversation.id, text: 'hi, first message' }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepStrictEqual(seen, [], 'no notification of any kind');
+  assert.deepStrictEqual((await call(tab, 'conversations')).conversations, [], 'not on the dashboard');
+  // Only Bob is hidden: other contacts behave normally.
+  const carol = store.register('dave', 'pass');
+  const carolApp = await client(carol.token, 'c');
+  await call(carolApp, 'chat:direct', { username: 'alice' }).then((r) => call(carolApp, 'message:send', { convId: r.conversation.id, text: 'hello' }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepStrictEqual((await call(tab, 'conversations')).conversations.map((c) => c.members.sort().join()), ['alice,dave']);
+  assert.strictEqual((await call(tab, 'hidden:reveal', { code: '2468' })).conversations[0].lastMessage.text, 'hi, first message');
+});

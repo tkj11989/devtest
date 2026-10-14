@@ -268,6 +268,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.put('/conversations/:id/hide', ...authed, run((req) => actions.hideChat(req.user, { convId: p(req, 'id') }, req.ctx)));
   router.delete('/conversations/:id/hide', ...authed, run((req) => actions.unhideChat(req.user, { convId: p(req, 'id') }, req.ctx)));
+  router.put('/hidden-contacts/:username', ...authed, run((req) => actions.hideChat(req.user, { username: p(req, 'username') }, req.ctx)));
   router.get('/hidden-chats', ...authed, run((req) => actions.listHidden(req.user, {}, req.ctx)));
   router.post('/hidden-chats/reveal', ...authed, json, run((req) => actions.revealHidden(req.user, proof(req), req.ctx)));
   router.post('/hidden-chats/close', ...authed, run((req) => actions.hideAgain(req.user, {}, req.ctx)));

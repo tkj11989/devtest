@@ -591,14 +591,16 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
     // ----- hidden chats -----
 
     /** Hide a chat from the chat list. Needs a secret code (it protects hidden chats). */
-    hideChat(me, { convId }, ctx) {
+    hideChat(me, { convId, username }, ctx) {
+      // Hide a specific contact's chat, even before they have ever written to you.
+      if (!convId && username) convId = store.getOrCreateDirect(me, String(username).toLowerCase()).id;
       member(me, convId);
       if (!store.hasLockCode(me)) throw new ApiError(400, 'code_required', 'Set a secret code first: it protects your hidden chats');
       store.setChatHidden(me, convId, true);
       for (const [key, set] of unlocked) if (key.startsWith(`${me}|`)) set.delete(convId);
       announceLocks(me);
       announceChatList(me);
-      return lockSettings(me);
+      return { ...lockSettings(me), convId };
     },
 
     /** Put a hidden chat back in the chat list (the session must have revealed hidden chats). */

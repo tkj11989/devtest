@@ -1206,3 +1206,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(6, 112, 222, .18);
 }
+
+/* Row action buttons (e.g. hide a contact's chat in New chat) */
+.list li .row-action { flex: none; width: 36px; height: 36px; color: var(--muted); }
+.list li .row-action svg { width: 20px; height: 20px; fill: currentColor; }
+.list li .row-action:hover { color: var(--primary-text); }

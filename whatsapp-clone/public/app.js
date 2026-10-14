@@ -1455,6 +1455,16 @@
 
   const renderNewChatResults = (q) => searchPeople(q, $('#user-results'), (u) => {
     const li = userRow(u);
+    const hide = el('button', 'icon-btn row-action');
+    hide.type = 'button';
+    hide.title = `Hide chat with ${u.displayName}`;
+    hide.setAttribute('aria-label', hide.title);
+    hide.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.8 11.8 0 0 0 22.99 12 11.83 11.83 0 0 0 12 4.5c-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7ZM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12a11.83 11.83 0 0 0 15.38 6.62l.42.42L19.73 22 21 20.73 3.27 3 2 4.27Z"/></svg>';
+    hide.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideContact(u);
+    });
+    li.appendChild(hide);
     li.addEventListener('click', async () => {
       try {
         const { conversation } = await emit('chat:direct', { username: u.username });
@@ -2001,6 +2011,21 @@
     change.addEventListener('click', () => openTimerDialog('chat'));
     timer.append(tbody, change);
     body.appendChild(timer);
+
+    // Hide this one chat (a contact or a group) from the chat list.
+    if (!isLockedView(conv)) {
+      const hideCard = el('section', 'info-card info-action');
+      const hbody = el('div', 'grow');
+      hbody.append(
+        el('div', '', conv.hidden ? 'Hidden chat' : 'Hide chat'),
+        el('div', 'muted small-note', conv.hidden ? 'Only in Profile → Hidden chats' : 'Remove from the chat list; open with your secret code or fingerprint / face'),
+      );
+      const toggle = el('button', 'link', conv.hidden ? 'Unhide' : 'Hide');
+      toggle.type = 'button';
+      toggle.addEventListener('click', () => toggleHide(conv));
+      hideCard.append(hbody, toggle);
+      body.appendChild(hideCard);
+    }
 
     if (group) {
       const members = el('section', 'info-card');
@@ -2587,9 +2612,8 @@
     });
   });
 
-  $('#menu-hide').addEventListener('click', async () => {
-    const conv = state.conversations.get(state.activeId);
-    if (!conv) return;
+  /** Hide or unhide the chat with a conversation (the open chat, or from contact info). */
+  async function toggleHide(conv) {
     try {
       if (conv.hidden) {
         const res = await emit('hidden:unhide', { convId: conv.id });
@@ -2597,6 +2621,7 @@
         setLockSettings(res);
         renderChatList();
         renderHeader();
+        refreshContactInfo();
         toast('Chat is back in your chat list');
         return;
       }
@@ -2605,11 +2630,30 @@
       forgetChatContent(conv.id);
       state.conversations.delete(conv.id);
       closeChat();
+      $('#panel-contact').classList.add('hidden');
       toast('Chat hidden · open it from Profile → Hidden chats');
     } catch (err) {
       toast(err.message);
     }
+  }
+  $('#menu-hide').addEventListener('click', () => {
+    const conv = state.conversations.get(state.activeId);
+    if (conv) toggleHide(conv);
   });
+
+  /** Hide one specific contact's chat (from the New chat list), even if you have never chatted. */
+  async function hideContact(u) {
+    if (!state.lock.hasCode && !(await setCodeDialog())) return;
+    try {
+      setLockSettings(await emit('hidden:hide', { username: u.username }));
+      state.conversations.delete(dmId(u.username));
+      renderChatList();
+      toast(`Chat with ${u.displayName} is hidden · open it from Profile → Hidden chats`);
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+  const dmId = (other) => 'dm:' + [state.me.username, other].sort().join(':');
 
   $('#btn-hidden-clear').addEventListener('click', () => askProof({
     title: 'Clear all chats from Hide chat',
