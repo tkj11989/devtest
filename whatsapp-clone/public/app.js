@@ -2155,7 +2155,7 @@
     return row;
   }
 
-  function businessCard(b) {
+  function businessCard(b, username) {
     const H = window.BusinessHours;
     const card = el('section', 'info-card biz-card');
     const head = el('div', 'biz-head');
@@ -2181,6 +2181,12 @@
     if (b.address) card.appendChild(infoRow('Address', b.address, `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(b.address)}`));
     if (b.email) card.appendChild(infoRow('Email', b.email, `mailto:${b.email}`));
     if (b.website) card.appendChild(infoRow('Website', b.website.replace(/^https?:\/\//, '').replace(/\/$/, ''), b.website));
+    if (username && b.productCount) {
+      const btn = el('button', 'primary catalogue-btn', `View catalogue (${b.productCount})`);
+      btn.type = 'button';
+      btn.addEventListener('click', () => openCatalogue(username));
+      card.appendChild(btn);
+    }
     return card;
   }
 
@@ -2206,7 +2212,7 @@
       about.append(el('div', 'info-label', 'About'), el('div', '', user.about));
       body.appendChild(about);
     }
-    if (user?.business) body.appendChild(businessCard(user.business));
+    if (user?.business) body.appendChild(businessCard(user.business, peer));
 
     const timer = el('section', 'info-card info-action');
     timer.appendChild(timerIcon(''));
@@ -2315,7 +2321,7 @@
       about.append(el('div', 'info-label', 'About'), el('div', '', user.about));
       body.appendChild(about);
     }
-    if (user.business) body.appendChild(businessCard(user.business));
+    if (user.business) body.appendChild(businessCard(user.business, user.username));
     body.appendChild(viewNote());
   }
 
@@ -2350,6 +2356,7 @@
   }
 
   function openBusinessPanel() {
+    updateCatalogueRow();
     const H = window.BusinessHours;
     const form = $('#business-form');
     const b = state.myBusiness;
@@ -2856,6 +2863,223 @@
       },
     });
   });
+
+  // ---------- product catalogue ----------
+
+  const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY', 'CNY', 'SAR', 'ZAR', 'NGN', 'BRL'];
+  const catalogue = { owner: null, currency: 'INR', products: [], editing: null };
+
+  function formatPrice(p, currency) {
+    if (p.price === null || p.price === undefined) return { main: 'Price on request', unit: '' };
+    let main;
+    try {
+      main = new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }).format(p.price);
+    } catch {
+      main = `${currency} ${p.price}`;
+    }
+    return { main, unit: p.unit || '' };
+  }
+
+  async function openCatalogue(username) {
+    const mine = username === state.me.username;
+    try {
+      const res = await emit('catalogue:get', { username });
+      Object.assign(catalogue, { owner: res.owner, currency: res.currency, products: res.products });
+    } catch (err) {
+      return toast(err.message);
+    }
+    $('#catalogue-title').textContent = mine ? 'My catalogue' : `${displayName(username)} · Catalogue`;
+    $('#catalogue-tools').classList.toggle('hidden', !mine);
+    if (mine) {
+      const sel = $('#catalogue-currency');
+      sel.textContent = '';
+      for (const c of new Set([catalogue.currency, ...CURRENCIES])) sel.appendChild(new Option(c, c));
+      sel.value = catalogue.currency;
+    }
+    openPanel('#panel-catalogue');
+    renderCatalogue(mine);
+  }
+
+  function renderCatalogue(mine) {
+    const list = $('#product-list');
+    list.textContent = '';
+    $('#catalogue-empty').classList.toggle('hidden', catalogue.products.length > 0);
+    for (const p of catalogue.products) {
+      const li = el('li', `product${p.available ? '' : ' out'}`);
+      const thumb = p.image ? el('img', 'thumb') : el('div', 'thumb', 'No photo');
+      if (p.image) {
+        thumb.alt = p.name;
+        mediaUrl(p.image).then((url) => { thumb.src = url; }).catch(() => {});
+      }
+      const info = el('div', 'info');
+      info.appendChild(el('span', 'pname', p.name));
+      const { main, unit } = formatPrice(p, catalogue.currency);
+      const price = el('span', 'price', main);
+      if (unit) price.append(' ', el('small', '', `· ${unit}`));
+      info.appendChild(price);
+      if (!p.available) info.appendChild(el('span', 'ptag', 'Out of stock'));
+      if (p.description) info.appendChild(el('span', 'pdesc', p.description));
+      if (p.category || p.sku) info.appendChild(el('span', 'pdesc', [p.category, p.sku && `Code ${p.sku}`].filter(Boolean).join(' · ')));
+      const actions = el('div', 'actions');
+      if (p.link) {
+        const a = el('a', 'link', 'Open link');
+        a.href = p.link;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        actions.appendChild(a);
+      }
+      if (mine) {
+        const edit = el('button', 'link', 'Edit');
+        edit.type = 'button';
+        edit.addEventListener('click', () => openProductForm(p));
+        actions.appendChild(edit);
+      } else if (p.available) {
+        const ask = el('button', 'link', 'Ask about this');
+        ask.type = 'button';
+        ask.addEventListener('click', () => askAboutProduct(p));
+        actions.appendChild(ask);
+      }
+      if (actions.childNodes.length) info.appendChild(actions);
+      li.append(thumb, info);
+      list.appendChild(li);
+    }
+  }
+
+  /** A customer taps "Ask about this": open the chat with the business and start a message about the product. */
+  async function askAboutProduct(p) {
+    try {
+      const { conversation } = await emit('chat:direct', { username: catalogue.owner });
+      if (!state.conversations.has(conversation.id)) state.conversations.set(conversation.id, conversation);
+      $('#panel-catalogue').classList.add('hidden');
+      $('#panel-contact').classList.add('hidden');
+      await openChat(conversation.id);
+      const { main } = formatPrice(p, catalogue.currency);
+      const input = $('#message-input');
+      input.value = `Hi, I'm interested in "${p.name}"${p.price === null ? '' : ` (${main})`}. `;
+      input.focus();
+      autosize();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  function openProductForm(product) {
+    const f = $('#product-form');
+    f.reset();
+    catalogue.editing = product || null;
+    $('#product-title').textContent = product ? 'Edit product' : 'Add product';
+    $('#product-error').textContent = '';
+    $('#product-delete').classList.toggle('hidden', !product);
+    f.elements.name.value = product?.name || '';
+    f.price.value = product?.price ?? '';
+    f.onRequest.checked = product ? product.price === null : false;
+    f.price.disabled = f.onRequest.checked;
+    f.unit.value = product?.unit || '';
+    f.description.value = product?.description || '';
+    f.category.value = product?.category || '';
+    f.link.value = product?.link || '';
+    f.sku.value = product?.sku || '';
+    f.available.checked = product ? product.available : true;
+    const preview = $('#product-photo-preview');
+    preview.classList.add('hidden');
+    $('#product-photo-remove').classList.toggle('hidden', !product?.image);
+    if (product?.image) mediaUrl(product.image).then((url) => { preview.src = url; preview.classList.remove('hidden'); }).catch(() => {});
+    openPanel('#panel-product');
+  }
+
+  $('#product-form').elements.onRequest.addEventListener('change', (e) => {
+    $('#product-form').price.disabled = e.target.checked;
+  });
+  $('#product-form').elements.photo.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    const preview = $('#product-photo-preview');
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      e.target.value = '';
+      $('#product-error').textContent = 'That picture is over 1 MB. Choose a smaller one.';
+      return;
+    }
+    preview.src = URL.createObjectURL(file);
+    preview.classList.remove('hidden');
+  });
+
+  $('#product-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const fields = {
+      name: f.elements.name.value,
+      price: f.onRequest.checked || f.price.value === '' ? null : Number(f.price.value),
+      unit: f.unit.value,
+      description: f.description.value,
+      category: f.category.value,
+      link: f.link.value,
+      sku: f.sku.value,
+      available: f.available.checked,
+    };
+    $('#product-save').disabled = true;
+    try {
+      const { product } = await emit('catalogue:save', { ...fields, ...(catalogue.editing ? { id: catalogue.editing.id } : {}) });
+      const file = f.photo.files[0];
+      if (file) await emit('catalogue:image', { id: product.id, mime: file.type, data: await file.arrayBuffer() });
+      toast(catalogue.editing ? 'Product saved' : 'Product added');
+      await openCatalogue(state.me.username);
+      await refreshMyBusiness();
+    } catch (err) {
+      $('#product-error').textContent = err.message;
+    } finally {
+      $('#product-save').disabled = false;
+    }
+  });
+
+  $('#product-photo-remove').addEventListener('click', async () => {
+    if (!catalogue.editing) return;
+    try {
+      await emit('catalogue:image-remove', { id: catalogue.editing.id });
+      $('#product-photo-preview').classList.add('hidden');
+      $('#product-photo-remove').classList.add('hidden');
+      catalogue.editing.image = undefined;
+    } catch (err) {
+      $('#product-error').textContent = err.message;
+    }
+  });
+
+  $('#product-delete').addEventListener('click', async () => {
+    if (!catalogue.editing || !confirm(`Delete "${catalogue.editing.name}" from your catalogue?`)) return;
+    try {
+      await emit('catalogue:delete', { id: catalogue.editing.id });
+      await openCatalogue(state.me.username);
+      await refreshMyBusiness();
+    } catch (err) {
+      $('#product-error').textContent = err.message;
+    }
+  });
+
+  $('#btn-product-add').addEventListener('click', () => openProductForm(null));
+  $('#catalogue-currency').addEventListener('change', async (e) => {
+    try {
+      const { currency } = await emit('catalogue:currency', { currency: e.target.value });
+      catalogue.currency = currency;
+      renderCatalogue(true);
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $('#btn-catalogue-edit').addEventListener('click', () => openCatalogue(state.me.username));
+
+  /** My own profile's product count changed: keep my copy of it fresh. */
+  async function refreshMyBusiness() {
+    try {
+      const { user } = await emit('me');
+      state.me = { ...state.me, ...user, business: user.business, verified: user.verified, premium: user.premium };
+      updateCatalogueRow();
+    } catch { /* ignore */ }
+  }
+
+  function updateCatalogueRow() {
+    const n = state.me?.business?.productCount || 0;
+    $('#btn-catalogue-edit').classList.toggle('hidden', !state.myBusiness);
+    $('#catalogue-edit-sub').textContent = n ? `${n} product${n === 1 ? '' : 's'} with prices` : 'List your products with prices';
+  }
 
   // ---------- translating received messages ----------
 

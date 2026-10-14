@@ -126,6 +126,18 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+  // ---------- product catalogue ----------
+
+  router.get('/users/:username/catalogue', ...authed, run((req) => actions.catalogue(req.user, { username: p(req, 'username') })));
+  router.get('/me/catalogue', ...authed, run((req) => actions.catalogue(req.user, {})));
+  router.put('/me/catalogue/currency', ...authed, json, run((req) => actions.setCatalogueCurrency(req.user, { currency: req.body?.currency })));
+  router.post('/me/catalogue/products', ...authed, json, run((req) => actions.saveProduct(req.user, { ...(req.body || {}), id: undefined }), 201));
+  router.put('/me/catalogue/products/:id', ...authed, json, run((req) => actions.saveProduct(req.user, { ...(req.body || {}), id: p(req, 'id') })));
+  router.delete('/me/catalogue/products/:id', ...authed, run((req) => { actions.deleteProduct(req.user, { id: p(req, 'id') }); return undefined; }));
+  router.put('/me/catalogue/products/:id/image', ...authed, express.raw({ type: 'image/*', limit: '1mb' }),
+    run((req) => actions.setProductImage(req.user, { id: p(req, 'id'), data: req.body, mime: req.get('content-type') })));
+  router.delete('/me/catalogue/products/:id/image', ...authed, run((req) => actions.removeProductImage(req.user, { id: p(req, 'id') })));
+
   router.get('/translate/languages', ...authed, run((req) => actions.translateLanguages(req.user)));
   router.put('/conversations/:id/translation', ...authed, json, run((req) => actions.setTranslation(req.user, { convId: p(req, 'id'), lang: req.body?.lang })));
   router.post('/conversations/:id/translate', ...authed, json, run((req) => actions.translateTexts(req.user, { convId: p(req, 'id'), texts: req.body?.texts }, req.ctx)));

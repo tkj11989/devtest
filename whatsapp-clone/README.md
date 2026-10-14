@@ -141,6 +141,17 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Product catalogue (business profiles)
+
+Business accounts can list products with prices. **Profile → Business account → Product catalogue** (owner), and **View catalogue (n)** on any business's profile (customers).
+
+- **Product:** name, price (up to 2 decimals) with an optional unit (*each, per kg, per hour*), description, category, item code, link, an **in stock / out of stock** switch and a **picture** (JPEG, PNG or WebP up to 1 MB). **Price on request** shows no price. One **currency** for the whole catalogue (default INR; 14 offered in the app, any 3-letter code over the API). Up to 100 products.
+- **Customers** see a card per product (out-of-stock items are marked) and **Ask about this**, which opens the chat with the business and starts a message about the product ("Hi, I'm interested in "Margherita pizza" (₹299.00)."). It is an ordinary end-to-end encrypted message.
+- Pictures are public to signed-in people (so any customer can see them); deleting or replacing a product deletes its old picture. Switching back to a personal account deletes the catalogue and its pictures.
+- Prices are information only: ChatApp does not take orders or payments for products.
+
+API: `GET /users/{username}/catalogue`, `GET /me/catalogue`, `POST /me/catalogue/products`, `PUT/DELETE /me/catalogue/products/{id}`, `PUT/DELETE /me/catalogue/products/{id}/image`, `PUT /me/catalogue/currency`; the profile's `business.productCount` says how many. Socket: `catalogue:get`, `catalogue:save`, `catalogue:delete`, `catalogue:image`, `catalogue:image-remove`, `catalogue:currency`.
+
 ## Translating a contact's messages
 
 In any chat, ⋮ → **Translate messages** lets you pick a language (27 offered, including Hindi, Bengali, Tamil, Telugu, Marathi, Spanish, French, Arabic, Chinese, Japanese…). From then on, **messages you receive in that chat are shown in that language**, each with *"Translated from English · Show original"*. It is set **per chat, so per contact**, is private to you (the other person isn't told), syncs across your devices, and your own messages are never translated. Messages already in your language are left alone. Turn it off from the same menu or the banner's *Change* link.
@@ -440,6 +451,7 @@ whatsapp-clone/
     ├── premium.test.js
     ├── profileviews.test.js
     ├── translate.test.js
+    ├── catalogue.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

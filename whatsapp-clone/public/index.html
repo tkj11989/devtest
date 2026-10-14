@@ -154,6 +154,41 @@
 
       <!-- Contact / group info -->
 
+      <!-- Product catalogue (a business's products and prices) -->
+      <div class="panel overlay hidden" id="panel-catalogue">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="catalogue-title">Catalogue</h2></header>
+        <div class="catalogue-tools hidden pad" id="catalogue-tools">
+          <button class="primary small" type="button" id="btn-product-add">Add product</button>
+          <label class="inline-label">Currency <select id="catalogue-currency"></select></label>
+        </div>
+        <ul class="product-list" id="product-list"></ul>
+        <p class="muted pad hidden" id="catalogue-empty">No products yet.</p>
+      </div>
+      <div class="panel overlay hidden" id="panel-product">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="product-title">Add product</h2></header>
+        <form class="biz-form" id="product-form">
+          <label>Name <input name="name" required maxlength="80" placeholder="e.g. Margherita pizza" /></label>
+          <div class="price-row">
+            <label>Price <input name="price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="299" /></label>
+            <label>Unit <input name="unit" maxlength="20" placeholder="each, per kg, per hour" /></label>
+          </div>
+          <label class="checkline"><input type="checkbox" name="onRequest" /> <span>Price on request</span></label>
+          <label>Description <textarea name="description" rows="3" maxlength="1000" placeholder="Size, ingredients, what is included"></textarea></label>
+          <label>Category <input name="category" maxlength="40" placeholder="e.g. Pizza" /></label>
+          <label>Link <input name="link" maxlength="300" placeholder="https://… (optional)" /></label>
+          <label>Item code <input name="sku" maxlength="40" placeholder="optional" /></label>
+          <label class="checkline"><input type="checkbox" name="available" checked /> <span>In stock</span></label>
+          <div class="product-photo">
+            <img id="product-photo-preview" class="hidden" alt="" />
+            <label class="photo-pick">Picture (JPEG, PNG or WebP, up to 1 MB)<input type="file" name="photo" accept="image/jpeg,image/png,image/webp" /></label>
+            <button class="danger-link hidden" type="button" id="product-photo-remove">Remove picture</button>
+          </div>
+          <p id="product-error" class="error" role="alert"></p>
+          <button class="primary" type="submit" id="product-save">Save product</button>
+          <button class="danger-link hidden" type="button" id="product-delete">Delete product</button>
+        </form>
+      </div>
+
       <!-- Who viewed my profile -->
       <div class="panel overlay hidden" id="panel-views">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Who viewed my profile</h2></header>
@@ -188,6 +223,10 @@
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Business profile</h2></header>
         <form class="biz-form" id="business-form">
           <p class="muted biz-intro">Customers see these details on your profile, with a business badge next to your name.</p>
+          <button class="link-row hidden" type="button" id="btn-catalogue-edit">
+            <svg viewBox="0 0 24 24"><path d="M20 4H4v2h16V4Zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1Zm-9 4H6v-4h6v4Z"/></svg>
+            <span><strong>Product catalogue</strong><small id="catalogue-edit-sub">List your products with prices</small></span>
+          </button>
           <label>Category <select name="category" required></select></label>
           <label>Description <textarea name="description" maxlength="512" rows="3" placeholder="What your business does"></textarea></label>
           <label>Address <input name="address" maxlength="256" placeholder="Street, city" /></label>

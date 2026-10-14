@@ -17,6 +17,7 @@ class ApiError extends Error {
 const VOICE_MAX_BYTES = 3 * 1024 * 1024;
 const VOICE_MAX_SECONDS = 5 * 60;
 const PHOTO_MAX_BYTES = 3 * 1024 * 1024;
+const PRODUCT_IMAGE_MAX_BYTES = 1024 * 1024;
 const PAGE_MAX = 100;
 
 /**
@@ -424,6 +425,50 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       store.setProfileViewsEnabled(me, !!enabled);
       io.to(userRoom(me)).emit('profile:viewed', {});
       return { privacy: { profileViews: store.profileViewsEnabled(me) } };
+    },
+
+    // ----- product catalogue (business profiles) -----
+
+    /** A business's catalogue: anyone signed in can look (omit `username` for my own). */
+    catalogue(me, { username } = {}) {
+      const owner = username ? String(username).toLowerCase() : me;
+      const c = store.catalogueOf(owner);
+      if (!c) throw new ApiError(404, 'not_found', 'This account has no catalogue');
+      return { owner, ...c };
+    },
+
+    saveProduct(me, { id, ...fields }) {
+      const product = id ? store.updateProduct(me, id, fields) : store.addProduct(me, fields);
+      return { product };
+    },
+
+    deleteProduct(me, { id }) {
+      store.deleteProduct(me, id);
+      return {};
+    },
+
+    /** Set a product's picture (JPEG, PNG or WebP, up to 1 MB), replacing the old one. */
+    setProductImage(me, { id, mime, data }) {
+      if (!Buffer.isBuffer(data) || data.length === 0) throw new Error('Picture is empty');
+      if (data.length > PRODUCT_IMAGE_MAX_BYTES) throw new ApiError(413, 'too_large', 'Picture is too large (max 1 MB)');
+      mime = String(mime || '').split(';')[0].trim();
+      if (!/^image\/(jpeg|png|webp)$/.test(mime)) throw new ApiError(415, 'unsupported_media_type', 'Use a JPEG, PNG or WebP picture');
+      if (!store.catalogueOf(me)?.products.some((p) => p.id === id)) throw new ApiError(404, 'not_found', 'Product not found');
+      const mediaId = store.saveMedia({ publicBy: me }, data, mime);
+      try {
+        return { product: store.setProductImage(me, id, mediaId) };
+      } catch (err) {
+        store.deleteMedia(mediaId);
+        throw err;
+      }
+    },
+
+    removeProductImage(me, { id }) {
+      return { product: store.setProductImage(me, id, null) };
+    },
+
+    setCatalogueCurrency(me, { currency }) {
+      return { currency: store.setCatalogueCurrency(me, currency) };
     },
 
     // ----- translating received messages -----

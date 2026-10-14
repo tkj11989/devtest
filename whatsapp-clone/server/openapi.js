@@ -59,6 +59,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       timezone: { type: 'string', example: 'Asia/Kolkata', description: 'IANA time zone the hours are in' },
       hours: { oneOf: [ref('BusinessHours'), { type: 'null' }] },
       since: { type: 'integer' },
+      productCount: { type: 'integer', description: 'products in the catalogue (see `GET /users/{username}/catalogue`)' },
     }, ['category', 'timezone']),
     AutoReply: obj({ enabled: { type: 'boolean' }, text: { type: 'string', maxLength: 1000 } }),
     Business: {
@@ -68,6 +69,21 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       })],
     },
     Users: { type: 'object', additionalProperties: ref('User'), description: 'Users keyed by username' },
+    Product: obj({
+      id: { type: 'string' },
+      name: { type: 'string', maxLength: 80 },
+      description: { type: 'string', maxLength: 1000 },
+      price: { type: ['number', 'null'], description: 'in the catalogue currency, at most 2 decimals; null = price on request' },
+      unit: { type: 'string', maxLength: 20, description: 'e.g. "per kg", "per hour"' },
+      category: { type: 'string', maxLength: 40 },
+      sku: { type: 'string', maxLength: 40 },
+      link: { type: 'string', description: 'where to buy or read more (http/https)' },
+      available: { type: 'boolean', description: 'false = shown as out of stock' },
+      image: { type: 'string', description: 'media id: download it from `GET /media/{id}` with your token' },
+      createdAt: { type: 'integer' },
+      updatedAt: { type: 'integer' },
+    }, ['id', 'name', 'price', 'available']),
+    Catalogue: obj({ owner: { type: 'string' }, currency: { type: 'string', example: 'INR' }, products: arrayOf(ref('Product')) }, ['owner', 'currency', 'products']),
     Envelope: obj({
       v: { const: 1 },
       sd: { type: 'string', description: 'id of the sending device' },
@@ -317,6 +333,48 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/users/{username}/catalogue': {
+      get: op(T.biz, 'A business\'s product catalogue', {
+        description: 'Products with prices, for any business account (the profile\'s `business.productCount` says how many). Anyone signed in can look.',
+        params: [idParam('username')],
+        responses: { 200: ok(ref('Catalogue')), ...errors(401, 404) },
+      }),
+    },
+    '/me/catalogue': { get: op(T.biz, 'My catalogue', { responses: { 200: ok(ref('Catalogue')), ...errors(401, 404) } }) },
+    '/me/catalogue/currency': {
+      put: op(T.biz, 'Currency for all prices', {
+        body: jsonBody(obj({ currency: { type: 'string', pattern: '^[A-Za-z]{3}$' } }, ['currency']), { currency: 'USD' }),
+        responses: { 200: ok(obj({ currency: { type: 'string' } })), ...errors(400, 401, 403) },
+      }),
+    },
+    '/me/catalogue/products': {
+      post: op(T.biz, 'Add a product', {
+        description: 'Business accounts only; up to 100 products. `price: null` shows "price on request". Add a picture with `PUT /me/catalogue/products/{id}/image`.',
+        body: jsonBody(obj({
+          name: { type: 'string' }, description: { type: 'string' }, price: { type: ['number', 'null'] }, unit: { type: 'string' },
+          category: { type: 'string' }, sku: { type: 'string' }, link: { type: 'string' }, available: { type: 'boolean', default: true },
+        }, ['name']), { name: 'Margherita pizza', description: 'Wood-fired, 10 inch', price: 299, unit: 'each', category: 'Pizza' }),
+        responses: { 201: ok(obj({ product: ref('Product') })), ...errors(400, 401, 403, 409) },
+      }),
+    },
+    '/me/catalogue/products/{id}': {
+      put: op(T.biz, 'Update a product', {
+        description: 'Send only the fields to change; an empty string clears an optional text field.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ name: { type: 'string' }, description: { type: 'string' }, price: { type: ['number', 'null'] }, unit: { type: 'string' }, category: { type: 'string' }, sku: { type: 'string' }, link: { type: 'string' }, available: { type: 'boolean' } }), { price: 349, available: false }),
+        responses: { 200: ok(obj({ product: ref('Product') })), ...errors(400, 401, 403, 404) },
+      }),
+      delete: op(T.biz, 'Delete a product', { params: [idParam('id')], responses: { 204: noContent, ...errors(401, 403, 404) } }),
+    },
+    '/me/catalogue/products/{id}/image': {
+      put: op(T.biz, 'Set a product picture', {
+        description: 'Send the picture itself (`image/jpeg`, `image/png` or `image/webp`, max 1 MB). Replaces the old one.',
+        params: [idParam('id')],
+        body: { required: true, content: { 'image/*': { schema: { type: 'string', format: 'binary' } } } },
+        responses: { 200: ok(obj({ product: ref('Product') })), ...errors(401, 404, 413, 415) },
+      }),
+      delete: op(T.biz, 'Remove a product picture', { params: [idParam('id')], responses: { 200: ok(obj({ product: ref('Product') })), ...errors(401, 404) } }),
+    },
     '/translate/languages': {
       get: op(T.i18n, 'Languages for translating received messages', {
         responses: { 200: ok(obj({ languages: arrayOf(obj({ code: { type: 'string' }, name: { type: 'string' }, native: { type: 'string' } })), available: { type: 'boolean' }, sandbox: { type: 'boolean' } })), ...errors(401) },
@@ -765,6 +823,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'get /users/{username}/catalogue': 'getCatalogue',
+    'get /me/catalogue': 'getMyCatalogue',
+    'put /me/catalogue/currency': 'setCatalogueCurrency',
+    'post /me/catalogue/products': 'addProduct',
+    'put /me/catalogue/products/{id}': 'updateProduct',
+    'delete /me/catalogue/products/{id}': 'deleteProduct',
+    'put /me/catalogue/products/{id}/image': 'setProductImage',
+    'delete /me/catalogue/products/{id}/image': 'removeProductImage',
     'get /translate/languages': 'listTranslationLanguages',
     'put /conversations/{id}/translation': 'setChatTranslation',
     'post /conversations/{id}/translate': 'translateTexts',

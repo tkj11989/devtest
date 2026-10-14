@@ -335,7 +335,7 @@ class Store {
     const u = this.data.users[username];
     if (!u) return null;
     const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
-    if (u.business) out.business = Store._publicBusiness(u.business);
+    if (u.business) out.business = { ...Store._publicBusiness(u.business), productCount: (u.catalogue?.products || []).length };
     if (u.verifiedAt) out.verified = true;
     if (this.isPremium(username)) out.premium = true; // the only KYC fact kept: yes, verified
     return out;
@@ -508,7 +508,124 @@ class Store {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
     delete u.business;
+    // The catalogue belongs to the business profile: it goes too (with its images).
+    for (const p of u.catalogue?.products || []) if (p.image) this.deleteMedia(p.image);
+    delete u.catalogue;
     this._save();
+  }
+
+  // ---------- product catalogue (business accounts) ----------
+
+  /** The catalogue anyone can see on a business profile, or null for a non-business account. */
+  catalogueOf(username) {
+    const u = this.data.users[username];
+    if (!u?.business) return null;
+    const c = u.catalogue || { currency: 'INR', products: [] };
+    return { currency: c.currency, products: c.products.map((p) => ({ ...p })) };
+  }
+
+  _catalogueFor(username) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    if (!u.business) throw Object.assign(new Error('Only business accounts have a catalogue'), { status: 403 });
+    u.catalogue = u.catalogue || { currency: 'INR', products: [] };
+    return u.catalogue;
+  }
+
+  static _checkProduct(input, base = {}) {
+    const str = (v, max, field, required = false) => {
+      const t = String(v ?? '').trim();
+      if (required && !t) throw new Error(`${field} is required`);
+      if (t.length > max) throw new Error(`${field} is too long (max ${max} characters)`);
+      return t;
+    };
+    const has = (k) => input[k] !== undefined;
+    const out = { ...base };
+    if (has('name') || !base.name) out.name = str(input.name, 80, 'name', true);
+    if (has('description')) out.description = str(input.description, 1000, 'description');
+    if (has('category')) out.category = str(input.category, 40, 'category');
+    if (has('unit')) out.unit = str(input.unit, 20, 'unit');
+    if (has('sku')) out.sku = str(input.sku, 40, 'sku');
+    if (has('price')) {
+      if (input.price === null || input.price === '') out.price = null; // "price on request"
+      else {
+        const n = Number(input.price);
+        if (!Number.isFinite(n) || n < 0 || n > 1e9) throw new Error('price must be a number from 0 to 1,000,000,000');
+        if (Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) throw new Error('price must have no more than 2 decimals');
+        out.price = Math.round(n * 100) / 100;
+      }
+    }
+    if (has('link')) {
+      let link = str(input.link, 300, 'link');
+      if (link) {
+        if (!/^https?:\/\//i.test(link)) link = `https://${link}`;
+        try {
+          if (!new URL(link).hostname.includes('.')) throw new Error();
+        } catch {
+          throw new Error('link is not a valid URL');
+        }
+      }
+      out.link = link;
+    }
+    if (has('available')) out.available = !!input.available;
+    out.price = out.price === undefined ? null : out.price;
+    out.available = out.available === undefined ? true : out.available;
+    for (const k of ['description', 'category', 'unit', 'sku', 'link']) if (!out[k]) delete out[k];
+    return out;
+  }
+
+  addProduct(username, input) {
+    const c = this._catalogueFor(username);
+    if (c.products.length >= Store.CATALOGUE_MAX) throw new Error(`A catalogue can have at most ${Store.CATALOGUE_MAX} products`);
+    const now = Date.now();
+    const product = { id: crypto.randomBytes(6).toString('hex'), ...Store._checkProduct(input), createdAt: now, updatedAt: now };
+    c.products.push(product);
+    this._save();
+    return { ...product };
+  }
+
+  updateProduct(username, id, input) {
+    const c = this._catalogueFor(username);
+    const i = c.products.findIndex((p) => p.id === id);
+    if (i < 0) throw new Error('Product not found');
+    const old = c.products[i];
+    // Optional text fields can be cleared by sending an empty value.
+    c.products[i] = { ...Store._checkProduct(input, old), id, image: old.image, createdAt: old.createdAt, updatedAt: Date.now() };
+    for (const k of ['description', 'category', 'unit', 'sku', 'link']) if (input[k] !== undefined && !String(input[k]).trim()) delete c.products[i][k];
+    if (!c.products[i].image) delete c.products[i].image;
+    this._save();
+    return { ...c.products[i] };
+  }
+
+  deleteProduct(username, id) {
+    const c = this._catalogueFor(username);
+    const p = c.products.find((x) => x.id === id);
+    if (!p) throw new Error('Product not found');
+    if (p.image) this.deleteMedia(p.image);
+    c.products = c.products.filter((x) => x.id !== id);
+    this._save();
+  }
+
+  /** Attach (or remove, with null) a product's picture. */
+  setProductImage(username, id, mediaId) {
+    const c = this._catalogueFor(username);
+    const p = c.products.find((x) => x.id === id);
+    if (!p) throw new Error('Product not found');
+    if (p.image) this.deleteMedia(p.image);
+    if (mediaId) p.image = mediaId;
+    else delete p.image;
+    p.updatedAt = Date.now();
+    this._save();
+    return { ...p };
+  }
+
+  setCatalogueCurrency(username, currency) {
+    const c = this._catalogueFor(username);
+    const code = String(currency || '').trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(code)) throw new Error('currency must be a 3-letter code such as INR or USD');
+    c.currency = code;
+    this._save();
+    return code;
   }
 
   // ---------- disappearing messages ----------
@@ -996,7 +1113,8 @@ class Store {
     } else {
       this.memoryMedia.set(id, buffer);
     }
-    const where = typeof scope === 'string' ? { convId: scope } : { statusId: scope.statusId };
+    // Scope: a chat (voice message), a status, or `{ publicBy }` (catalogue images, visible to every signed-in person).
+    const where = typeof scope === 'string' ? { convId: scope } : scope.publicBy ? { publicBy: scope.publicBy } : { statusId: scope.statusId };
     this.data.media[id] = { ...where, mime, size: buffer.length, createdAt: Date.now() };
     this._save();
     return id;
@@ -1011,9 +1129,11 @@ class Store {
   getMedia(id, username) {
     const meta = this.data.media[id];
     if (!meta) return null;
-    const allowed = meta.statusId
-      ? this.canSeeStatus(this.data.statuses[meta.statusId], username)
-      : this.isMember(meta.convId, username);
+    const allowed = meta.publicBy
+      ? true
+      : meta.statusId
+        ? this.canSeeStatus(this.data.statuses[meta.statusId], username)
+        : this.isMember(meta.convId, username);
     if (!allowed) return null;
     let buffer;
     if (this.mediaDir) {
@@ -1307,6 +1427,7 @@ Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */
 Store.MAX_DEVICES = 5;
+Store.CATALOGUE_MAX = 100;
 Store.PROFILE_VIEWS_MAX = 500;
 Store.PROFILE_VIEWS_DAYS = 90;
 Store.WEBHOOK_EVENTS = [
