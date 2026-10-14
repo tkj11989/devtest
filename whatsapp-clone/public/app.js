@@ -173,7 +173,7 @@
     let sub;
     let iconName;
     if (missed) [sub, iconName] = ['Tap to call back', 'call-end'];
-    else if (status === 'completed') [sub, iconName] = [fmtDuration(duration), group ? 'group-call' : 'call'];
+    else if (status === 'completed') [sub, iconName] = [`${fmtDuration(duration)}${m.call.recorded ? ' · Recorded' : ''}`, group ? 'group-call' : 'call'];
     else if (status === 'declined') [sub, iconName] = ['Declined', 'call-declined'];
     else [sub, iconName] = ['No answer', 'call-end'];
     return { title, sub, missed, icon: iconName };
@@ -520,6 +520,7 @@
     voiceMessages: ['#btn-record'],
     disappearing: ['#menu-timer', '#btn-default-timer@.link-row'],
     calls: ['#call-buttons', '#btn-join-call'],
+    callRecording: ['#call-record'],
     status: ['#btn-status'],
     channels: ['#btn-channels'],
     profileViews: ['#btn-views'],
@@ -587,6 +588,8 @@
       iceServers: () => state.iceServers,
       displayName,
       paintAvatar,
+      me: () => state.me.username,
+      toast: (text) => toast(text),
     });
     statusUpdates.attach(socket);
     channelsUI.attach(socket);

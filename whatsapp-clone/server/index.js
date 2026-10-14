@@ -126,6 +126,7 @@ const SOCKET_ACTIONS = {
  *   tls              { key, cert } to serve HTTPS
  *   iceServers       STUN/TURN servers handed to browsers
  *   ringTimeoutMs    how long calls ring
+ *   recordConsentMs  how long a call-recording request waits for answers (default 30 s)
  *   webhooks         { allowPrivate, retryDelaysMs } for webhook delivery
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
@@ -139,6 +140,7 @@ function createApp({
   tls = null,
   iceServers = iceServersFromEnv(),
   ringTimeoutMs,
+  recordConsentMs,
   webhooks: webhookOptions = { allowPrivate: process.env.WEBHOOKS_ALLOW_PRIVATE === '1' },
   rateLimit,
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
@@ -185,7 +187,7 @@ function createApp({
     }
   };
 
-  const calls = createCallManager({ io, store, isOnline, notify: service.notify, postMessage: service.postMessage, handle, ringTimeoutMs, assertCallsOn: () => service.assertFeature('calls') });
+  const calls = createCallManager({ io, store, isOnline, notify: service.notify, postMessage: service.postMessage, handle, ringTimeoutMs, recordConsentMs, assertCallsOn: () => service.assertFeature('calls'), assertRecordingOn: () => service.assertFeature('callRecording') });
   service.setCalls(calls);
 
   // Public REST API for other platforms (see /api/docs). It parses its own bodies.

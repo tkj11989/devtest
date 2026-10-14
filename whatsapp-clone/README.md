@@ -102,6 +102,22 @@ Calls use WebRTC, so audio/video goes directly between the two browsers; the ser
 - Group calls connect every participant to every other one (a "mesh"), so they're limited to 6 people; larger calls would need a media server (SFU).
 - Hold stops sending your audio/video and mutes theirs until you resume.
 
+
+#### Recording a call (everyone must agree)
+
+During a connected call, tap the **red record button**. **Nothing records until everyone in the call has agreed:**
+
+1. You tap Record. Everyone else gets *"Alice wants to record this call. The recording is saved only on their device. Allow it?"* with **Allow / Don't allow**, and you see *"Waiting for Bob to allow recording…"*. The request expires after 30 seconds.
+2. If **anyone declines**, nothing is recorded and the person who asked must wait 30 seconds before asking again.
+3. When **everyone** has allowed it, recording starts and **every participant sees a "● Recording by Alice · 0:42" indicator** for as long as it runs.
+4. **Anyone can stop it at any time** with the same button; that withdraws consent and ends it for everyone.
+
+It also stops by itself if **someone new joins** the call (they haven't agreed; the group can ask again together) or the person recording **leaves**. A muted microphone is not recorded. Voice calls save audio; video calls save a video of the participants' tiles in a grid with everyone's audio mixed.
+
+**Where it goes:** the recording is made **on the requester's own device** and saved there as a `.webm` file. **ChatApp's servers never receive or store it** (calls are peer to peer and encrypted), so it can't be listened to by anyone else. The server only keeps track of who has agreed, and the chat's call entry says **"Recorded"**. Everyone who agreed is trusting the person who asked to keep the file private: tell people that.
+
+Administrators can switch **Call recording** off in the admin dashboard (Features → Messaging): the button disappears and requests are refused, while stopping always works. Socket events: `call:record-request`, `call:record-respond {accept}`, `call:record-stop`; server → client `call:record { state: pending|on|off, by, waiting, startedAt, reason }`.
+
 ## Disappearing messages
 
 Turn it on from the chat menu (**⋮ → Disappearing messages**), the banner in the chat, or the contact info panel. Pick **Off**, **24 hours**, **7 days**, **90 days** or **Custom** (any number of days, hours and minutes, from 1 minute to 365 days).
@@ -164,7 +180,7 @@ A separate dashboard at **`/admin`** (for example `http://localhost:3000/admin`)
 **The developer API is restricted by default.** Out of the box the *Developer API* switch is **off**: the Developer screen (API keys and webhooks) is hidden in the web app and the mobile apps, creating keys and webhooks is refused (`403 feature_disabled`), API keys stop authenticating (REST and Socket.IO) and webhooks are not delivered. People still use the apps normally. A super admin enables it under **Admin → Features → Developer API** when needed; this also applies to existing installs that never set it.
 
 **Feature switches** (each one is enforced **on the server for every client** and hidden in the apps; nothing is ever deleted):
-New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
+New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Call recording · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
 A switch never traps people: with Chat lock off you can still unlock and remove locks; with Hide chat off you can still unhide; turning translation or timers *off* still works; Premium already bought keeps working; a payment already made can still be confirmed. A disabled feature answers `403 feature_disabled`.
 
 **Maintenance mode** blocks every user call with `503 maintenance` and shows the message in every app (administrators and `/api/v1/config` keep working); apps come back by themselves when it is turned off.
@@ -505,6 +521,7 @@ whatsapp-clone/
     ├── channels.test.js
     ├── admin.test.js
     ├── calls.test.js
+    ├── callrecording.test.js
     ├── status.test.js
     ├── api.test.js
     ├── chatlock.test.js

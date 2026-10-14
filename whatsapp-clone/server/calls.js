@@ -20,6 +20,8 @@ const MAX_PARTICIPANTS = 6;
  *   call:end     leave the call (a 1:1 call ends when either side leaves)
  *   call:signal  { to, data } relayed to that participant
  *   call:hold    { onHold } shown to the other participants
+ *   call:record-request / call:record-respond / call:record-stop: recording needs EVERYONE
+ *                in the call to agree first (see "recording consent" below)
  *
  * Server -> client: call:incoming, call:joined, call:left, call:signal,
  * call:hold, call:ended, and call:state (to every chat member, so group
@@ -29,8 +31,48 @@ const MAX_PARTICIPANTS = 6;
  * `notify(username, event, payload)` reaches all of a user's devices (and their webhooks);
  * per-socket events (joined/left/signal/hold) go only to the sockets in the call.
  */
-function createCallManager({ io, store, isOnline, notify, postMessage, handle, assertCallsOn = () => {}, ringTimeoutMs = 30000 }) {
+function createCallManager({ io, store, isOnline, notify, postMessage, handle, assertCallsOn = () => {}, assertRecordingOn = () => {}, ringTimeoutMs = 30000, recordConsentMs = 30000, recordCooldownMs = 30000 }) {
   const calls = new Map(); // callId -> call
+
+  // ---------- recording consent ----------
+  //
+  // Recording a call is only allowed when every person in it has agreed. The server keeps the
+  // consent state and tells everyone (a recording indicator must always be visible); the audio
+  // and video never reach the server: the person who asked records on their own device.
+  //
+  //   pending  someone asked; waiting for everyone else to accept (30 seconds)
+  //   on       everyone agreed: the requester's device records
+  //
+  // Anyone can stop it at any time (withdrawing consent ends it for everyone). If someone new
+  // joins, recording stops: they have not agreed. If the requester leaves, it stops.
+
+  const recView = (call) => (call.rec
+    ? { state: call.rec.state, by: call.rec.by, startedAt: call.rec.startedAt || null, waiting: call.rec.state === 'pending' ? [...call.participants.keys()].filter((u) => !call.rec.accepted.has(u)) : [] }
+    : { state: 'off' });
+
+  const tellRec = (call, extra = {}) => {
+    for (const sid of call.participants.values()) io.to(sid).emit('call:record', { callId: call.id, ...recView(call), ...extra });
+  };
+
+  function endRec(call, reason, by) {
+    if (!call.rec) return;
+    clearTimeout(call.rec.timer);
+    call.rec = null;
+    tellRec(call, { reason, ...(by ? { by } : {}) });
+  }
+
+  /** Everyone still in the call has agreed: recording starts. */
+  function maybeStartRec(call) {
+    const rec = call.rec;
+    if (!rec || rec.state !== 'pending') return;
+    if ([...call.participants.keys()].every((u) => rec.accepted.has(u))) {
+      clearTimeout(rec.timer);
+      rec.state = 'on';
+      rec.startedAt = Date.now();
+      call.recorded = true;
+      tellRec(call);
+    }
+  }
 
   const inCall = (u) => [...calls.values()].some((c) => c.participants.has(u) || c.ringing.has(u));
   const callForConv = (convId) => [...calls.values()].find((c) => c.convId === convId) || null;
@@ -56,6 +98,7 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
     if (!calls.has(call.id)) return;
     calls.delete(call.id);
     clearTimeout(call.timer);
+    clearTimeout(call.rec?.timer);
 
     let status;
     let duration = 0;
@@ -72,7 +115,7 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
     }
     announce(call, false);
     const conv = store.getConversation(call.convId);
-    postMessage(conv, store.addCallMessage(call.convId, call.from, { kind: call.kind, status, duration, group: call.group }, [...call.joined]));
+    postMessage(conv, store.addCallMessage(call.convId, call.from, { kind: call.kind, status, duration, group: call.group, recorded: !!call.recorded }, [...call.joined]));
   }
 
   /** End the call once nobody (or only one person, with nobody left ringing) remains. */
@@ -90,6 +133,8 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
   function join(call, socket, username) {
     if (call.participants.size >= MAX_PARTICIPANTS) throw new Error(`Calls are limited to ${MAX_PARTICIPANTS} people`);
     const others = [...call.participants.keys()];
+    // Someone new has not agreed to be recorded: recording stops (they can ask again together).
+    if (call.rec) endRec(call, 'participant-joined', username);
     call.ringing.delete(username);
     call.participants.set(username, socket.id);
     call.joined.add(username);
@@ -98,13 +143,17 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
     // Stop ringing on my other devices.
     socket.to(`user:${username}`).emit('call:ended', { callId: call.id, reason: 'answered-elsewhere' });
     announce(call);
-    return { participants: others, onHold: [...call.onHold] };
+    return { participants: others, onHold: [...call.onHold], recording: recView(call) };
   }
 
   function leave(call, username, reason) {
     if (!call.participants.delete(username)) return;
     call.onHold.delete(username);
     for (const sid of call.participants.values()) io.to(sid).emit('call:left', { callId: call.id, username });
+    if (call.rec) {
+      if (call.rec.by === username) endRec(call, 'requester-left', username);
+      else if (call.group && call.participants.size >= 2) maybeStartRec(call); // whoever it was waiting for is gone
+    }
     if (!call.group) {
       finish(call, call.answeredAt ? reason : 'cancelled');
       return;
@@ -233,6 +282,44 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
       const target = call.participants.get(to);
       if (target) io.to(target).emit('call:signal', { callId, from: me, data });
     });
+
+    // ----- recording consent -----
+
+    socket.on('call:record-request', handle(({ callId }) => {
+      assertRecordingOn();
+      const call = participantCall(callId, me);
+      if (call.participants.get(me) !== socket.id) throw new Error('This call is on another device');
+      if (!call.answeredAt || call.participants.size < 2) throw new Error('Recording needs at least two people in the call');
+      if (call.rec) throw new Error(call.rec.state === 'on' ? 'This call is already being recorded' : 'A recording request is already waiting for answers');
+      const wait = (call.recCooldown?.get(me) || 0) - Date.now();
+      if (wait > 0) throw new Error(`Someone declined. Wait ${Math.ceil(wait / 1000)} seconds before asking again.`);
+      call.rec = { state: 'pending', by: me, accepted: new Set([me]) };
+      call.rec.timer = setTimeout(() => endRec(call, 'timeout'), recordConsentMs);
+      tellRec(call, { expiresIn: Math.round(recordConsentMs / 1000) });
+      return recView(call);
+    }));
+
+    socket.on('call:record-respond', handle(({ callId, accept }) => {
+      const call = participantCall(callId, me);
+      if (!call.rec || call.rec.state !== 'pending') throw new Error('There is no recording request to answer');
+      if (!accept) {
+        (call.recCooldown = call.recCooldown || new Map()).set(call.rec.by, Date.now() + recordCooldownMs);
+        endRec(call, 'declined', me);
+        return {};
+      }
+      call.rec.accepted.add(me);
+      if (call.rec.state === 'pending') tellRec(call, { accepted: me });
+      maybeStartRec(call);
+      return recView(call);
+    }));
+
+    // Withdrawing consent: anyone can end the recording, any time.
+    socket.on('call:record-stop', handle(({ callId }) => {
+      const call = participantCall(callId, me);
+      if (!call.rec) return {};
+      endRec(call, 'stopped', me);
+      return {};
+    }));
 
     socket.on('call:hold', handle(({ callId, onHold }) => {
       const call = participantCall(callId, me);

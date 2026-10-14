@@ -1303,3 +1303,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .maintenance { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: linear-gradient(120deg, var(--navy), #0A3A7A); }
 .maintenance-card { max-width: 420px; text-align: center; background: var(--panel); border-radius: 14px; padding: 28px; border-top: 4px solid var(--accent); display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .feature-off { display: none !important; }
+
+/* Call recording (everyone must agree) */
+.call-rec { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); z-index: 6; background: rgba(0, 0, 0, .65); color: #fff; padding: 6px 14px; border-radius: 16px; font-size: 14px; display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.call-rec .dot { width: 10px; height: 10px; border-radius: 50%; background: #FF3B3B; animation: recpulse 1.2s ease-in-out infinite; }
+@keyframes recpulse { 50% { opacity: .25; } }
+.round.rec svg { fill: #FF5C5C; }
+.round.rec.on { background: #D92D2D; }
+.round.rec.on svg { fill: #fff; }
+.round.rec.waiting { animation: recpulse 1s ease-in-out infinite; }
+.record-consent { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; background: rgba(0, 0, 0, .55); padding: 16px; }
+.record-consent-card { background: var(--panel); color: var(--text); border-radius: 14px; padding: 22px; max-width: 360px; display: flex; flex-direction: column; gap: 10px; text-align: center; border-top: 4px solid #D92D2D; }
+.record-consent-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.record-consent-actions { display: flex; gap: 10px; justify-content: center; margin-top: 6px; }

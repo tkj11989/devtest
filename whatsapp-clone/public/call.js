@@ -10,7 +10,7 @@
  *   const calls = createCallController({ socket, emit, iceServers: () => [...], displayName, paintAvatar });
  *   calls.start(convId, { kind: 'audio' | 'video', group, title, key });
  */
-window.createCallController = function createCallController({ socket, emit, iceServers, displayName, paintAvatar }) {
+window.createCallController = function createCallController({ socket, emit, iceServers, displayName, paintAvatar, me = () => '', toast = () => {} }) {
   const $ = (sel) => document.querySelector(sel);
   const screen = $('#call');
   const grid = $('#call-grid');
@@ -18,6 +18,165 @@ window.createCallController = function createCallController({ socket, emit, iceS
   const stateIcon = $('#call-state-icon');
 
   let call = null;
+
+  // ---------- recording (only with everyone's agreement) ----------
+  //
+  // The server keeps track of who has agreed and tells everyone; it never receives the
+  // recording. The person who asked records on their own device (a mix of everyone's audio, and
+  // the video tiles for a video call) and the file is saved on that device. Anyone can stop it
+  // at any time, and it stops if somebody new joins or the requester leaves.
+
+  const recButton = $('#call-record');
+  const recBadge = $('#call-rec');
+  const consent = $('#record-consent');
+  const names = (list) => list.map((u) => displayName(u)).join(', ');
+
+  function paintRec() {
+    const rec = call?.rec;
+    const on = rec?.state === 'on';
+    const pending = rec?.state === 'pending';
+    recButton.classList.toggle('hidden', !call || call.state !== 'active');
+    recButton.classList.toggle('on', on);
+    recButton.classList.toggle('waiting', pending);
+    recButton.title = on ? 'Stop recording (ends it for everyone)' : pending ? 'Cancel the recording request' : 'Record this call (everyone must agree)';
+    recBadge.classList.toggle('hidden', !(on || pending));
+    if (on) {
+      const secs = Math.floor((Date.now() - rec.startedAt) / 1000);
+      recBadge.replaceChildren(Object.assign(document.createElement('span'), { className: 'dot' }), `Recording by ${rec.by === me() ? 'you' : displayName(rec.by)} · ${fmt(Math.max(0, secs))}`);
+    } else if (pending) {
+      recBadge.replaceChildren(rec.by === me() ? `Waiting for ${names(rec.waiting)} to allow recording…` : `${displayName(rec.by)} asked to record this call`);
+    }
+  }
+
+  /** Mix everyone's audio (and, for video, a grid of the video tiles) into one stream to record. */
+  function buildRecordingStream() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = call.recCtx || new AC();
+    const dest = ctx.createMediaStreamDestination();
+    const addAudio = (stream) => {
+      if (stream && stream.getAudioTracks().length) ctx.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(dest);
+    };
+    addAudio(call.local); // muted = silent, so a muted microphone is not recorded
+    call.peers.forEach((p) => addAudio(p.stream));
+    const tracks = [...dest.stream.getAudioTracks()];
+    let drawTimer = null;
+    if (call.kind === 'video') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      const g = canvas.getContext('2d');
+      const draw = () => {
+        const videos = [...call.peers.values()].map((p) => p.video).concat(call.local.getVideoTracks().length ? [localVideo] : []).filter((v) => v.videoWidth);
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, canvas.width, canvas.height);
+        const n = Math.max(1, videos.length);
+        const cols = Math.ceil(Math.sqrt(n));
+        const rows = Math.ceil(n / cols);
+        const cw = canvas.width / cols;
+        const chh = canvas.height / rows;
+        videos.forEach((v, i) => {
+          const s = Math.min(cw / v.videoWidth, chh / v.videoHeight);
+          const w = v.videoWidth * s;
+          const h = v.videoHeight * s;
+          g.drawImage(v, (i % cols) * cw + (cw - w) / 2, Math.floor(i / cols) * chh + (chh - h) / 2, w, h);
+        });
+      };
+      draw();
+      drawTimer = setInterval(draw, 66);
+      tracks.push(...canvas.captureStream(15).getVideoTracks());
+    }
+    return { stream: new MediaStream(tracks), ctx, drawTimer };
+  }
+
+  function startRecorder() {
+    if (!call || call.recorder || !window.MediaRecorder) {
+      if (!window.MediaRecorder) toast('This browser cannot record calls');
+      return;
+    }
+    try {
+      const built = buildRecordingStream();
+      const video = call.kind === 'video';
+      const mime = ['video/webm;codecs=vp8,opus', 'video/webm', 'audio/webm;codecs=opus', 'audio/webm'].find((m) => MediaRecorder.isTypeSupported(m) && (video || m.startsWith('audio')));
+      const recorder = new MediaRecorder(built.stream, mime ? { mimeType: mime } : undefined);
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      const title = call.title;
+      recorder.onstop = () => {
+        clearInterval(built.drawTimer);
+        built.ctx.close().catch(() => {});
+        if (!chunks.length) return;
+        const blob = new Blob(chunks, { type: recorder.mimeType || (video ? 'video/webm' : 'audio/webm') });
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+        const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `ChatApp-call-${title.replace(/[^\w-]+/g, '_')}-${stamp}.${video ? 'webm' : 'webm'}` });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        toast('Recording saved to this device');
+      };
+      recorder.start(1000);
+      call.recorder = recorder;
+    } catch (err) {
+      console.error('Could not start recording', err);
+      toast('Could not start recording on this device');
+      socket.emit('call:record-stop', { callId: call.id }); // do not claim to be recording
+    }
+  }
+
+  function stopRecorder() {
+    const r = call?.recorder;
+    if (!r) return;
+    call.recorder = null;
+    if (r.state !== 'inactive') r.stop();
+  }
+
+  const REC_NOTES = {
+    declined: (ev) => `${displayName(ev.by)} did not allow recording`,
+    stopped: (ev) => `${ev.by === me() ? 'You' : displayName(ev.by)} stopped the recording`,
+    timeout: () => 'The recording request expired',
+    'participant-joined': (ev) => `Recording stopped: ${displayName(ev.by)} joined and has not agreed`,
+    'requester-left': (ev) => `Recording stopped: ${displayName(ev.by)} left the call`,
+  };
+
+  function onRecord(ev) {
+    if (!call || call.id !== ev.callId) return;
+    const before = call.rec?.state;
+    call.rec = ev.state === 'off' ? null : ev;
+    consent.classList.add('hidden');
+    if (ev.state === 'pending' && ev.by !== me() && ev.waiting.includes(me())) {
+      $('#record-consent-text').textContent = `${displayName(ev.by)} wants to record this call. The recording is saved only on their device. Allow it?`;
+      consent.classList.remove('hidden');
+    } else if (ev.state === 'on') {
+      if (ev.by === me()) startRecorder();
+      if (before !== 'on') toast(ev.by === me() ? 'Recording started: everyone agreed' : `${displayName(ev.by)} is recording this call (you agreed)`);
+    } else if (ev.state === 'off') {
+      stopRecorder();
+      if (REC_NOTES[ev.reason]) toast(REC_NOTES[ev.reason](ev));
+    }
+    paintRec();
+  }
+  socket.on('call:record', onRecord);
+
+  recButton.addEventListener('click', () => {
+    if (!call?.id || call.state !== 'active') return;
+    if (call.rec) {
+      socket.emit('call:record-stop', { callId: call.id }, () => {});
+      return;
+    }
+    // Create the audio context now, while the click allows it; the recording itself starts when everyone has agreed.
+    try { call.recCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { /* recording will report it */ }
+    socket.emit('call:record-request', { callId: call.id }, (res) => {
+      if (!res?.ok) toast(res?.error || 'Could not ask to record');
+    });
+  });
+  $('#record-allow').addEventListener('click', () => {
+    consent.classList.add('hidden');
+    if (call?.id) socket.emit('call:record-respond', { callId: call.id, accept: true }, () => {});
+  });
+  $('#record-deny').addEventListener('click', () => {
+    consent.classList.add('hidden');
+    if (call?.id) socket.emit('call:record-respond', { callId: call.id, accept: false }, () => {});
+  });
 
   // ---------- tones (generated, no audio files needed) ----------
 
@@ -116,6 +275,7 @@ window.createCallController = function createCallController({ socket, emit, iceS
       setStatus(call.ringing ? 'Ringing…' : 'Calling…');
     }
     screen.classList.toggle('ringing', !call.connectedAt && !peers.length);
+    paintRec();
   }
 
   const hasLiveVideo = (stream) => !!stream && stream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled);
@@ -373,6 +533,15 @@ window.createCallController = function createCallController({ socket, emit, iceS
     call = null;
     stopTone();
     clearInterval(c.clock);
+    // The call is over: save whatever was recorded so far (the person who asked agreed to this, and so did everyone else).
+    if (c.recorder) {
+      const r = c.recorder;
+      c.recorder = null;
+      if (r.state !== 'inactive') r.stop();
+    }
+    consent.classList.add('hidden');
+    recBadge.classList.add('hidden');
+    recButton.classList.add('hidden');
     c.peers.forEach((p) => { try { p.pc.close(); } catch { /* ignore */ } });
     stopStream(c.local);
     localVideo.srcObject = null;

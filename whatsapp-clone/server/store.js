@@ -1622,7 +1622,7 @@ class Store {
    * `call` is `{ kind: 'audio'|'video', status: 'completed'|'missed'|'declined', duration, group }`.
    * `joined`: everyone who took part; for them the entry is not unread.
    */
-  addCallMessage(convId, from, { kind, status, duration = 0, group = false }, joined = []) {
+  addCallMessage(convId, from, { kind, status, duration = 0, group = false, recorded = false }, joined = []) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const msg = {
@@ -1631,7 +1631,7 @@ class Store {
       from,
       type: 'call',
       text: '',
-      call: { kind, status, duration, ...(group ? { group: true, joined: [...joined] } : {}) },
+      call: { kind, status, duration, ...(recorded ? { recorded: true } : {}), ...(group ? { group: true, joined: [...joined] } : {}) },
       ts: Date.now(),
       deliveredTo: [],
       // Only calls someone missed should show up as unread for them.
