@@ -99,6 +99,8 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   /** Clients may send an Idempotency-Key header instead of clientId to make retries safe. */
   const idempotency = (req) => req.body?.clientId ?? req.get('idempotency-key') ?? undefined;
   const p = (req, name) => req.params[name];
+  /** The secret code, or a fingerprint/face proof, sent in the body. */
+  const proof = (req) => ({ code: req.body?.code, biometric: req.body?.biometric });
 
   // ---------- meta ----------
 
@@ -253,11 +255,33 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.delete('/conversations/:id/lock', ...authed, json, run((req) => actions.removeChatLock(req.user, {
     convId: p(req, 'id'),
     code: req.body?.code,
+    biometric: req.body?.biometric,
   })));
   router.post('/conversations/:id/unlock', ...authed, json, run((req) => actions.unlockChat(req.user, {
     convId: p(req, 'id'),
     code: req.body?.code,
+    biometric: req.body?.biometric,
   }, req.ctx)));
+  router.post('/chat-lock/clear', ...authed, json, run((req) => actions.clearChatLocks(req.user, proof(req))));
+
+  // ---------- hidden chats ----------
+
+  router.put('/conversations/:id/hide', ...authed, run((req) => actions.hideChat(req.user, { convId: p(req, 'id') }, req.ctx)));
+  router.delete('/conversations/:id/hide', ...authed, run((req) => actions.unhideChat(req.user, { convId: p(req, 'id') }, req.ctx)));
+  router.get('/hidden-chats', ...authed, run((req) => actions.listHidden(req.user, {}, req.ctx)));
+  router.post('/hidden-chats/reveal', ...authed, json, run((req) => actions.revealHidden(req.user, proof(req), req.ctx)));
+  router.post('/hidden-chats/close', ...authed, run((req) => actions.hideAgain(req.user, {}, req.ctx)));
+  router.post('/hidden-chats/clear', ...authed, json, run((req) => actions.clearHidden(req.user, proof(req))));
+
+  // ---------- fingerprint / face lock ----------
+
+  router.post('/biometric/challenge', ...authed, run((req) => actions.biometricChallenge(req.user)));
+  router.post('/biometric', ...authed, json, run((req) => actions.addBiometric(req.user, {
+    code: req.body?.code,
+    name: req.body?.name,
+    credential: req.body?.credential,
+  }), 201));
+  router.delete('/biometric/:id', ...authed, json, run((req) => actions.removeBiometric(req.user, { id: p(req, 'id'), ...proof(req) })));
 
   // ---------- status updates ----------
 

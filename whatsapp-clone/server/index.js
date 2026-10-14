@@ -67,6 +67,16 @@ const SOCKET_ACTIONS = {
   'me:contact-code': 'requestContactCode',
   'me:contact-verify': 'verifyContact',
   'chatlock:reset-sms': 'requestLockResetCode',
+  'chatlock:clear': 'clearChatLocks',
+  'hidden:hide': 'hideChat',
+  'hidden:unhide': 'unhideChat',
+  'hidden:reveal': 'revealHidden',
+  'hidden:list': 'listHidden',
+  'hidden:close': 'hideAgain',
+  'hidden:clear': 'clearHidden',
+  'biometric:challenge': 'biometricChallenge',
+  'biometric:add': 'addBiometric',
+  'biometric:remove': 'removeBiometric',
 };
 
 /**

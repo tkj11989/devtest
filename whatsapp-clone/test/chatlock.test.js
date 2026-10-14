@@ -164,7 +164,7 @@ test('chat lock over REST: 423 until unlocked, per credential; webhooks, stars a
   store.createWebhook('alice', { url: `http://127.0.0.1:${hookServer.address().port}/`, events: ['message:new'] });
 
   assert.strictEqual((await api('PUT', `/conversations/${id}/lock`, { token: keyA })).status, 400, 'needs a code first');
-  assert.deepStrictEqual((await api('PUT', '/chat-lock/code', { token: keyA, body: { code: '2468' } })).body, { hasCode: true, lockedChats: [] });
+  assert.deepStrictEqual((await api('PUT', '/chat-lock/code', { token: keyA, body: { code: '2468' } })).body, { hasCode: true, lockedChats: [], hiddenCount: 0, biometric: [] });
   assert.deepStrictEqual((await api('PUT', `/conversations/${id}/lock`, { token: keyA })).body.lockedChats, [dm.id]);
 
   const locked = await api('GET', `/conversations/${id}/messages`, { token: keyA });

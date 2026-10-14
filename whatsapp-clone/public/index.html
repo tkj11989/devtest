@@ -158,6 +158,17 @@
         <div class="contact-scroll" id="contact-body"></div>
       </div>
 
+      <!-- Hidden chats: only reachable with the secret code or a fingerprint/face check -->
+      <div class="panel overlay hidden" id="panel-hidden">
+        <header class="bar green">
+          <button class="icon-btn back" type="button" id="btn-hidden-back" aria-label="Close hidden chats">&larr;</button>
+          <h2>Hidden chats</h2>
+        </header>
+        <p class="pad muted small-note">These chats are not shown in your chat list. They close again when you leave this screen or close ChatApp.</p>
+        <ul class="list" id="hidden-list"></ul>
+        <p class="muted pad hidden" id="hidden-empty">No hidden chats. Open a chat and choose <strong>Hide chat</strong> from its menu.</p>
+      </div>
+
       <!-- Business settings -->
       <div class="panel overlay hidden" id="panel-business">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Business profile</h2></header>
@@ -236,6 +247,20 @@
             <span><strong id="business-row-title">Business account</strong><small id="business-row-sub">Show your hours, address and website; send greeting and away messages</small></span>
           </button>
         </div>
+        <div class="pad stack hide-settings">
+          <button class="link-row" type="button" id="btn-hidden-open">
+            <svg viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.8 11.8 0 0 0 22.99 12 11.83 11.83 0 0 0 12 4.5c-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7ZM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12a11.83 11.83 0 0 0 15.38 6.62l.42.42L19.73 22 21 20.73 3.27 3 2 4.27ZM7.53 9.8l1.55 1.55A2.82 2.82 0 0 0 9 12a3 3 0 0 0 3 3c.22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53a5 5 0 0 1-5-5c0-.79.2-1.53.53-2.2Zm4.31-.78 3.15 3.15.02-.16a3 3 0 0 0-3-3l-.17.01Z"/></svg>
+            <span><strong>Hidden chats</strong><small id="hidden-summary">Open with your secret code or fingerprint / face</small></span>
+          </button>
+          <div class="link-row static" id="bio-row">
+            <svg viewBox="0 0 24 24"><path d="M17.81 4.47a.5.5 0 0 1-.23-.06C15.7 3.43 13.98 3 12.01 3c-1.96 0-3.92.5-5.58 1.4a.5.5 0 1 1-.48-.88A13.1 13.1 0 0 1 12.01 2c2.14 0 4.02.47 6.04 1.53a.5.5 0 0 1-.24.94ZM3.5 9.72a.5.5 0 0 1-.41-.79c.99-1.4 2.25-2.5 3.75-3.27C9.98 4.04 14 4.03 17.15 5.65c1.5.77 2.76 1.86 3.75 3.25a.5.5 0 1 1-.82.58 9.6 9.6 0 0 0-3.4-3.03c-2.87-1.47-6.52-1.47-9.4 0a9.6 9.6 0 0 0-3.38 3.03.5.5 0 0 1-.4.24ZM9.75 21.8a.5.5 0 0 1-.36-.15c-.87-.9-1.34-1.43-2.01-2.64-.69-1.23-1.05-2.73-1.05-4.34a5.7 5.7 0 0 1 5.67-5.68 5.7 5.7 0 0 1 5.67 5.68.5.5 0 1 1-1 0 4.7 4.7 0 0 0-4.67-4.68 4.7 4.7 0 0 0-4.67 4.68c0 1.45.32 2.77.92 3.84.64 1.15 1.08 1.6 1.89 2.44a.5.5 0 0 1-.36.85Zm7.1-1.9c-1.2 0-2.26-.31-3.13-.93a5.7 5.7 0 0 1-2.4-4.7.5.5 0 1 1 1 0c0 1.15.5 2.2 1.34 2.8.6.43 1.37.64 2.2.64.2 0 .55-.03.9-.09a.5.5 0 1 1 .19.98c-.45.09-.87.1-1.1.1Zm-2.2 2.05a.5.5 0 0 1-.13-.02c-1.88-.52-3.1-1.2-4.37-2.45a8.4 8.4 0 0 1-2.5-6.03 3.7 3.7 0 0 1 3.7-3.68 3.7 3.7 0 0 1 3.7 3.68c0 .8.67 1.45 1.5 1.45s1.5-.65 1.5-1.45c0-3.78-3.15-6.85-7-6.85-2.7 0-5.17 1.5-6.3 3.82-.38.78-.57 1.76-.57 2.85 0 .84.07 2.17.7 3.9a.5.5 0 1 1-.94.34 11.6 11.6 0 0 1-.76-4.24c0-1.25.22-2.37.67-3.28C4.48 8.2 7.1 6.6 10 6.6c4.4 0 8 3.52 8 7.85a2.5 2.5 0 0 1-5 0 .7.7 0 0 0-.7-.68.7.7 0 0 0-.7.68c0 2.02.8 3.74 2.2 5 1.1 1 2.15 1.57 3.8 2.03a.5.5 0 0 1-.13.98Z"/></svg>
+            <span><strong>Fingerprint / face lock</strong><small id="bio-summary">Open hidden and locked chats without typing the code</small></span>
+            <button class="link" type="button" id="btn-bio-add">Set up</button>
+          </div>
+          <div class="lock-actions">
+            <button class="link" type="button" id="btn-hidden-clear">Clear all chats from Hide chat</button>
+          </div>
+        </div>
         <div class="pad stack chat-lock-settings">
           <div class="link-row static">
             <svg viewBox="0 0 24 24"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg>
@@ -245,6 +270,7 @@
             <button class="link" type="button" id="btn-lock-code">Set secret code</button>
             <button class="link" type="button" id="btn-lock-forgot">Forgot code</button>
             <button class="link" type="button" id="btn-lock-now">Lock all chats now</button>
+            <button class="link" type="button" id="btn-lock-clear">Remove all chats from Chat lock</button>
           </div>
         </div>
         <div class="pad">
@@ -333,6 +359,7 @@
               <button role="menuitem" id="menu-info"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M11 7h2v2h-2V7Zm0 4h2v6h-2v-6Zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg><span>Contact info</span></button>
               <button role="menuitem" id="menu-timer"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span>Disappearing messages</span></button>
               <button role="menuitem" id="menu-lock"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg><span>Lock chat</span></button>
+              <button role="menuitem" id="menu-hide"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.8 11.8 0 0 0 22.99 12 11.83 11.83 0 0 0 12 4.5c-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7ZM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12a11.83 11.83 0 0 0 15.38 6.62l.42.42L19.73 22 21 20.73 3.27 3 2 4.27ZM7.53 9.8l1.55 1.55A2.82 2.82 0 0 0 9 12a3 3 0 0 0 3 3c.22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53a5 5 0 0 1-5-5c0-.79.2-1.53.53-2.2Zm4.31-.78 3.15 3.15.02-.16a3 3 0 0 0-3-3l-.17.01Z"/></svg><span>Hide chat</span></button>
               <button role="menuitem" id="menu-block"><img src="icons/blocked.png" alt="" /><span>Block contact</span></button>
             </div>
           </div>
@@ -355,6 +382,7 @@
             <button class="primary" type="submit">Unlock</button>
           </form>
           <p class="error" id="unlock-error" role="alert"></p>
+          <button class="link bio-unlock hidden" type="button" id="btn-unlock-bio">Use fingerprint / face</button>
           <button class="link" type="button" id="btn-forgot-code">Forgot secret code?</button>
         </div>
         <div class="messages" id="messages"></div>

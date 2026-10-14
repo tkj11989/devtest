@@ -2,6 +2,7 @@
 
 const { Store } = require('./store');
 const { normalisePhone, normaliseEmail } = require('./otp');
+const { createWebAuthn } = require('./webauthn');
 const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -35,7 +36,14 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
   // load of the web app (Socket.IO auth.appSession / X-App-Session header), or
   // one REST credential. A new login or a reload means locked again.
 
+  //
+  // Hidden chats go one step further: they are left out of the chat list, and nothing
+  // about them (messages, previews, typing) reaches a session until it "reveals" them
+  // with the secret code or a fingerprint/face check. Revealing lasts for the app session.
+
   const unlocked = new Map(); // lockKey -> Set(convId)
+  const revealed = new Set(); // lockKeys that opened their hidden chats
+  const webauthn = createWebAuthn();
   const attempts = new Map(); // username -> { fails, until }
   const MAX_FAILS = 5;
 
@@ -43,8 +51,12 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
   const lockKeyFor = (username, credential, appSession) =>
     `${username}|${credential || ''}|${appSession ? String(appSession).slice(0, 64) : '-'}`;
 
-  const isUnlocked = (me, convId, ctx) =>
-    !store.isChatLocked(me, convId) || !!(ctx?.lockKey && unlocked.get(ctx.lockKey)?.has(convId));
+  const isRevealed = (lockKey) => !!(lockKey && revealed.has(lockKey));
+  const isUnlocked = (me, convId, ctx) => {
+    if (store.isChatHidden(me, convId)) return isRevealed(ctx?.lockKey);
+    return !store.isChatLocked(me, convId) || !!(ctx?.lockKey && unlocked.get(ctx.lockKey)?.has(convId));
+  };
+  const hiddenFrom = (me, convId, lockKey) => store.isChatHidden(me, convId) && !isRevealed(lockKey);
 
   const requireUnlocked = (me, convId, ctx) => {
     if (!isUnlocked(me, convId, ctx)) throw new ApiError(423, 'chat_locked', 'This chat is locked. Unlock it with your secret code.');
@@ -65,21 +77,54 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
 
   /** A conversation summary for `me`, with the lock state and a redacted preview when locked. */
   const lockView = (me, c, lockKey) => {
+    if (store.isChatHidden(me, c.id)) {
+      // Closed hidden chats look locked; once revealed they are open (and marked hidden).
+      const open = isRevealed(lockKey);
+      return { ...c, hidden: true, locked: !open, unlocked: open, lastMessage: open || !c.lastMessage ? c.lastMessage : redactMessage(c.lastMessage) };
+    }
     if (!store.isChatLocked(me, c.id)) return { ...c, locked: false };
     const open = !!(lockKey && unlocked.get(lockKey)?.has(c.id));
     return { ...c, locked: true, unlocked: open, lastMessage: open || !c.lastMessage ? c.lastMessage : redactMessage(c.lastMessage) };
   };
 
-  /** The version of an event a device (or webhook, lockKey null) of `username` may receive. */
+  /** The version of an event a device (or webhook, lockKey null) of `username` may receive; null = nothing. */
   const eventFor = (username, event, payload, lockKey) => {
+    if (CONV_EVENTS.has(event)) return hiddenFrom(username, payload.convId, lockKey) ? null : payload;
     if (event === 'message:new') {
       const m = payload.message;
+      if (hiddenFrom(username, m.convId, lockKey)) return null;
       return isUnlocked(username, m.convId, { lockKey }) ? payload : { message: redactMessage(m) };
     }
-    if (event === 'conversation:new' || event === 'conversation:updated') return { ...payload, conversation: lockView(username, payload.conversation, lockKey) };
+    if (event === 'conversation:new' || event === 'conversation:updated') {
+      if (hiddenFrom(username, payload.conversation.id, lockKey)) return null;
+      return { ...payload, conversation: lockView(username, payload.conversation, lockKey) };
+    }
     return payload;
   };
-  const LOCK_SENSITIVE = new Set(['message:new', 'conversation:new', 'conversation:updated']);
+  // Events that only name a chat (no content): dropped for closed hidden chats.
+  const CONV_EVENTS = new Set(['typing', 'message:status', 'message:deleted', 'message:expired', 'message:starred']);
+  const LOCK_SENSITIVE = new Set(['message:new', 'conversation:new', 'conversation:updated', ...CONV_EVENTS]);
+
+  /**
+   * Prove it is you: the secret code, or a fingerprint/face check from an enrolled device
+   * (`{ biometric: { id, clientDataJSON, authenticatorData, signature } }`). Both count
+   * against the same wrong-attempts limit.
+   */
+  const verifyProof = (me, proof, what = 'secret code') => {
+    const bio = proof?.biometric;
+    checkSecret(me, () => {
+      if (!bio) return store.verifyLockCode(me, proof?.code);
+      const credential = store.passkeysOf(me).find((k) => k.id === bio.id);
+      if (!credential) return false;
+      try {
+        store.setPasskeyCounter(me, credential.id, webauthn.verifyAssertion(me, credential, bio));
+        return true;
+      } catch (err) {
+        if (err instanceof webauthn.WebAuthnError) return false;
+        throw err;
+      }
+    }, bio ? 'fingerprint or face check' : what);
+  };
 
   /** Wrong codes count against the user; after MAX_FAILS they must wait (doubling, up to an hour). */
   const checkSecret = (me, ok, what = 'secret code') => {
@@ -110,13 +155,15 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
 
   /** Push an event to all of a user's connected devices and to their webhooks. */
   const notify = (username, event, payload) => {
-    if (LOCK_SENSITIVE.has(event) && store.lockedChats(username).length) {
+    if (LOCK_SENSITIVE.has(event) && (store.lockedChats(username).length || store.hiddenChats(username).length)) {
       // Each device gets the version its own app session may see.
       for (const sid of io.sockets.adapter.rooms.get(userRoom(username)) || []) {
         const sock = io.sockets.sockets.get(sid);
-        sock?.emit(event, eventFor(username, event, payload, sock.data.lockKey));
+        const version = sock && eventFor(username, event, payload, sock.data.lockKey);
+        if (version) sock.emit(event, version);
       }
-      webhooks?.dispatch(username, event, eventFor(username, event, payload, null));
+      const forHooks = eventFor(username, event, payload, null);
+      if (forHooks) webhooks?.dispatch(username, event, forHooks);
       return;
     }
     io.to(userRoom(username)).emit(event, payload);
@@ -244,8 +291,19 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
 
   const conversationView = (me, conv, ctx) => lockView(me, { ...store.summarize(conv, me), activeCall: calls?.activeCallFor(conv.id) || null }, ctx?.lockKey);
 
-  const lockSettings = (me) => ({ hasCode: store.hasLockCode(me), lockedChats: store.lockedChats(me) });
-  const announceLocks = (me) => notify(me, 'chatlock:update', lockSettings(me));
+  const lockSettings = (me) => ({
+    hasCode: store.hasLockCode(me),
+    lockedChats: store.lockedChats(me),
+    hiddenCount: store.hiddenChats(me).length,
+    biometric: store.passkeysOf(me).map((k) => ({ id: k.id, name: k.name, createdAt: k.createdAt })),
+  });
+  /** My devices hear everything; webhooks only learn about locked chats (never hidden chats or devices). */
+  const announceLocks = (me) => {
+    io.to(userRoom(me)).emit('chatlock:update', lockSettings(me));
+    webhooks?.dispatch(me, 'chatlock:update', { hasCode: store.hasLockCode(me), lockedChats: store.lockedChats(me) });
+  };
+  /** The chat list changed (chats hidden, unhidden, locks cleared): my devices should reload it. */
+  const announceChatList = (me) => io.to(userRoom(me)).emit('hidden:update', {});
 
   const actions = {
     me(me) {
@@ -349,10 +407,11 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
     },
 
     conversations(me, _payload, ctx) {
-      const conversations = store.conversationsFor(me).map((c) => conversationView(me, c, ctx));
+      // Hidden chats never appear here; they are listed by `listHidden` once revealed.
+      const conversations = store.conversationsFor(me).filter((c) => !store.isChatHidden(me, c.id)).map((c) => conversationView(me, c, ctx));
       const people = new Set();
       conversations.forEach((c) => c.members.forEach((m) => people.add(m)));
-      return { conversations, users: usersFor(people, me) };
+      return { conversations, users: usersFor(people, me), hiddenCount: store.hiddenChats(me).length };
     },
 
     getConversation(me, { convId }, ctx) {
@@ -488,6 +547,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
     /** Lock a chat. It is locked straight away, everywhere, including this session. */
     lockChat(me, { convId }) {
       member(me, convId);
+      if (store.isChatHidden(me, convId)) throw new ApiError(409, 'conflict', 'Hidden chats are already protected. Unhide the chat to lock it instead.');
       store.setChatLocked(me, convId, true);
       for (const [key, set] of unlocked) if (key.startsWith(`${me}|`)) set.delete(convId);
       announceLocks(me);
@@ -495,30 +555,136 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
     },
 
     /** Remove the lock from a chat for good (needs the code). */
-    removeChatLock(me, { convId, code }) {
+    removeChatLock(me, { convId, code, biometric }) {
       member(me, convId);
       if (!store.isChatLocked(me, convId)) return lockSettings(me);
-      checkSecret(me, () => store.verifyLockCode(me, code));
+      verifyProof(me, { code, biometric });
       store.setChatLocked(me, convId, false);
       announceLocks(me);
       return lockSettings(me);
     },
 
-    /** Open a locked chat for the rest of this app session. */
-    unlockChat(me, { convId, code }, ctx) {
+    /** Open a locked chat for the rest of this app session. For a hidden chat this reveals all hidden chats. */
+    unlockChat(me, { convId, code, biometric }, ctx) {
       const conv = member(me, convId);
       if (!ctx?.lockKey) throw new ApiError(400, 'bad_request', 'No app session to unlock');
-      if (store.isChatLocked(me, convId)) {
-        checkSecret(me, () => store.verifyLockCode(me, code));
+      if (store.isChatHidden(me, convId)) {
+        verifyProof(me, { code, biometric });
+        revealed.add(ctx.lockKey);
+      } else if (store.isChatLocked(me, convId)) {
+        verifyProof(me, { code, biometric });
         if (!unlocked.has(ctx.lockKey)) unlocked.set(ctx.lockKey, new Set());
         unlocked.get(ctx.lockKey).add(convId);
       }
       return { conversation: conversationView(me, conv, ctx) };
     },
 
-    /** Lock every unlocked chat again in this app session ("Lock now"). */
+    /** Lock every unlocked chat again, and close hidden chats, in this app session ("Lock now"). */
     relock(me, _payload, ctx) {
-      if (ctx?.lockKey) unlocked.delete(ctx.lockKey);
+      if (ctx?.lockKey) {
+        unlocked.delete(ctx.lockKey);
+        revealed.delete(ctx.lockKey);
+      }
+      return lockSettings(me);
+    },
+
+    // ----- hidden chats -----
+
+    /** Hide a chat from the chat list. Needs a secret code (it protects hidden chats). */
+    hideChat(me, { convId }, ctx) {
+      member(me, convId);
+      if (!store.hasLockCode(me)) throw new ApiError(400, 'code_required', 'Set a secret code first: it protects your hidden chats');
+      store.setChatHidden(me, convId, true);
+      for (const [key, set] of unlocked) if (key.startsWith(`${me}|`)) set.delete(convId);
+      announceLocks(me);
+      announceChatList(me);
+      return lockSettings(me);
+    },
+
+    /** Put a hidden chat back in the chat list (the session must have revealed hidden chats). */
+    unhideChat(me, { convId }, ctx) {
+      const conv = member(me, convId);
+      if (store.isChatHidden(me, convId) && !isRevealed(ctx?.lockKey)) throw new ApiError(423, 'chat_locked', 'Open your hidden chats with your secret code first');
+      store.setChatHidden(me, convId, false);
+      announceLocks(me);
+      announceChatList(me);
+      return { conversation: conversationView(me, conv, ctx), ...lockSettings(me) };
+    },
+
+    /** Open hidden chats for this app session, with the secret code or a fingerprint/face check. */
+    revealHidden(me, { code, biometric }, ctx) {
+      if (!ctx?.lockKey) throw new ApiError(400, 'bad_request', 'No app session to unlock');
+      verifyProof(me, { code, biometric });
+      revealed.add(ctx.lockKey);
+      return actions.listHidden(me, {}, ctx);
+    },
+
+    /** The hidden chats (only after `revealHidden` in this session). */
+    listHidden(me, _payload, ctx) {
+      if (!isRevealed(ctx?.lockKey)) throw new ApiError(423, 'chat_locked', 'Open your hidden chats with your secret code first');
+      const conversations = store.conversationsFor(me).filter((c) => store.isChatHidden(me, c.id)).map((c) => conversationView(me, c, ctx));
+      const people = new Set();
+      conversations.forEach((c) => c.members.forEach((m) => people.add(m)));
+      return { conversations, users: usersFor(people, me) };
+    },
+
+    /** Close hidden chats again in this session. */
+    hideAgain(me, _payload, ctx) {
+      if (ctx?.lockKey) revealed.delete(ctx.lockKey);
+      return lockSettings(me);
+    },
+
+    /** Settings: bring every hidden chat back to the chat list. Needs the code or fingerprint/face. */
+    clearHidden(me, { code, biometric }) {
+      verifyProof(me, { code, biometric });
+      const ids = store.clearHidden(me);
+      announceLocks(me);
+      announceChatList(me);
+      return { cleared: ids.length, ...lockSettings(me) };
+    },
+
+    /** Settings: remove the lock from every locked chat. Needs the code or fingerprint/face. */
+    clearChatLocks(me, { code, biometric }) {
+      verifyProof(me, { code, biometric });
+      const ids = store.clearLocked(me);
+      for (const set of unlocked.values()) ids.forEach((id) => set.delete(id));
+      announceLocks(me);
+      announceChatList(me);
+      return { cleared: ids.length, ...lockSettings(me) };
+    },
+
+    // ----- fingerprint / face lock -----
+
+    /** A one-time challenge to sign: to set up a device (`register`) or to prove it is you. */
+    biometricChallenge(me) {
+      return {
+        challenge: webauthn.challenge(me),
+        userId: Buffer.from(me).toString('base64url'),
+        credentials: store.passkeysOf(me).map((k) => k.id),
+      };
+    },
+
+    /** Set up this device's fingerprint/face lock (confirm with the secret code). */
+    addBiometric(me, { code, name, credential }) {
+      if (!store.hasLockCode(me)) throw new ApiError(400, 'code_required', 'Set a secret code first');
+      verifyProof(me, { code });
+      let entry;
+      try {
+        entry = webauthn.verifyRegistration(me, credential || {});
+      } catch (err) {
+        if (err instanceof webauthn.WebAuthnError) throw new ApiError(400, 'biometric_failed', err.message);
+        throw err;
+      }
+      store.addPasskey(me, entry, name);
+      announceLocks(me);
+      return lockSettings(me);
+    },
+
+    /** Remove a device's fingerprint/face lock (confirm with the code or another check). */
+    removeBiometric(me, { id, code, biometric }) {
+      verifyProof(me, { code, biometric });
+      store.removePasskey(me, String(id));
+      announceLocks(me);
       return lockSettings(me);
     },
 
@@ -620,8 +786,18 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp }) {
 
   /** Forget unlocks tied to a credential (on logout) or one app session (on disconnect). */
   const forgetUnlocks = ({ credential, lockKey }) => {
-    if (lockKey) unlocked.delete(lockKey);
-    if (credential) for (const key of unlocked.keys()) if (key.split('|')[1] === credential) unlocked.delete(key);
+    if (lockKey) {
+      unlocked.delete(lockKey);
+      revealed.delete(lockKey);
+    }
+    if (credential) {
+      for (const key of [...unlocked.keys(), ...revealed]) {
+        if (key.split('|')[1] === credential) {
+          unlocked.delete(key);
+          revealed.delete(key);
+        }
+      }
+    }
   };
 
   return {

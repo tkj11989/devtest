@@ -30,7 +30,9 @@
     revealed: new Set(), // ids of masked messages this viewer chose to reveal
     maskNext: false, // composer: send the next message masked
     blocked: new Set(), // usernames I have blocked
-    lock: { hasCode: false, lockedChats: new Set() }, // chat lock settings
+    lock: { hasCode: false, lockedChats: new Set(), biometric: [] }, // chat lock settings
+    hiddenOpen: false, // hidden chats revealed in this page load
+    bioPlatform: false, // this device has a fingerprint/face sensor
     defaultDisappear: null, // my timer (seconds) for chats I start
     myBusiness: null, // my business profile (with greeting/away), or null
     voiceUrls: new Map(), // mediaId -> object URL of downloaded voice audio
@@ -444,7 +446,8 @@
     state.messages.clear();
     state.outbox.clear();
     state.revealed.clear();
-    state.lock = { hasCode: false, lockedChats: new Set() };
+    state.lock = { hasCode: false, lockedChats: new Set(), biometric: [] };
+    state.hiddenOpen = false;
     state.blocked.clear();
     stopRecording(false);
     state.voiceUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -524,6 +527,8 @@
       refreshContactInfo();
     });
     socket.on('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
+    // Chats were hidden/unhidden (maybe on another device): reload the list.
+    socket.on('hidden:update', () => loadConversations());
     socket.on('chatlock:update', async (settings) => {
       setLockSettings(settings);
       // Locks changed (maybe on another device): reload so locked chats lose their content.
@@ -602,6 +607,8 @@
     Object.assign(state.users, users);
     state.conversations.clear();
     conversations.forEach((c) => state.conversations.set(c.id, c));
+    // Hidden chats are never in this list; reload them if this session has them open.
+    if (state.hiddenOpen) await loadHidden().catch(() => closeHidden());
     renderChatList();
   }
 
@@ -629,15 +636,28 @@
   }
 
   function renderChatList() {
-    const list = $('#chat-list');
-    list.textContent = '';
     const q = state.filter.toLowerCase();
     const convs = [...state.conversations.values()]
+      .filter((c) => !c.hidden)
       .filter((c) => c.type === 'group' || c.lastMessage || c.disappearAfter || c.id === state.activeId)
       .filter((c) => !q || convTitle(c).toLowerCase().includes(q))
       .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
 
     $('#chat-list-empty').classList.toggle('hidden', convs.length > 0 || !!q);
+    fillChatList($('#chat-list'), convs);
+    if (state.hiddenOpen) renderHiddenList();
+  }
+
+  function renderHiddenList() {
+    const convs = [...state.conversations.values()]
+      .filter((c) => c.hidden)
+      .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
+    $('#hidden-empty').classList.toggle('hidden', convs.length > 0);
+    fillChatList($('#hidden-list'), convs);
+  }
+
+  function fillChatList(list, convs) {
+    list.textContent = '';
 
     for (const c of convs) {
       const li = el('li');
@@ -806,6 +826,11 @@
     $('#menu-block').classList.toggle('hidden', group);
     $('#menu-block span').textContent = blocked ? 'Unblock contact' : 'Block contact';
     $('#menu-lock span').textContent = conv.locked ? 'Remove chat lock' : 'Lock chat';
+    $('#menu-lock').classList.toggle('hidden', !!conv.hidden);
+    $('#menu-hide span').textContent = conv.hidden ? 'Unhide chat' : 'Hide chat';
+    $('#menu-hide').classList.toggle('hidden', isLockedView(conv));
+    $('#lock-screen h2').textContent = conv.hidden ? 'This chat is hidden' : 'This chat is locked';
+    $('#btn-unlock-bio').classList.toggle('hidden', !canUseBiometric());
 
     // Locked and not unlocked in this session: show the lock screen instead of the chat.
     const lockedView = isLockedView(conv);
@@ -1379,11 +1404,14 @@
   // ---------- side panels ----------
 
   function openPanel(id) {
+    if (id !== '#panel-hidden' && state.hiddenOpen) closeHidden();
     document.querySelectorAll('.panel.overlay').forEach((p) => p.classList.add('hidden'));
     $(id).classList.remove('hidden');
   }
   document.querySelectorAll('[data-close]').forEach((b) =>
     b.addEventListener('click', () => b.closest('.panel').classList.add('hidden')));
+  // Leaving the hidden-chats panel (Profile's back arrow etc.) closes them again.
+  $('#panel-profile [data-close]').addEventListener('click', () => state.hiddenOpen && closeHidden());
 
   function debounce(fn, ms) {
     let t;
@@ -2165,8 +2193,8 @@
     if (state.activeId === convId) $('#messages').textContent = '';
   }
 
-  function setLockSettings({ hasCode, lockedChats }) {
-    state.lock = { hasCode, lockedChats: new Set(lockedChats) };
+  function setLockSettings({ hasCode, lockedChats, biometric }) {
+    state.lock = { hasCode, lockedChats: new Set(lockedChats), biometric: biometric || [] };
     renderLockSummary();
   }
 
@@ -2178,13 +2206,28 @@
     $('#btn-lock-code').textContent = state.lock.hasCode ? 'Change secret code' : 'Set secret code';
     $('#btn-lock-forgot').classList.toggle('hidden', !state.lock.hasCode);
     $('#btn-lock-now').classList.toggle('hidden', !n);
+    $('#btn-lock-clear').classList.toggle('hidden', !n);
+    renderHideSettings();
+  }
+
+  function renderHideSettings() {
+    const { hasCode, biometric } = state.lock;
+    const mine = storage.get('chat.bioId');
+    const thisDevice = biometric.some((d) => d.id === mine);
+    $('#bio-row').classList.toggle('hidden', !state.bioPlatform && !biometric.length);
+    $('#bio-summary').textContent = biometric.length
+      ? `On for ${biometric.map((d) => d.name).join(', ')}`
+      : 'Open hidden and locked chats without typing the code';
+    $('#btn-bio-add').textContent = thisDevice ? 'Turn off' : 'Set up';
+    $('#btn-bio-add').disabled = !thisDevice && !state.bioPlatform;
+    $('#btn-hidden-clear').classList.toggle('hidden', !hasCode);
   }
 
   /**
    * Small modal form. `fields`: [{ name, label, type, autocomplete }]. `onSubmit(values)` may throw
    * to show an error and keep the dialog open. Resolves with its result, or null if cancelled.
    */
-  function dialog({ title, text = '', fields, submit = 'OK', onSubmit }) {
+  function dialog({ title, text = '', fields, submit = 'OK', onSubmit, alt = null }) {
     return new Promise((resolve) => {
       const modal = $('#modal');
       const form = $('#modal-form');
@@ -2201,6 +2244,20 @@
         label.appendChild(input);
         box.appendChild(label);
       }
+      // Optional second way to continue, e.g. fingerprint / face: `alt.run()` returns the values to submit.
+      if (alt) {
+        const b = el('button', 'link', alt.label);
+        b.type = 'button';
+        b.addEventListener('click', async () => {
+          $('#modal-error').textContent = '';
+          try {
+            await submitValues(await alt.run());
+          } catch (err) {
+            $('#modal-error').textContent = err.message;
+          }
+        });
+        box.appendChild(b);
+      }
       modal.classList.remove('hidden');
       box.querySelector('input')?.focus();
       const close = (result) => {
@@ -2210,9 +2267,7 @@
         resolve(result);
       };
       $('#modal-cancel').onclick = () => close(null);
-      form.onsubmit = async (e) => {
-        e.preventDefault();
-        const values = Object.fromEntries(new FormData(form).entries());
+      async function submitValues(values) {
         $('#modal-submit').disabled = true;
         try {
           close((await onSubmit(values)) ?? true);
@@ -2221,6 +2276,10 @@
         } finally {
           $('#modal-submit').disabled = false;
         }
+      }
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        return submitValues(Object.fromEntries(new FormData(form).entries()));
       };
     });
   }
@@ -2293,13 +2352,12 @@
     const conv = state.conversations.get(state.activeId);
     if (!conv) return;
     if (conv.locked) {
-      await dialog({
+      await askProof({
         title: 'Remove chat lock',
         text: `Enter your secret code to stop locking "${convTitle(conv)}".`,
-        fields: [{ name: 'code', label: 'Secret code' }],
         submit: 'Remove lock',
-        onSubmit: async ({ code }) => {
-          setLockSettings(await emit('chatlock:remove', { convId: conv.id, code }));
+        run: async (proof) => {
+          setLockSettings(await emit('chatlock:remove', { convId: conv.id, ...proof }));
           toast('Chat lock removed');
         },
       });
@@ -2320,27 +2378,264 @@
   $('#btn-forgot-code').addEventListener('click', forgotCodeDialog);
   $('#btn-lock-now').addEventListener('click', async () => {
     await emit('chatlock:relock').catch(() => {});
+    await closeHidden();
     for (const c of state.conversations.values()) {
       if (c.locked) forgetChatContent(c.id);
     }
     await loadConversations();
     if (state.activeId) openChat(state.activeId);
-    toast('Locked chats are locked again');
+    toast('Locked and hidden chats are closed again');
   });
 
-  $('#unlock-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
+  /** Unlock the open chat (a hidden chat opens all hidden chats). `proof`: { code } or { biometric }. */
+  async function doUnlock(proof) {
     const id = state.activeId;
     try {
-      const { conversation } = await emit('chatlock:unlock', { convId: id, code: $('#unlock-code').value });
-      Object.assign(state.conversations.get(id), conversation);
+      const { conversation } = await emit('chatlock:unlock', { convId: id, ...proof });
       $('#unlock-code').value = '';
+      if (conversation.hidden) {
+        // Opening one hidden chat opens them all: show them in the Hidden chats panel.
+        state.hiddenOpen = true;
+        await loadHidden();
+        openPanel('#panel-hidden');
+        renderChatList();
+      } else {
+        Object.assign(state.conversations.get(id), conversation);
+      }
       openChat(id);
     } catch (err) {
       $('#unlock-error').textContent = err.message;
       $('#unlock-code').select();
     }
+  }
+  $('#unlock-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    doUnlock({ code: $('#unlock-code').value });
   });
+  $('#btn-unlock-bio').addEventListener('click', async () => {
+    $('#unlock-error').textContent = '';
+    try {
+      doUnlock(await biometricProof());
+    } catch (err) {
+      $('#unlock-error').textContent = err.message;
+    }
+  });
+
+  // ---------- fingerprint / face lock (WebAuthn) ----------
+
+  const bufToB64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const b64uToBuf = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+  const canUseBiometric = () => !!(state.bioPlatform && state.lock.biometric.length);
+  if (window.PublicKeyCredential && window.isSecureContext) {
+    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable?.()
+      .then((ok) => { state.bioPlatform = !!ok && typeof AuthenticatorAttestationResponse?.prototype?.getPublicKey === 'function'; renderHideSettings(); })
+      .catch(() => {});
+  }
+  const bioError = (err) => (err?.name === 'NotAllowedError' || err?.name === 'AbortError'
+    ? new Error('Fingerprint / face check was cancelled')
+    : err);
+
+  /** Ask the phone to check the person; returns the proof the server verifies. */
+  async function biometricProof() {
+    try {
+      const ch = await emit('biometric:challenge');
+      const cred = await navigator.credentials.get({
+        publicKey: {
+          challenge: b64uToBuf(ch.challenge),
+          rpId: location.hostname,
+          allowCredentials: ch.credentials.map((id) => ({ type: 'public-key', id: b64uToBuf(id), transports: ['internal'] })),
+          userVerification: 'required',
+          timeout: 60000,
+        },
+      });
+      const r = cred.response;
+      return {
+        biometric: {
+          id: cred.id,
+          clientDataJSON: bufToB64u(r.clientDataJSON),
+          authenticatorData: bufToB64u(r.authenticatorData),
+          signature: bufToB64u(r.signature),
+        },
+      };
+    } catch (err) {
+      throw bioError(err);
+    }
+  }
+
+  /** Make a credential on this device (the phone asks for fingerprint/face). */
+  async function createBiometric() {
+    try {
+      const ch = await emit('biometric:challenge');
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: b64uToBuf(ch.challenge),
+          rp: { name: 'ChatApp', id: location.hostname },
+          user: { id: b64uToBuf(ch.userId), name: state.me.username, displayName: state.me.displayName },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+          authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+          excludeCredentials: ch.credentials.map((id) => ({ type: 'public-key', id: b64uToBuf(id) })),
+          attestation: 'none',
+          timeout: 60000,
+        },
+      });
+      const r = cred.response;
+      return {
+        id: cred.id,
+        clientDataJSON: bufToB64u(r.clientDataJSON),
+        authenticatorData: bufToB64u(r.getAuthenticatorData()),
+        publicKey: bufToB64u(r.getPublicKey()),
+        alg: r.getPublicKeyAlgorithm(),
+      };
+    } catch (err) {
+      throw bioError(err);
+    }
+  }
+
+  const deviceName = () => {
+    const ua = navigator.userAgent;
+    const os = /iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android phone' : /Windows/.test(ua) ? 'Windows PC' : /Mac/.test(ua) ? 'Mac' : 'This device';
+    return os;
+  };
+
+  /** Ask for the secret code (or fingerprint/face when set up); `run(proof)` performs the action. */
+  function askProof({ title, text, submit = 'Continue', run }) {
+    return dialog({
+      title,
+      text,
+      submit,
+      fields: [{ name: 'code', label: 'Secret code' }],
+      alt: canUseBiometric() ? { label: 'Use fingerprint / face', run: async () => (await biometricProof()) } : null,
+      onSubmit: async (v) => run(v.biometric ? { biometric: v.biometric } : { code: v.code }),
+    });
+  }
+
+  $('#btn-bio-add').addEventListener('click', async () => {
+    const mine = storage.get('chat.bioId');
+    if (state.lock.biometric.some((d) => d.id === mine)) {
+      await askProof({
+        title: 'Turn off fingerprint / face lock',
+        text: 'This device will ask for your secret code again.',
+        submit: 'Turn off',
+        run: async (proof) => {
+          setLockSettings(await emit('biometric:remove', { id: mine, ...proof }));
+          storage.del('chat.bioId');
+          renderHideSettings();
+          toast('Fingerprint / face lock turned off');
+        },
+      });
+      return;
+    }
+    if (!state.lock.hasCode && !(await setCodeDialog())) return;
+    await dialog({
+      title: 'Set up fingerprint / face lock',
+      text: 'Enter your secret code, then confirm with your fingerprint or face when your phone asks.',
+      fields: [{ name: 'code', label: 'Secret code' }],
+      submit: 'Continue',
+      onSubmit: async ({ code }) => {
+        const credential = await createBiometric();
+        setLockSettings(await emit('biometric:add', { code, name: deviceName(), credential }));
+        storage.set('chat.bioId', credential.id);
+        renderHideSettings();
+        toast('Fingerprint / face lock is on');
+      },
+    });
+  });
+
+  // ---------- hidden chats ----------
+
+  async function loadHidden() {
+    const { conversations, users } = await emit('hidden:list');
+    Object.assign(state.users, users);
+    for (const c of [...state.conversations.values()]) if (c.hidden) state.conversations.delete(c.id);
+    conversations.forEach((c) => state.conversations.set(c.id, c));
+  }
+
+  /** Close hidden chats again: forget their content and drop them from memory. */
+  async function closeHidden() {
+    if (!state.hiddenOpen) return;
+    state.hiddenOpen = false;
+    emit('hidden:close').catch(() => {});
+    for (const c of [...state.conversations.values()]) {
+      if (!c.hidden) continue;
+      forgetChatContent(c.id);
+      state.conversations.delete(c.id);
+      if (state.activeId === c.id) closeChat();
+    }
+    $('#hidden-list').textContent = '';
+    $('#panel-hidden').classList.add('hidden');
+    renderChatList();
+  }
+  $('#btn-hidden-back').addEventListener('click', closeHidden);
+
+  $('#btn-hidden-open').addEventListener('click', async () => {
+    if (!state.lock.hasCode) {
+      toast('Nothing is hidden yet. Open a chat, tap ⋮ and choose Hide chat.');
+      return;
+    }
+    await askProof({
+      title: 'Hidden chats',
+      text: 'Enter your secret code to open your hidden chats.',
+      submit: 'Open',
+      run: async (proof) => {
+        const { conversations, users } = await emit('hidden:reveal', proof);
+        Object.assign(state.users, users);
+        state.hiddenOpen = true;
+        conversations.forEach((c) => state.conversations.set(c.id, c));
+        renderChatList();
+        openPanel('#panel-hidden');
+      },
+    });
+  });
+
+  $('#menu-hide').addEventListener('click', async () => {
+    const conv = state.conversations.get(state.activeId);
+    if (!conv) return;
+    try {
+      if (conv.hidden) {
+        const res = await emit('hidden:unhide', { convId: conv.id });
+        state.conversations.set(conv.id, res.conversation);
+        setLockSettings(res);
+        renderChatList();
+        renderHeader();
+        toast('Chat is back in your chat list');
+        return;
+      }
+      if (!state.lock.hasCode && !(await setCodeDialog())) return;
+      setLockSettings(await emit('hidden:hide', { convId: conv.id }));
+      forgetChatContent(conv.id);
+      state.conversations.delete(conv.id);
+      closeChat();
+      toast('Chat hidden · open it from Profile → Hidden chats');
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $('#btn-hidden-clear').addEventListener('click', () => askProof({
+    title: 'Clear all chats from Hide chat',
+    text: 'Every hidden chat goes back to your chat list. Nothing is deleted. Enter your secret code to continue.',
+    submit: 'Clear all',
+    run: async (proof) => {
+      const res = await emit('hidden:clear', proof);
+      setLockSettings(res);
+      await closeHidden();
+      await loadConversations();
+      toast(res.cleared ? `${res.cleared} chat${res.cleared === 1 ? ' is' : 's are'} back in your chat list` : 'No chats were hidden');
+    },
+  }));
+
+  $('#btn-lock-clear').addEventListener('click', () => askProof({
+    title: 'Remove all chats from Chat lock',
+    text: 'None of your chats will ask for the secret code any more. Enter your secret code to continue.',
+    submit: 'Remove all locks',
+    run: async (proof) => {
+      const res = await emit('chatlock:clear', proof);
+      setLockSettings(res);
+      await loadConversations();
+      if (state.activeId) openChat(state.activeId);
+      toast(res.cleared ? `Chat lock removed from ${res.cleared} chat${res.cleared === 1 ? '' : 's'}` : 'No chats were locked');
+    },
+  }));
 
   // Short notices at the bottom of the screen.
   function toast(text) {

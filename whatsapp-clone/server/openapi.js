@@ -113,13 +113,25 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       activeCall: { oneOf: [ref('ActiveCall'), { type: 'null' }] },
       disappearAfter: { type: 'integer', description: 'disappearing messages timer in seconds (absent = off)' },
       disappearSetBy: { type: 'string' },
-      locked: { type: 'boolean', description: 'you locked this chat with your secret code' },
+      locked: { type: 'boolean', description: 'you locked this chat with your secret code (or it is hidden and not yet revealed)' },
       unlocked: { type: 'boolean', description: 'locked chats only: unlocked in this session' },
+      hidden: { type: 'boolean', description: 'the chat is hidden (left out of `GET /conversations`; `locked` is true until revealed)' },
     }, ['id', 'type', 'members']),
     ChatLock: obj({
       hasCode: { type: 'boolean', description: 'a secret code has been set' },
       lockedChats: arrayOf({ type: 'string' }),
+      hiddenCount: { type: 'integer', description: 'how many chats are hidden (their ids are only listed by `GET /hidden-chats` once revealed)' },
+      biometric: arrayOf(obj({ id: { type: 'string' }, name: { type: 'string' }, createdAt: { type: 'integer' } })),
     }, ['hasCode', 'lockedChats']),
+    Proof: obj({
+      code: { type: 'string', description: 'the secret code' },
+      biometric: obj({
+        id: { type: 'string', description: 'credential id (base64url)' },
+        clientDataJSON: { type: 'string' },
+        authenticatorData: { type: 'string' },
+        signature: { type: 'string' },
+      }, ['id', 'clientDataJSON', 'authenticatorData', 'signature']),
+    }),
     Status: obj({
       id: { type: 'string' },
       owner: { type: 'string' },
@@ -184,7 +196,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -485,15 +497,85 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
       delete: op(T.lock, 'Remove the lock from a chat', {
         params: [CONV_ID],
-        body: jsonBody(obj({ code: { type: 'string' } }, ['code'])),
+        description: 'Send the secret code or a fingerprint/face proof.',
+        body: jsonBody(ref('Proof'), { code: '1234' }),
         responses: { 200: ok(ref('ChatLock')), ...errors(401, 403, 404, 429) },
       }),
     },
     '/conversations/{id}/unlock': {
       post: op(T.lock, 'Unlock a locked chat for this session', {
         params: [CONV_ID, { name: 'X-App-Session', in: 'header', schema: { type: 'string' }, description: 'optional: scope the unlock to one app session of this credential' }],
-        body: jsonBody(obj({ code: { type: 'string' } }, ['code'])),
+        description: 'Send the secret code or a fingerprint/face proof. For a hidden chat this reveals all hidden chats (like `POST /hidden-chats/reveal`).',
+        body: jsonBody(ref('Proof'), { code: '1234' }),
         responses: { 200: ok(obj({ conversation: ref('Conversation') })), ...errors(401, 403, 404, 429) },
+      }),
+    },
+
+    '/chat-lock/clear': {
+      post: op(T.lock, 'Remove the lock from all locked chats', {
+        description: 'Needs the secret code or a fingerprint/face proof. Returns how many chats were unlocked for good (`cleared`).',
+        body: jsonBody(ref('Proof'), { code: '1234' }),
+        responses: { 200: ok(obj({ cleared: { type: 'integer' }, hasCode: { type: 'boolean' }, lockedChats: arrayOf({ type: 'string' }), hiddenCount: { type: 'integer' } })), ...errors(400, 401, 403, 429) },
+      }),
+    },
+    '/conversations/{id}/hide': {
+      put: op(T.hide, 'Hide a chat', {
+        description: 'Takes the chat out of the chat list. Needs a secret code to have been set (400 `code_required`). A hidden chat sends nothing (messages, previews, typing, webhooks) to a session until it reveals hidden chats. Hiding replaces the chat\'s own lock. Takes effect in every session.',
+        params: [CONV_ID],
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 404) },
+      }),
+      delete: op(T.hide, 'Unhide a chat (put it back in the chat list)', {
+        description: 'The session must have revealed hidden chats (423 `chat_locked` otherwise).',
+        params: [CONV_ID],
+        responses: { 200: ok(obj({ conversation: ref('Conversation') })), ...errors(401, 404, 423) },
+      }),
+    },
+    '/hidden-chats': {
+      get: op(T.hide, 'My hidden chats', {
+        description: 'Only after `POST /hidden-chats/reveal` in this session (423 `chat_locked` otherwise).',
+        responses: { 200: ok(obj({ conversations: arrayOf(ref('Conversation')), users: ref('Users') })), ...errors(401, 423) },
+      }),
+    },
+    '/hidden-chats/reveal': {
+      post: op(T.hide, 'Open hidden chats for this session', {
+        description: 'Prove it is you with the secret code or a fingerprint/face proof. Lasts for this app session (`X-App-Session`, or the credential). Wrong tries share the chat-lock limit (5, then a growing wait).',
+        params: [{ name: 'X-App-Session', in: 'header', schema: { type: 'string' }, description: 'optional: scope to one app session of this credential' }],
+        body: jsonBody(ref('Proof'), { code: '1234' }),
+        responses: { 200: ok(obj({ conversations: arrayOf(ref('Conversation')), users: ref('Users') })), ...errors(401, 403, 429) },
+      }),
+    },
+    '/hidden-chats/close': {
+      post: op(T.hide, 'Close hidden chats again in this session', { responses: { 200: ok(ref('ChatLock')), ...errors(401) } }),
+    },
+    '/hidden-chats/clear': {
+      post: op(T.hide, 'Bring all hidden chats back to the chat list', {
+        description: 'Needs the secret code or a fingerprint/face proof. Nothing is deleted; the chats simply stop being hidden. Returns how many (`cleared`).',
+        body: jsonBody(ref('Proof'), { code: '1234' }),
+        responses: { 200: ok(obj({ cleared: { type: 'integer' }, hasCode: { type: 'boolean' }, lockedChats: arrayOf({ type: 'string' }), hiddenCount: { type: 'integer' } })), ...errors(400, 401, 403, 429) },
+      }),
+    },
+    '/biometric/challenge': {
+      post: op(T.hide, 'Get a challenge for fingerprint/face lock', {
+        description: 'WebAuthn: pass `challenge` to `navigator.credentials.create` (to set up a device) or `.get` (to prove it is you, with `credentials` as `allowCredentials`). One use, valid for 2 minutes. The rpId is the site\'s host name.',
+        responses: { 200: ok(obj({ challenge: { type: 'string' }, userId: { type: 'string' }, credentials: arrayOf({ type: 'string' }) })), ...errors(401) },
+      }),
+    },
+    '/biometric': {
+      post: op(T.hide, 'Set up fingerprint/face lock on a device', {
+        description: 'Confirm with the secret code, and send the result of `navigator.credentials.create` (platform authenticator, user verification required): `id`, `clientDataJSON`, `authenticatorData` (`response.getAuthenticatorData()`), `publicKey` (`response.getPublicKey()`) and `alg`, all base64url. Up to 5 devices.',
+        body: jsonBody(obj({
+          code: { type: 'string' },
+          name: { type: 'string', description: 'device name, e.g. "My phone"' },
+          credential: obj({ id: { type: 'string' }, clientDataJSON: { type: 'string' }, authenticatorData: { type: 'string' }, publicKey: { type: 'string' }, alg: { type: 'integer', enum: [-7, -257] } }, ['id', 'clientDataJSON', 'authenticatorData', 'publicKey', 'alg']),
+        }, ['code', 'credential'])),
+        responses: { 201: ok(ref('ChatLock')), ...errors(400, 401, 403, 429) },
+      }),
+    },
+    '/biometric/{id}': {
+      delete: op(T.hide, 'Remove fingerprint/face lock from a device', {
+        params: [idParam('id', 'credential id')],
+        body: jsonBody(ref('Proof'), { code: '1234' }),
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 403, 429) },
       }),
     },
 
@@ -585,6 +667,16 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /chat-lock/reset/otp': 'requestChatLockResetOtp',
     'post /chat-lock/reset': 'resetChatLockCode',
     'post /chat-lock/relock': 'relockChats',
+    'post /chat-lock/clear': 'clearChatLocks',
+    'put /conversations/{id}/hide': 'hideChat',
+    'delete /conversations/{id}/hide': 'unhideChat',
+    'get /hidden-chats': 'listHiddenChats',
+    'post /hidden-chats/reveal': 'revealHiddenChats',
+    'post /hidden-chats/close': 'closeHiddenChats',
+    'post /hidden-chats/clear': 'clearHiddenChats',
+    'post /biometric/challenge': 'biometricChallenge',
+    'post /biometric': 'addBiometric',
+    'delete /biometric/{id}': 'removeBiometric',
     'put /conversations/{id}/lock': 'lockChat',
     'delete /conversations/{id}/lock': 'removeChatLock',
     'post /conversations/{id}/unlock': 'unlockChat',
@@ -615,6 +707,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     [T.msg]: 'Sending, reading, starring and deleting messages',
     [T.status]: 'Status updates that disappear after 24 hours',
     [T.lock]: 'Lock chats with a secret code, required again in every new session',
+    [T.hide]: 'Hide chats from the chat list, opened with the secret code or fingerprint/face lock',
     [T.biz]: 'Business profile, hours, greeting and away messages',
     [T.meta]: 'Service health and this document',
   };

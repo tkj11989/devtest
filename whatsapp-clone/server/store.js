@@ -565,10 +565,94 @@ class Store {
     return !!this.data.users[username]?.lockedChats?.includes(convId);
   }
 
+  // ---------- hidden chats ----------
+
+  hiddenChats(username) {
+    return [...(this.data.users[username]?.hiddenChats || [])];
+  }
+
+  isChatHidden(username, convId) {
+    return !!this.data.users[username]?.hiddenChats?.includes(convId);
+  }
+
+  /** Hide a chat from the chat list. Hiding replaces the chat's own lock (hidden chats are protected as a group). */
+  setChatHidden(username, convId, hidden) {
+    const u = this.data.users[username];
+    if (!u || !this.isMember(convId, username)) throw new Error('Conversation not found');
+    if (hidden && !u.chatLock) throw new Error('Set a secret code first');
+    const set = new Set(u.hiddenChats || []);
+    if (hidden) set.add(convId);
+    else set.delete(convId);
+    u.hiddenChats = [...set];
+    if (hidden && u.lockedChats) u.lockedChats = u.lockedChats.filter((id) => id !== convId);
+    this._save();
+  }
+
+  /** Bring every hidden chat back to the chat list. Returns their ids. */
+  clearHidden(username) {
+    const u = this.data.users[username];
+    const ids = this.hiddenChats(username);
+    if (u) {
+      u.hiddenChats = [];
+      this._save();
+    }
+    return ids;
+  }
+
+  /** Remove the lock from every locked chat. Returns their ids. */
+  clearLocked(username) {
+    const u = this.data.users[username];
+    const ids = this.lockedChats(username);
+    if (u) {
+      u.lockedChats = [];
+      this._save();
+    }
+    return ids;
+  }
+
+  // ---------- fingerprint / face lock (WebAuthn credentials) ----------
+
+  passkeysOf(username) {
+    return this.data.users[username]?.passkeys || [];
+  }
+
+  addPasskey(username, credential, name) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.passkeys = u.passkeys || [];
+    if (u.passkeys.length >= 5) throw new Error('You can have at most 5 devices with fingerprint or face lock');
+    if (u.passkeys.some((k) => k.id === credential.id)) throw new Error('This device is already set up');
+    const entry = { ...credential, name: String(name || 'This device').trim().slice(0, 40) || 'This device', createdAt: Date.now() };
+    u.passkeys.push(entry);
+    this._save();
+    return Store._publicPasskey(entry);
+  }
+
+  removePasskey(username, id) {
+    const u = this.data.users[username];
+    const before = u?.passkeys?.length || 0;
+    if (u?.passkeys) u.passkeys = u.passkeys.filter((k) => k.id !== id);
+    if (!before || u.passkeys.length === before) throw new Error('Device not found');
+    this._save();
+  }
+
+  setPasskeyCounter(username, id, counter) {
+    const k = this.passkeysOf(username).find((x) => x.id === id);
+    if (k) {
+      k.counter = counter;
+      this._save();
+    }
+  }
+
+  static _publicPasskey({ id, name, createdAt }) {
+    return { id, name, createdAt };
+  }
+
   setChatLocked(username, convId, locked) {
     const u = this.data.users[username];
     if (!u || !this.isMember(convId, username)) throw new Error('Conversation not found');
     if (locked && !u.chatLock) throw new Error('Set a secret code first');
+    if (locked && this.isChatHidden(username, convId)) throw new Error('Hidden chats are already protected');
     const set = new Set(u.lockedChats || []);
     if (locked) set.add(convId);
     else set.delete(convId);

@@ -141,6 +141,27 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Hide chat
+
+**Hide chat** (chat menu **⋮ → Hide chat**) takes a chat off your dashboard completely. Hidden chats are opened with your **secret code** or, once set up, your phone's **fingerprint / face lock**.
+
+- A hidden chat is not in the chat list, search, or unread badges, and nothing about it (new messages, previews, typing, delivery ticks) reaches the app until you open it. Webhooks never hear about it either.
+- **Profile → Hidden chats** asks for the code (or fingerprint / face) and shows the hidden chats. They **close again** when you leave that screen, tap *Lock all chats now*, close ChatApp or log in again; their messages are removed from the page.
+- **Unhide chat** (chat menu, while the chats are open) puts a chat back in the list. Hiding replaces that chat's own lock; a chat is either locked or hidden.
+- Hiding needs a secret code (you're asked to create one the first time). Wrong tries share the chat lock's limit (5, then a growing wait).
+
+**Settings** (Profile):
+
+| Option | What it does |
+|--------|--------------|
+| **Fingerprint / face lock** | Set up this phone or laptop (it asks for your code, then your fingerprint/face). Hidden chats, locked chats and the options below can then be opened with it instead of typing the code. Turn off any time. |
+| **Clear all chats from Hide chat** | Every hidden chat goes back to the chat list (nothing is deleted). Needs the code or fingerprint/face. |
+| **Remove all chats from Chat lock** | Removes the lock from every locked chat at once. Needs the code or fingerprint/face. |
+
+Fingerprint / face uses WebAuthn platform authenticators (Touch ID, Face ID, Windows Hello, Android biometrics), so it needs HTTPS or `localhost`. The server verifies each check itself: a one-time challenge, the site it was made for, the user-verified flag and the device's signature (`server/webauthn.js`), so it can't be faked from the page. Only the public key is stored.
+
+REST: `PUT/DELETE /conversations/{id}/hide`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
+
 ## API for other platforms
 
 Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with ChatApp.
@@ -298,6 +319,7 @@ whatsapp-clone/
 │   ├── openapi.js   # OpenAPI 3.1 spec (served at /api/v1/openapi.json)
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
+│   ├── webauthn.js  # Fingerprint / face lock: challenges and signature checks
 │   ├── webhooks.js  # Signed webhook delivery with retries
 │   ├── calls.js     # 1:1 and group call signalling (ring, join, relay, hold, end, call log)
 │   └── store.js     # Users, sessions, conversations, messages (JSON file storage)
@@ -318,6 +340,7 @@ whatsapp-clone/
 └── test/
     ├── app.test.js
     ├── auth.test.js
+    ├── hidden.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js
@@ -353,6 +376,11 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `chatlock:settings` | Whether a secret code is set, and my locked chats |
 | `chatlock:set-code` / `chatlock:reset-code` | Create/change the secret code, or reset it (SMS code from `chatlock:reset-sms`, or the password) |
 | `chatlock:reset-sms` | Send a reset code by SMS to my mobile number |
+| `chatlock:clear`    | Remove the lock from all locked chats (code or biometric) |
+| `hidden:hide` / `hidden:unhide` | Hide a chat / put it back in the chat list |
+| `hidden:reveal` / `hidden:list` / `hidden:close` | Open hidden chats for this session (code or biometric), list them, close them again |
+| `hidden:clear`      | Bring all hidden chats back to the chat list |
+| `biometric:challenge` / `biometric:add` / `biometric:remove` | Fingerprint / face lock devices |
 | `chatlock:lock` / `chatlock:remove` | Lock a chat / remove its lock (needs the code) |
 | `chatlock:unlock`   | Unlock a chat for this app session (`auth.appSession` = one page load) |
 | `chatlock:relock`   | Lock every chat unlocked in this session again |
@@ -367,7 +395,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `call:hold`         | Put the call on hold / resume            |
 | `call:end`          | Leave / hang up                          |
 
-Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`.
+Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`.
 
 Voice-message audio and status photos are downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
 
