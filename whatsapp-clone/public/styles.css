@@ -1235,3 +1235,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .verify-name .trust-badge { width: 28px; height: 28px; margin: 0; }
 .link-row .verify-name { display: grid; place-items: center; width: 24px; }
 #modal select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 8px; width: 100%; }
+
+.premium-badge { width: 15px; height: 15px; fill: var(--accent); flex: none; vertical-align: -2px; margin-left: 2px; }
+.info-name .premium-badge { width: 20px; height: 20px; }
+.verify-name .premium-badge { width: 26px; height: 26px; margin: 0; }

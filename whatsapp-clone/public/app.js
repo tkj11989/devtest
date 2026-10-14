@@ -491,7 +491,7 @@
     state.calls?.dispose();
     statusUpdates.reset();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null });
     state.conversations.clear();
     state.messages.clear();
     state.outbox.clear();
@@ -548,6 +548,7 @@
         if (!state.e2ee) state.e2ee = window.E2EE.createClient({ emit, username: me.username, deviceName: deviceName() });
         await state.e2ee.init();
         renderE2eeSummary();
+        emit('subscription:status').then((sub) => { state.sub = sub; renderPremiumRow(); }).catch(() => {});
         state.iceServers = iceServers || [];
         state.blocked = new Set(blocked || []);
         setOffline(false);
@@ -587,6 +588,11 @@
       refreshContactInfo();
     });
     onOrdered('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
+    // My Premium started or ended (maybe on another device).
+    socket.on('subscription:update', (sub) => {
+      state.sub = sub;
+      renderPremiumRow();
+    });
     // Someone added or removed a device: refresh keys so new messages are encrypted for the right devices.
     socket.on('e2ee:update', () => {
       state.e2ee?.invalidate();
@@ -647,7 +653,7 @@
       const prev = state.users[user.username] || {};
       state.users[user.username] = { ...user, online: user.online ?? prev.online };
       if (user.username === state.me?.username) {
-        state.me = { ...state.me, ...user, business: user.business, verified: user.verified };
+        state.me = { ...state.me, ...user, business: user.business, verified: user.verified, premium: user.premium };
         renderVerifyRow();
         if (!user.business) state.myBusiness = null;
       }
@@ -1883,8 +1889,10 @@
     }
     return svg;
   }
-  /** The badges for a person: Verified / Not verified, then Business. */
-  const userBadges = (u) => (u ? [trustBadge(u), ...(u.business ? [businessBadge()] : [])] : []);
+  const STAR = 'M12 2l2.9 6.3 6.9.7-5.2 4.6 1.5 6.8L12 16.9 5.9 20.4l1.5-6.8L2.2 9l6.9-.7L12 2Z';
+  const premiumBadge = () => svgIcon(STAR, 'premium-badge', 'Premium');
+  /** The badges for a person: Verified / Not verified, Premium, then Business. */
+  const userBadges = (u) => (u ? [trustBadge(u), ...(u.premium ? [premiumBadge()] : []), ...(u.business ? [businessBadge()] : [])] : []);
 
   /** 189000 -> "2 days 4 hours 30 minutes" */
   function fmtTimer(sec) {
@@ -2398,8 +2406,8 @@
     if (state.activeId === convId) $('#messages').textContent = '';
   }
 
-  function setLockSettings({ hasCode, lockedChats, biometric }) {
-    state.lock = { hasCode, lockedChats: new Set(lockedChats), biometric: biometric || [] };
+  function setLockSettings({ hasCode, lockedChats, biometric, hiddenCount }) {
+    state.lock = { hasCode, lockedChats: new Set(lockedChats), biometric: biometric || [], hiddenCount: hiddenCount ?? state.lock.hiddenCount };
     renderLockSummary();
   }
 
@@ -2413,6 +2421,7 @@
     $('#btn-lock-now').classList.toggle('hidden', !n);
     $('#btn-lock-clear').classList.toggle('hidden', !n);
     renderHideSettings();
+    renderPremiumRow();
   }
 
   function renderHideSettings() {
@@ -2582,6 +2591,7 @@
       setLockSettings(await emit('chatlock:lock', { convId: conv.id }));
       toast('Chat locked · your secret code is needed to open it');
     } catch (err) {
+      if (err.code === 'premium_required') return offerUpgrade(err.message);
       alert(err.message);
     }
   }
@@ -2755,6 +2765,79 @@
       },
     });
   });
+
+  // ---------- Premium ----------
+
+  const money = (p) => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: p.currency, maximumFractionDigits: 0 }).format(p.price);
+    } catch {
+      return `${p.currency} ${p.price}`;
+    }
+  };
+
+  function renderPremiumRow() {
+    const s = state.sub;
+    if (!s) return;
+    const locks = state.lock.lockedChats.size;
+    const hidden = state.lock.hiddenCount ?? s.usage.hiddenChats;
+    const until = s.expiresAt ? new Date(s.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: s.plan === 'daily' ? 'short' : undefined }) : '';
+    $('#premium-summary').textContent = s.premium
+      ? `Premium (${s.plan}) until ${until} · unlimited locked and hidden chats`
+      : `${s.expired ? `Premium ended ${until} · ` : 'Free plan · '}${locks} of ${s.limits.free.chatLocks} chats locked · ${hidden} of ${s.limits.free.hiddenChats} hidden`;
+    $('#btn-premium').textContent = s.premium ? 'Extend' : 'Upgrade';
+    const name = $('#premium-name');
+    name.textContent = '';
+    if (s.premium) name.appendChild(premiumBadge());
+  }
+
+  /** A limit was hit: explain, then offer the plans. */
+  async function offerUpgrade(message) {
+    const go = await dialog({
+      title: 'Premium required',
+      text: `${message}\n\nFree: up to 3 locked chats and 1 hidden chat.\nPremium: unlimited.`,
+      fields: [],
+      submit: 'See plans',
+      onSubmit: async () => {},
+    });
+    if (go) await upgradeDialog();
+  }
+
+  /** Choose Daily / Monthly / Yearly, pay on the provider's page, then confirm. */
+  async function upgradeDialog() {
+    let info;
+    try {
+      info = await emit('subscription:status');
+    } catch (err) {
+      return toast(err.message);
+    }
+    state.sub = info;
+    if (!info.available) return toast('Subscriptions are not available on this server yet');
+    let order;
+    const chosen = await dialog({
+      title: 'Upgrade to Premium',
+      text: 'Unlimited locked chats and hidden chats, plus a Premium badge. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.',
+      fields: [{ name: 'plan', label: 'Plan', options: info.plans.map((p) => [p.id, `${p.label} · ${money(p)}`]) }],
+      submit: 'Continue to payment',
+      onSubmit: async (v) => { order = await emit('subscription:checkout', { plan: v.plan }); },
+    });
+    if (!chosen || !order) return;
+    if (order.paymentUrl) window.open(order.paymentUrl, '_blank', 'noopener');
+    const paid = await dialog({
+      title: order.sandbox ? 'Pay (sandbox)' : 'Complete your payment',
+      text: order.sandbox
+        ? 'Sandbox: no real payment is taken.'
+        : `Finish paying on the payment page that opened (${order.paymentUrl}). Then tap "I have paid". Your card details never reach ChatApp.`,
+      fields: [],
+      submit: order.sandbox ? 'Pay (test)' : 'I have paid',
+      onSubmit: async () => { state.sub = await emit('subscription:confirm', { orderId: order.orderId }); },
+    });
+    if (paid) {
+      renderPremiumRow();
+      toast('You are Premium ★');
+    }
+  }
+  $('#btn-premium').addEventListener('click', upgradeDialog);
 
   // ---------- verified badge (KYC) ----------
 
@@ -2948,6 +3031,7 @@
       $('#panel-contact').classList.add('hidden');
       toast('Chat hidden · open it from Profile → Hidden chats');
     } catch (err) {
+      if (err.code === 'premium_required') return offerUpgrade(err.message);
       toast(err.message);
     }
   }
@@ -2965,6 +3049,7 @@
       renderChatList();
       toast(`Chat with ${u.displayName} is hidden · open it from Profile → Hidden chats`);
     } catch (err) {
+      if (err.code === 'premium_required') return offerUpgrade(err.message);
       toast(err.message);
     }
   }

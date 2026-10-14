@@ -336,8 +336,34 @@ class Store {
     if (!u) return null;
     const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
     if (u.business) out.business = Store._publicBusiness(u.business);
-    if (u.verifiedAt) out.verified = true; // the only KYC fact kept: yes, verified
+    if (u.verifiedAt) out.verified = true;
+    if (this.isPremium(username)) out.premium = true; // the only KYC fact kept: yes, verified
     return out;
+  }
+
+  // ---------- premium subscription ----------
+
+  subscriptionOf(username) {
+    return this.data.users[username]?.subscription || null;
+  }
+
+  isPremium(username) {
+    const sub = this.data.users[username]?.subscription;
+    return !!sub && sub.expiresAt > Date.now();
+  }
+
+  /** Premium until `expiresAt`. Only the plan and dates are kept: no payment details. */
+  activateSubscription(username, { plan, expiresAt }) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.subscription = { plan, expiresAt, since: u.subscription?.expiresAt > Date.now() ? u.subscription.since : Date.now() };
+    this._save();
+    return u.subscription;
+  }
+
+  /** Users whose Premium ended in (from, to]. */
+  expiredBetween(from, to) {
+    return Object.values(this.data.users).filter((u) => u.subscription && u.subscription.expiresAt > from && u.subscription.expiresAt <= to).map((u) => u.username);
   }
 
   // ---------- verified badge ----------

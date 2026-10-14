@@ -40,6 +40,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       online: { type: 'boolean' },
       business: ref('BusinessPublic'),
       verified: { type: 'boolean', description: 'present (true) when the person passed identity verification; absent = not verified' },
+      premium: { type: 'boolean', description: 'present (true) while the person has an active Premium subscription' },
     }, ['username', 'displayName']),
     DayHours: {
       oneOf: [
@@ -188,6 +189,17 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       data: { type: 'object', description: 'Same payload as the Socket.IO event of that name' },
     }, ['id', 'event', 'createdAt', 'user', 'data']),
     Session: obj({ token: { type: 'string' }, user: ref('User') }, ['token', 'user']),
+    Subscription: obj({
+      premium: { type: 'boolean' },
+      plan: { type: ['string', 'null'], enum: ['daily', 'monthly', 'yearly', null] },
+      expiresAt: { type: ['integer', 'null'], description: 'ms since epoch' },
+      expired: { type: 'boolean', description: 'had Premium before, and it has ended' },
+      limits: obj({ free: obj({ chatLocks: { type: 'integer' }, hiddenChats: { type: 'integer' } }), premium: { const: 'unlimited' } }),
+      usage: obj({ chatLocks: { type: 'integer' }, hiddenChats: { type: 'integer' } }),
+      plans: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, price: { type: 'number' }, currency: { type: 'string' } })),
+      available: { type: 'boolean', description: 'payments are configured on this server' },
+      sandbox: { type: 'boolean', description: 'development stand-in: orders are marked paid without payment' },
+    }, ['premium', 'limits', 'usage', 'plans']),
     OtpSent: obj({
       requestId: { type: 'string', description: 'send this back with the code' },
       channel: { type: 'string', enum: ['sms', 'email'] },
@@ -212,6 +224,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E423: errorResponse('The chat is locked: unlock it with POST /conversations/{id}/unlock (code `chat_locked`)'),
     E429: errorResponse('Rate limited, or a code was requested too soon (`otp_too_soon`, `otp_limit`); see Retry-After'),
     E503: errorResponse('Identity verification is not configured on this server (`kyc_unavailable`)'),
+    E402: errorResponse('Premium required (`premium_required`: free accounts can lock 3 chats and hide 1) or payment not received yet (`payment_pending`)'),
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
@@ -302,6 +315,26 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/me/subscription': {
+      get: op(T.me, 'Plan, limits and usage', {
+        description: '**Free** accounts can lock up to 3 chats and hide 1 chat. **Premium** has no limits. Premium is bought in advance as a daily, monthly or yearly plan (no auto-renewal); buying while Premium extends it. When it ends, chats that are already locked or hidden stay protected, but no more can be added until Premium is renewed.',
+        responses: { 200: ok(ref('Subscription')), ...errors(401) },
+      }),
+    },
+    '/me/subscription/checkout': {
+      post: op(T.me, 'Start paying for a plan', {
+        description: 'Creates an order and returns the provider\'s `paymentUrl` (open it so the person can pay; card details never touch ChatApp). `paymentUrl` is null in the sandbox, where no real payment is taken. Then call `POST /me/subscription/confirm`.',
+        body: jsonBody(obj({ plan: { type: 'string', enum: ['daily', 'monthly', 'yearly'] } }, ['plan']), { plan: 'monthly' }),
+        responses: { 200: ok(obj({ orderId: { type: 'string' }, plan: { type: 'string' }, amount: { type: 'number' }, currency: { type: 'string' }, paymentUrl: { type: ['string', 'null'] }, sandbox: { type: 'boolean' } }, ['orderId', 'plan', 'amount', 'currency'])), ...errors(400, 401, 429, 502, 503) },
+      }),
+    },
+    '/me/subscription/confirm': {
+      post: op(T.me, 'Confirm payment and switch Premium on', {
+        description: 'The server asks the payment provider whether the order was paid (nothing from the client is trusted). `402 payment_pending` means not paid yet: try again after paying. Each order can be used once.',
+        body: jsonBody(obj({ orderId: { type: 'string' } }, ['orderId']), { orderId: 'ord_…' }),
+        responses: { 200: ok(ref('Subscription')), ...errors(401, 402, 404, 502, 503) },
+      }),
+    },
     '/me/verification': {
       get: op(T.me, 'Verified-badge status', {
         description: 'Whether the account is verified, whether verification is available on this server, and the ID types accepted (personal accounts and business accounts accept different ones).',
@@ -528,9 +561,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     },
     '/conversations/{id}/lock': {
       put: op(T.lock, 'Lock a chat', {
-        description: 'Needs a secret code to have been set. Takes effect immediately in every session.',
+        description: 'Needs a secret code to have been set. Takes effect immediately in every session. Free accounts can lock up to 3 chats (`402 premium_required` after that).',
         params: [CONV_ID],
-        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 404) },
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 402, 404) },
       }),
       delete: op(T.lock, 'Remove the lock from a chat', {
         params: [CONV_ID],
@@ -557,9 +590,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     },
     '/conversations/{id}/hide': {
       put: op(T.hide, 'Hide a chat', {
-        description: 'Takes the chat out of the chat list. Needs a secret code to have been set (400 `code_required`). A hidden chat sends nothing (messages, previews, typing, webhooks) to a session until it reveals hidden chats. Hiding replaces the chat\'s own lock. Takes effect in every session.',
+        description: 'Takes the chat out of the chat list. Free accounts can hide 1 chat (`402 premium_required` after that). Needs a secret code to have been set (400 `code_required`). A hidden chat sends nothing (messages, previews, typing, webhooks) to a session until it reveals hidden chats. Hiding replaces the chat\'s own lock. Takes effect in every session.',
         params: [CONV_ID],
-        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 404) },
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 402, 404) },
       }),
       delete: op(T.hide, 'Unhide a chat (put it back in the chat list)', {
         description: 'The session must have revealed hidden chats (423 `chat_locked` otherwise).',
@@ -589,7 +622,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       put: op(T.hide, 'Hide the chat with a specific contact', {
         description: 'Like `PUT /conversations/{id}/hide`, but by username, and it works before the contact has ever messaged you: their first message stays hidden too. Returns the settings and the `convId`. Needs a secret code (400 `code_required`).',
         params: [idParam('username')],
-        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 404) },
+        responses: { 200: ok(ref('ChatLock')), ...errors(400, 401, 402, 404) },
       }),
     },
     '/hidden-chats': {
@@ -689,6 +722,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'get /me/subscription': 'getSubscription',
+    'post /me/subscription/checkout': 'startCheckout',
+    'post /me/subscription/confirm': 'confirmSubscription',
     'get /me/verification': 'getVerification',
     'post /me/verification/otp': 'startVerification',
     'post /me/verification': 'finishVerification',

@@ -126,6 +126,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+  router.get('/me/subscription', ...authed, run((req) => actions.subscriptionStatus(req.user)));
+  router.post('/me/subscription/checkout', ...authed, json, run((req) => actions.subscriptionCheckout(req.user, { plan: req.body?.plan })));
+  router.post('/me/subscription/confirm', ...authed, json, run((req) => actions.subscriptionConfirm(req.user, { orderId: req.body?.orderId })));
   router.get('/me/verification', ...authed, run((req) => actions.kycStatus(req.user)));
   router.post('/me/verification/otp', ...authed, json, run((req) => actions.kycStart(req.user, req.body || {})));
   router.post('/me/verification', ...authed, json, run((req) => actions.kycVerify(req.user, { requestId: req.body?.requestId, otp: req.body?.otp })));

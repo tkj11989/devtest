@@ -141,6 +141,31 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Free and Premium accounts
+
+| | Free | Premium |
+|---|---|---|
+| Locked chats (Chat lock) | up to **3** | unlimited |
+| Hidden chats (Hide chat) | up to **1** | unlimited |
+| Badge | none | gold ★ next to the name |
+
+Past a free limit, locking or hiding shows *"Premium required"* with the plans (API: `402 premium_required`). Everything else is the same on both. Profile → **Premium** shows the plan, how much of the free allowance you use, and **Upgrade / Extend**.
+
+**Plans: Daily, Monthly (a calendar month) and Yearly**, paid in advance. They do not renew by themselves; buying again while Premium **extends** it from the current end. Default prices (INR): 9 / 99 / 999; set your own with `PLAN_PRICES='{"daily":19,"monthly":149,"yearly":1499}'` and `PLAN_CURRENCY`. Only the plan and its dates are stored on the account: no card or bank details are ever handled by ChatApp.
+
+**When Premium ends**, the ★ goes away and no *more* chats can be locked or hidden beyond the free limits. Chats that are already locked or hidden **stay protected** (they are never silently exposed); removing locks or unhiding is always allowed, and renewing Premium restores adding more.
+
+**Payments** need a provider behind a small relay (Razorpay, Stripe, PayU, Cashfree…). Set `PAYMENT_WEBHOOK_URL` (and `PAYMENT_WEBHOOK_TOKEN`) and ChatApp POSTs JSON to it:
+
+```
+{ "action": "create", "reference": "ord_…", "plan": "monthly", "amount": 99, "currency": "INR", "user": "alice" }  ->  { "paymentUrl": "https://…" }
+{ "action": "status", "reference": "ord_…" }                                                                         ->  { "paid": true }
+```
+
+The person pays on the provider's page; then the **server** asks the provider whether the order was paid before switching Premium on (nothing the browser says is trusted, and each order works once). Without `PAYMENT_WEBHOOK_URL`, subscriptions are **unavailable**. For development, `PAYMENTS_SANDBOX=1` marks every order paid: **never use it in production, it gives Premium away.**
+
+API: `GET /me/subscription`, `POST /me/subscription/checkout`, `POST /me/subscription/confirm`; `user.premium` appears wherever users are returned. Socket: `subscription:status`, `subscription:checkout`, `subscription:confirm`; server → client `subscription:update`.
+
 ## Verified badge (KYC)
 
 Everyone has a badge next to their name: a **blue Verified seal** once they have verified their identity, or a **grey outlined "Not verified" seal** otherwise (business accounts also keep their briefcase badge). It shows in the chat list, chat header, contact info, search results and group members, and updates live.
@@ -356,6 +381,7 @@ whatsapp-clone/
 │   ├── openapi.js   # OpenAPI 3.1 spec (served at /api/v1/openapi.json)
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
+│   ├── payments.js  # Premium subscriptions: plans, checkout, payment confirmation
 │   ├── kyc.js       # Verified badge: ID check through a KYC gateway (nothing stored)
 │   ├── webauthn.js  # Fingerprint / face lock: challenges and signature checks
 │   ├── webhooks.js  # Signed webhook delivery with retries
@@ -382,6 +408,7 @@ whatsapp-clone/
     ├── hidden.test.js
     ├── e2ee.test.js
     ├── kyc.test.js
+    ├── premium.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

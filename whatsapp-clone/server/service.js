@@ -26,7 +26,10 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) {
+/** What a free account can do; Premium has no limit. */
+const FREE_LIMITS = { chatLocks: 3, hiddenChats: 1 };
+
+function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments }) {
   const userRoom = (u) => `user:${u}`;
 
   // ---------- chat lock ----------
@@ -180,6 +183,42 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) 
   /** Tell everyone who shares a chat with `me` (and my own devices) that my device keys changed. */
   const announceDevices = (me) => {
     for (const p of [me, ...peersOf(me)]) io.to(userRoom(p)).emit('e2ee:update', { username: me });
+  };
+
+  /** Free accounts: up to 3 locked chats and 1 hidden chat. Past that needs Premium (402). */
+  const requireRoom = (me, kind) => {
+    if (store.isPremium(me)) return;
+    const [used, max, noun] = kind === 'lock'
+      ? [store.lockedChats(me).length, FREE_LIMITS.chatLocks, 'lock up to 3 chats']
+      : [store.hiddenChats(me).length, FREE_LIMITS.hiddenChats, 'hide 1 chat'];
+    if (used >= max) throw new ApiError(402, 'premium_required', `Free accounts can ${noun}. Upgrade to Premium to ${kind === 'lock' ? 'lock' : 'hide'} more.`);
+  };
+
+  const subscriptionView = (me) => {
+    const sub = store.subscriptionOf(me);
+    const premium = store.isPremium(me);
+    return {
+      premium,
+      plan: premium ? sub.plan : null,
+      expiresAt: sub?.expiresAt || null,
+      expired: !!sub && !premium,
+      limits: { free: { chatLocks: FREE_LIMITS.chatLocks, hiddenChats: FREE_LIMITS.hiddenChats }, premium: 'unlimited' },
+      usage: { chatLocks: store.lockedChats(me).length, hiddenChats: store.hiddenChats(me).length },
+      plans: payments ? payments.listPlans() : [],
+      available: !!payments?.available,
+      sandbox: !!payments?.sandbox,
+    };
+  };
+
+  /** Tell people their Premium ended (called every minute): their badge goes away. */
+  let lastSweep = Date.now();
+  const expireSubscriptions = () => {
+    const now = Date.now();
+    for (const u of store.expiredBetween(lastSweep, now)) {
+      announceProfile(u);
+      io.to(userRoom(u)).emit('subscription:update', subscriptionView(u));
+    }
+    lastSweep = now;
   };
 
   const contactDestination = (body) => {
@@ -354,6 +393,28 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) 
         business: store.getBusiness(me),
         contact: store.contactOf(me),
       };
+    },
+
+    // ----- Premium subscription -----
+
+    subscriptionStatus(me) {
+      return subscriptionView(me);
+    },
+
+    /** Start paying for a plan ('daily' | 'monthly' | 'yearly'). Returns where to pay. */
+    async subscriptionCheckout(me, { plan }) {
+      if (!payments) throw new ApiError(503, 'payments_unavailable', 'Subscriptions are not available right now');
+      return payments.checkout(me, plan);
+    },
+
+    /** After paying: the server asks the payment service, and switches Premium on when it was paid. */
+    async subscriptionConfirm(me, { orderId }) {
+      if (!payments) throw new ApiError(503, 'payments_unavailable', 'Subscriptions are not available right now');
+      await payments.confirm(me, orderId);
+      const view = subscriptionView(me);
+      announceProfile(me);
+      io.to(userRoom(me)).emit('subscription:update', view);
+      return view;
     },
 
     // ----- verified badge (KYC) -----
@@ -634,6 +695,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) 
     lockChat(me, { convId }) {
       member(me, convId);
       if (store.isChatHidden(me, convId)) throw new ApiError(409, 'conflict', 'Hidden chats are already protected. Unhide the chat to lock it instead.');
+      if (!store.isChatLocked(me, convId)) requireRoom(me, 'lock');
       store.setChatLocked(me, convId, true);
       for (const [key, set] of unlocked) if (key.startsWith(`${me}|`)) set.delete(convId);
       announceLocks(me);
@@ -682,6 +744,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) 
       if (!convId && username) convId = store.getOrCreateDirect(me, String(username).toLowerCase()).id;
       member(me, convId);
       if (!store.hasLockCode(me)) throw new ApiError(400, 'code_required', 'Set a secret code first: it protects your hidden chats');
+      if (!store.isChatHidden(me, convId)) requireRoom(me, 'hide');
       store.setChatHidden(me, convId, true);
       for (const [key, set] of unlocked) if (key.startsWith(`${me}|`)) set.delete(convId);
       announceLocks(me);
@@ -896,6 +959,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc }) 
     lockKeyFor,
     mediaAllowed,
     pruneExpired,
+    expireSubscriptions,
     forgetUnlocks,
     userRoom,
     userView,

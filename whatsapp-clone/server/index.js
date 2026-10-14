@@ -14,6 +14,7 @@ const { createApiRouter } = require('./api');
 const { createOtpService, createOtpSender } = require('./otp');
 const { createAuth } = require('./auth');
 const { createKyc, createKycGateway } = require('./kyc');
+const { createPayments, createPaymentGateway, plansFromEnv } = require('./payments');
 
 // STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
 // e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'
@@ -69,6 +70,9 @@ const SOCKET_ACTIONS = {
   'me:contact-verify': 'verifyContact',
   'chatlock:reset-sms': 'requestLockResetCode',
   'chatlock:clear': 'clearChatLocks',
+  'subscription:status': 'subscriptionStatus',
+  'subscription:checkout': 'subscriptionCheckout',
+  'subscription:confirm': 'subscriptionConfirm',
   'kyc:status': 'kycStatus',
   'kyc:start': 'kycStart',
   'kyc:verify': 'kycVerify',
@@ -110,8 +114,10 @@ function createApp({
   rateLimit,
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
   messageSweepMs = 5000,
+  subscriptionSweepMs = 60 * 1000,
   otp: otpOptions = {},
   kyc: kycOptions = {},
+  payments: paymentOptions = {},
 } = {}) {
   const app = express();
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
@@ -126,7 +132,15 @@ function createApp({
   const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
   const auth = createAuth({ store, otp });
   const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc });
+  const payments = createPayments({
+    store,
+    gateway: createPaymentGateway(),
+    sandbox: process.env.PAYMENTS_SANDBOX === '1',
+    plans: plansFromEnv(),
+    currency: process.env.PLAN_CURRENCY || 'INR',
+    ...paymentOptions,
+  });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -181,14 +195,19 @@ function createApp({
   }, 60 * 1000);
   pruneTimer.unref();
   // Disappearing messages: remove them as soon as their timer runs out.
-  const expiryTimer = setInterval(() => service.pruneExpired(), messageSweepMs);
+  const expiryTimer = setInterval(() => { service.pruneExpired(); }, messageSweepMs);
+  // Premium that ran out: update badges for everyone.
+  const subscriptionTimer = setInterval(() => service.expireSubscriptions(), subscriptionSweepMs);
+  subscriptionTimer.unref();
   expiryTimer.unref();
   server.on('close', () => {
     clearInterval(pruneTimer);
     clearInterval(expiryTimer);
+    clearInterval(subscriptionTimer);
     webhooks.stop();
     otp.stop();
     kyc.stop();
+    payments.stop();
   });
 
   // ---------- realtime ----------
