@@ -29,7 +29,7 @@ const PAGE_MAX = 100;
 /** What a free account can do; Premium has no limit. */
 const FREE_LIMITS = { chatLocks: 3, hiddenChats: 1 };
 
-function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments }) {
+function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator }) {
   const userRoom = (u) => `user:${u}`;
 
   // ---------- chat lock ----------
@@ -424,6 +424,36 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       store.setProfileViewsEnabled(me, !!enabled);
       io.to(userRoom(me)).emit('profile:viewed', {});
       return { privacy: { profileViews: store.profileViewsEnabled(me) } };
+    },
+
+    // ----- translating received messages -----
+
+    translateLanguages() {
+      return { languages: translator?.languages || [], available: !!translator?.available, sandbox: !!translator?.sandbox };
+    },
+
+    /** Choose the language received messages of this chat are shown in (`lang` null/'' turns it off). Private to me. */
+    setTranslation(me, { convId, lang }) {
+      member(me, convId);
+      lang = lang ? String(lang).toLowerCase() : null;
+      if (lang && !translator?.isLanguage(lang)) throw new ApiError(400, 'invalid_request', 'Unknown language');
+      if (lang && !translator.available) throw new ApiError(503, 'translation_unavailable', 'Translation is not available right now');
+      store.setTranslateTo(me, convId, lang);
+      io.to(userRoom(me)).emit('translate:update', { convId, lang });
+      return { convId, lang };
+    },
+
+    /**
+     * Translate texts the app has decrypted, into this chat's chosen language. Only works for
+     * chats where translation is on. Texts are passed through and not stored or logged.
+     */
+    async translateTexts(me, { convId, texts }, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const target = store.translateTo(me, convId);
+      if (!target) throw new ApiError(400, 'translation_off', 'Turn on translation for this chat first');
+      if (!translator) throw new ApiError(503, 'translation_unavailable', 'Translation is not available right now');
+      return { target, translations: await translator.translate(me, target, texts) };
     },
 
     // ----- Premium subscription -----

@@ -863,6 +863,21 @@ class Store {
       .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
   }
 
+  // ---------- per-chat translation language (private to me) ----------
+
+  translateTo(username, convId) {
+    return this.data.users[username]?.translate?.[convId] || null;
+  }
+
+  setTranslateTo(username, convId, lang) {
+    const u = this.data.users[username];
+    if (!u || !this.isMember(convId, username)) throw new Error('Conversation not found');
+    u.translate = u.translate || {};
+    if (lang) u.translate[convId] = lang;
+    else delete u.translate[convId];
+    this._save();
+  }
+
   summarize(conv, username) {
     const msgs = (this.data.messages[conv.id] || []).filter((m) => Store.visibleTo(m, username));
     const unread = msgs.filter((m) => m.from !== username && !m.readBy.includes(username)).length;
@@ -871,6 +886,7 @@ class Store {
       ...conv,
       lastMessage: last ? this.viewFor(last, username) : null,
       unread,
+      ...(this.translateTo(username, conv.id) ? { translateTo: this.translateTo(username, conv.id) } : {}),
     };
   }
 

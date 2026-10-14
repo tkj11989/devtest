@@ -28,6 +28,8 @@
     calls: null, // call controller (see call.js)
     outbox: new Map(), // clientId -> my message not yet confirmed by the server
     revealed: new Set(), // ids of masked messages this viewer chose to reveal
+    showOriginal: new Set(), // translated messages the viewer switched back to the original
+    languages: [], // languages offered for translation
     maskNext: false, // composer: send the next message masked
     blocked: new Set(), // usernames I have blocked
     lock: { hasCode: false, lockedChats: new Set(), biometric: [] }, // chat lock settings
@@ -590,6 +592,8 @@
       refreshContactInfo();
     });
     onOrdered('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
+    // Translation language changed for a chat (maybe on another device).
+    socket.on('translate:update', ({ convId, lang }) => applyTranslation(convId, lang));
     // My Premium started or ended (maybe on another device).
     socket.on('subscription:update', (sub) => {
       state.sub = sub;
@@ -839,6 +843,7 @@
       }
       state.messages.set(id, messages);
       renderMessages(true);
+      maybeTranslate(conv);
       markRead(id);
       if (highlight) flashMessage(highlight);
     } catch (err) {
@@ -953,6 +958,8 @@
     if (blocked) $('#blocked-banner-text').textContent = `You blocked ${displayName(peer)}. Tap to unblock.`;
     $('#composer').classList.toggle('hidden', blocked || lockedView || !!state.recorder);
     paintE2eeBanner(conv, lockedView);
+    paintTranslateBanner(conv, lockedView);
+    $('#menu-translate').classList.toggle('hidden', lockedView);
   }
 
   /** "Messages in this chat are end-to-end encrypted", or why they are not. */
@@ -1048,12 +1055,26 @@
         cover.type = 'button';
         cover.title = 'Reveal message';
         cover.append(icon('masked', 'inline-icon'), el('span', '', 'Masked message'), el('small', '', 'Tap to reveal'));
-        cover.addEventListener('click', () => { state.revealed.add(m.id); renderMessages(); });
+        cover.addEventListener('click', () => { state.revealed.add(m.id); renderMessages(); maybeTranslate(conv); });
         bubble.appendChild(cover);
       } else if (m.undecryptable) {
         bubble.appendChild(el('span', 'text undecryptable', "🔒 This message can't be read on this device (it was sent before this device was set up)."));
       } else {
-        bubble.appendChild(el('span', 'text', m.text));
+        // Received messages of a chat with translation on: show the translation, with a way back to the original.
+        const tr = !mine && m.tr && !state.showOriginal.has(m.id) ? m.tr : null;
+        bubble.appendChild(el('span', 'text', tr ? tr.text : m.text));
+        if (!mine && m.tr) {
+          const note = el('span', 'tr-note');
+          const flip = el('button', '', tr ? 'Show original' : 'Show translation');
+          flip.type = 'button';
+          flip.addEventListener('click', () => {
+            if (state.showOriginal.has(m.id)) state.showOriginal.delete(m.id);
+            else state.showOriginal.add(m.id);
+            renderMessages();
+          });
+          note.append(`Translated${m.tr.detected ? ` from ${langName(m.tr.detected)}` : ''} · `, flip);
+          bubble.appendChild(note);
+        }
       }
       const meta = el('span', 'meta');
       // In a chat that is end-to-end encrypted, mark messages that were not (API apps, automatic replies, older messages).
@@ -1368,6 +1389,7 @@
     if (msg.convId === state.activeId) {
       renderMessages(mine);
       if (!mine) markRead(msg.convId);
+      maybeTranslate(conv);
     } else if (!mine && !msg.readBy.includes(state.me.username)) {
       conv.unread = (conv.unread || 0) + 1;
     }
@@ -2834,6 +2856,108 @@
       },
     });
   });
+
+  // ---------- translating received messages ----------
+
+  const langName = (code) => {
+    const l = state.languages.find((x) => x.code === code);
+    return l ? l.name : code;
+  };
+
+  async function loadLanguages() {
+    if (state.languageInfo) return state.languageInfo;
+    state.languageInfo = await emit('translate:languages');
+    state.languages = state.languageInfo.languages;
+    return state.languageInfo;
+  }
+
+  function paintTranslateBanner(conv, lockedView) {
+    const banner = $('#translate-banner');
+    const lang = conv.translateTo;
+    banner.classList.toggle('hidden', !lang || lockedView);
+    if (!lang) return;
+    loadLanguages().then(() => {
+      const l = state.languages.find((x) => x.code === lang);
+      if (state.activeId === conv.id) $('#translate-banner-text').textContent = `Messages you receive here are shown in ${l ? `${l.name} (${l.native})` : lang}`;
+    }).catch(() => {});
+  }
+
+  /** Translate the chat's received text messages that aren't translated yet (the app decrypted them; the text goes to the translation service). */
+  async function maybeTranslate(conv) {
+    const lang = conv?.translateTo;
+    if (!lang) return;
+    const todo = (state.messages.get(conv.id) || []).filter((m) => m.from !== state.me.username && (!m.type || m.type === 'text')
+      && m.text && !m.deleted && !m.undecryptable && !m.trBusy && m.trLang !== lang
+      && !(m.masked && !state.revealed.has(m.id)));
+    for (let i = 0; i < todo.length; i += 20) {
+      const batch = todo.slice(i, i + 20);
+      batch.forEach((m) => { m.trBusy = true; });
+      try {
+        const { translations } = await emit('translate:text', { convId: conv.id, texts: batch.map((m) => m.text) });
+        batch.forEach((m, k) => {
+          const t = translations[k];
+          m.trLang = lang;
+          // Already in my language: nothing to show.
+          m.tr = t.detected === lang || t.text === m.text ? null : { text: t.text, detected: t.detected, lang };
+        });
+      } catch (err) {
+        batch.forEach((m) => { m.trLang = lang; m.tr = null; }); // don't retry in a loop
+        if (!state.translateWarned) {
+          state.translateWarned = true;
+          toast(`Translation: ${err.message}`);
+          setTimeout(() => { state.translateWarned = false; }, 15000);
+        }
+      } finally {
+        batch.forEach((m) => { m.trBusy = false; });
+      }
+    }
+    if (conv.id === state.activeId) renderMessages();
+  }
+
+  /** Pick the language this contact's messages are shown in. */
+  async function translateDialog() {
+    const conv = state.conversations.get(state.activeId);
+    if (!conv) return;
+    let info;
+    try {
+      info = await loadLanguages();
+    } catch (err) {
+      return toast(err.message);
+    }
+    if (!info.available && !conv.translateTo) return toast('Translation is not available on this server yet');
+    const who = conv.type === 'direct' ? displayName(convPeer(conv)) : convTitle(conv);
+    const opened = dialog({
+      title: `Translate messages from ${who}`,
+      text: 'Messages you receive in this chat will be shown in the language you choose, with a way back to the original. Only this chat is affected.\n\nMessages are end-to-end encrypted, so to translate one your app sends its text to the translation service, which returns it and does not store it. Turn translation off to stop.',
+      fields: [{ name: 'lang', label: 'Show received messages in', options: [['', 'Off (show original)'], ...info.languages.map((l) => [l.code, `${l.name} · ${l.native}`])] }],
+      submit: 'Save',
+      onSubmit: async (v) => {
+        const res = await emit('translate:set', { convId: conv.id, lang: v.lang || null });
+        applyTranslation(conv.id, res.lang);
+      },
+    });
+    $('#modal-fields [name=lang]').value = conv.translateTo || '';
+    await opened;
+  }
+
+  /** Apply a chat's language change (from this device or another): clear old translations and translate again. */
+  function applyTranslation(convId, lang) {
+    const conv = state.conversations.get(convId);
+    if (!conv) return;
+    if (lang) conv.translateTo = lang;
+    else delete conv.translateTo;
+    for (const m of state.messages.get(convId) || []) {
+      delete m.tr;
+      delete m.trLang;
+    }
+    if (convId === state.activeId) {
+      renderHeader();
+      renderMessages();
+      maybeTranslate(conv);
+    }
+  }
+  $('#menu-translate').addEventListener('click', translateDialog);
+  $('#translate-change').addEventListener('click', translateDialog);
 
   // ---------- who viewed my profile ----------
 

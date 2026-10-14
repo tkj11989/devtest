@@ -126,6 +126,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+  router.get('/translate/languages', ...authed, run((req) => actions.translateLanguages(req.user)));
+  router.put('/conversations/:id/translation', ...authed, json, run((req) => actions.setTranslation(req.user, { convId: p(req, 'id'), lang: req.body?.lang })));
+  router.post('/conversations/:id/translate', ...authed, json, run((req) => actions.translateTexts(req.user, { convId: p(req, 'id'), texts: req.body?.texts }, req.ctx)));
   router.post('/users/:username/view', ...authed, run((req) => { actions.viewProfile(req.user, { username: p(req, 'username') }); return undefined; }));
   router.get('/me/profile-views', ...authed, run((req) => actions.profileViews(req.user)));
   router.put('/me/privacy', ...authed, json, run((req) => actions.setProfileViews(req.user, { enabled: req.body?.profileViews })));

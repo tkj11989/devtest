@@ -129,6 +129,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       createdAt: { type: 'integer' },
       lastMessage: { oneOf: [ref('Message'), { type: 'null' }] },
       unread: { type: 'integer' },
+      translateTo: { type: 'string', description: 'language code received messages are shown in (private to you)' },
       activeCall: { oneOf: [ref('ActiveCall'), { type: 'null' }] },
       disappearAfter: { type: 'integer', description: 'disappearing messages timer in seconds (absent = off)' },
       disappearSetBy: { type: 'string' },
@@ -228,7 +229,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', i18n: 'Translation', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -316,6 +317,27 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/translate/languages': {
+      get: op(T.i18n, 'Languages for translating received messages', {
+        responses: { 200: ok(obj({ languages: arrayOf(obj({ code: { type: 'string' }, name: { type: 'string' }, native: { type: 'string' } })), available: { type: 'boolean' }, sandbox: { type: 'boolean' } })), ...errors(401) },
+      }),
+    },
+    '/conversations/{id}/translation': {
+      put: op(T.i18n, 'Choose the language received messages of a chat are shown in', {
+        description: 'Per chat (so per contact in a one-to-one chat), private to you, synced across your devices. `lang: null` turns it off. The chat summary then has `translateTo`. Because messages are end-to-end encrypted, translating means your app sends the decrypted text of received messages to the translation service (not stored); the app asks you before turning it on.',
+        params: [CONV_ID],
+        body: jsonBody(obj({ lang: { type: ['string', 'null'] } }, ['lang']), { lang: 'hi' }),
+        responses: { 200: ok(obj({ convId: { type: 'string' }, lang: { type: ['string', 'null'] } })), ...errors(400, 401, 404, 503) },
+      }),
+    },
+    '/conversations/{id}/translate': {
+      post: op(T.i18n, 'Translate texts into the chat\'s language', {
+        description: 'Send up to 30 texts (4000 characters each) that your app has already decrypted; get them back translated, in the same order, with the detected source language. Only works for chats where translation is on (`400 translation_off`). Texts are passed to the translation service and not stored or logged. 120 texts per minute.',
+        params: [CONV_ID],
+        body: jsonBody(obj({ texts: arrayOf({ type: 'string' }) }, ['texts']), { texts: ['Good morning! Is the order ready?'] }),
+        responses: { 200: ok(obj({ target: { type: 'string' }, translations: arrayOf(obj({ text: { type: 'string' }, detected: { type: ['string', 'null'] } })) })), ...errors(400, 401, 404, 423, 429, 502, 503) },
+      }),
+    },
     '/users/{username}/view': {
       post: op(T.users, 'Record that I viewed someone\'s profile', {
         description: 'Call this when your app opens a person\'s profile. They can then see you in **Who viewed my profile** with the date of your last view, whether or not you are in their contacts. Nothing is recorded when you or they have profile views turned off, when either of you has blocked the other, or when you view yourself. Only your latest view is kept.',
@@ -743,6 +765,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'get /translate/languages': 'listTranslationLanguages',
+    'put /conversations/{id}/translation': 'setChatTranslation',
+    'post /conversations/{id}/translate': 'translateTexts',
     'post /users/{username}/view': 'viewProfile',
     'get /me/profile-views': 'getProfileViews',
     'put /me/privacy': 'updatePrivacy',
@@ -844,6 +869,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       '',
       'Not covered: messages sent by the REST API without an envelope, business auto replies, status updates, names, times and who talks to whom. Calls are encrypted peer to peer by WebRTC.',
     ].join('\n'),
+    [T.i18n]: 'Show received messages of a chat in the language you choose',
     [T.hide]: 'Hide chats from the chat list, opened with the secret code or fingerprint/face lock',
     [T.biz]: 'Business profile, hours, greeting and away messages',
     [T.meta]: 'Service health and this document',

@@ -141,6 +141,23 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Translating a contact's messages
+
+In any chat, ⋮ → **Translate messages** lets you pick a language (27 offered, including Hindi, Bengali, Tamil, Telugu, Marathi, Spanish, French, Arabic, Chinese, Japanese…). From then on, **messages you receive in that chat are shown in that language**, each with *"Translated from English · Show original"*. It is set **per chat, so per contact**, is private to you (the other person isn't told), syncs across your devices, and your own messages are never translated. Messages already in your language are left alone. Turn it off from the same menu or the banner's *Change* link.
+
+**Privacy:** messages are end-to-end encrypted, so the server cannot translate them. When translation is on for a chat, your app decrypts each received message and sends its text to the translation service, which returns it; **texts are not stored or logged** by ChatApp. The dialog says this before you turn it on. Chats where it is off never send anything.
+
+Connect a translation service (Google Cloud Translation, DeepL, Azure Translator, AWS Translate, LibreTranslate…) behind a small relay with `TRANSLATE_WEBHOOK_URL` (and `TRANSLATE_WEBHOOK_TOKEN`):
+
+```
+{ "action": "translate", "target": "hi", "texts": ["Good morning!", "Is the order ready?"] }
+  ->  { "translations": [{ "text": "सुप्रभात!", "detected": "en" }, { "text": "…", "detected": "en" }] }
+```
+
+Without it translation is unavailable; `TRANSLATE_SANDBOX=1` fakes it for development (it prefixes `[hi]`). Limits: 30 texts of 4000 characters per request, 120 texts per minute per person. Not translated: voice messages, masked messages until revealed, and chat-list previews. The interface text itself is English only for now.
+
+API: `GET /translate/languages`, `PUT /conversations/{id}/translation {lang}`, `POST /conversations/{id}/translate {texts}`. Socket: `translate:languages`, `translate:set`, `translate:text`; server → client `translate:update`.
+
 ## Who viewed my profile
 
 **Profile → Who viewed my profile** lists everyone who looked at your profile, **whether or not they are in your contacts**, each with the **date and time of their last view** and a tag: *In contacts* (you have a one-to-one chat with messages) or *Not in contacts*. Newest first.
@@ -392,6 +409,7 @@ whatsapp-clone/
 │   ├── openapi.js   # OpenAPI 3.1 spec (served at /api/v1/openapi.json)
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
+│   ├── translate.js # Translating received messages per chat (gateway)
 │   ├── payments.js  # Premium subscriptions: plans, checkout, payment confirmation
 │   ├── kyc.js       # Verified badge: ID check through a KYC gateway (nothing stored)
 │   ├── webauthn.js  # Fingerprint / face lock: challenges and signature checks
@@ -421,6 +439,7 @@ whatsapp-clone/
     ├── kyc.test.js
     ├── premium.test.js
     ├── profileviews.test.js
+    ├── translate.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

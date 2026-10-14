@@ -14,6 +14,7 @@ const { createApiRouter } = require('./api');
 const { createOtpService, createOtpSender } = require('./otp');
 const { createAuth } = require('./auth');
 const { createKyc, createKycGateway } = require('./kyc');
+const { createTranslator, createTranslateGateway } = require('./translate');
 const { createPayments, createPaymentGateway, plansFromEnv } = require('./payments');
 
 // STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
@@ -74,6 +75,9 @@ const SOCKET_ACTIONS = {
   'me:contact-verify': 'verifyContact',
   'chatlock:reset-sms': 'requestLockResetCode',
   'chatlock:clear': 'clearChatLocks',
+  'translate:languages': 'translateLanguages',
+  'translate:set': 'setTranslation',
+  'translate:text': 'translateTexts',
   'subscription:status': 'subscriptionStatus',
   'subscription:checkout': 'subscriptionCheckout',
   'subscription:confirm': 'subscriptionConfirm',
@@ -122,6 +126,7 @@ function createApp({
   otp: otpOptions = {},
   kyc: kycOptions = {},
   payments: paymentOptions = {},
+  translate: translateOptions = {},
 } = {}) {
   const app = express();
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
@@ -144,7 +149,8 @@ function createApp({
     currency: process.env.PLAN_CURRENCY || 'INR',
     ...paymentOptions,
   });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments });
+  const translator = createTranslator({ gateway: createTranslateGateway(), sandbox: process.env.TRANSLATE_SANDBOX === '1', ...translateOptions });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
