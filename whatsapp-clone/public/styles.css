@@ -186,6 +186,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color:
 
 /* ---------- layout ---------- */
 .app {
+  position: relative;
   height: 100%;
   display: grid;
   grid-template-columns: minmax(300px, 30%) 1fr;
