@@ -22,14 +22,18 @@ const FEATURES = [
   { id: 'catalogue', group: 'Business', label: 'Product catalogue', description: 'Editing and viewing product catalogues.' },
   { id: 'premium', group: 'Money', label: 'Premium subscriptions', description: 'Buying Premium (existing Premium keeps working until it ends).' },
   { id: 'verification', group: 'Money', label: 'Identity verification (KYC)', description: 'Starting new identity verifications for the Verified badge.' },
-  { id: 'developerApi', group: 'Developers', label: 'Developer API', description: 'API keys and webhooks: off blocks creating them and stops API-key access.' },
+  { id: 'developerApi', group: 'Developers', label: 'Developer API', description: 'API keys and webhooks. Restricted by default: off hides it in the web and mobile apps, blocks creating keys and webhooks, and stops API-key access.' },
 ];
 
 const IDS = FEATURES.map((f) => f.id);
+/** Features an administrator has to switch on. */
+const OFF_BY_DEFAULT = ['developerApi'];
 
 /** Settings an administrator can change besides the on/off switches. */
 const DEFAULT_SETTINGS = {
-  features: Object.fromEntries(IDS.map((id) => [id, true])),
+  // Everything is on, except the developer tools: API keys and webhooks are restricted
+  // (web app and mobile) until an administrator switches them on.
+  features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
   limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100 },
   prices: {}, // plan id -> price override
   announcement: '',
@@ -115,4 +119,4 @@ function versionLess(a, b) {
   return false;
 }
 
-module.exports = { FEATURES, IDS, DEFAULT_SETTINGS, applySettings, versionLess };
+module.exports = { FEATURES, IDS, OFF_BY_DEFAULT, DEFAULT_SETTINGS, applySettings, versionLess };

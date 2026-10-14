@@ -4,6 +4,9 @@
 /**
  * Example integration: a bot that answers every message it receives.
  *
+ * Note: the developer API is off by default; an administrator must enable it first
+ * (Admin dashboard → Features → Developer API).
+ *
  * It shows the pieces another platform needs:
  *   1. authenticate with an API key,
  *   2. register a webhook and verify each delivery's signature,

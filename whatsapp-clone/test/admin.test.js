@@ -111,7 +111,9 @@ test('feature switches: blocked on the server for every client, announced live, 
   const cfg = async () => (await api('GET', '/config')).body;
 
   const before = await cfg();
-  assert.ok(Object.values(before.features).every(Boolean) && before.maintenance.on === false);
+  // Everything is on except the developer tools, which an administrator has to enable.
+  assert.deepStrictEqual(Object.entries(before.features).filter(([, on]) => !on).map(([id]) => id), ['developerApi']);
+  assert.strictEqual(before.maintenance.on, false);
   assert.ok(Object.keys(before.features).includes('channels') && Object.keys(before.features).includes('calls'));
 
   // Something that already exists keeps its data when its feature is switched off.
@@ -191,6 +193,11 @@ test('feature switches: calls and the developer API', async (t) => {
   t.after(() => sink.close());
   store.createWebhook('alice', { url: `http://127.0.0.1:${sink.address().port}/h`, events: ['message:new'] });
 
+  // Restricted by default: nothing works until an administrator switches the developer API on.
+  assert.strictEqual((await api('GET', '/me', { token: key })).body.error.code, 'feature_disabled', 'API keys are refused by default');
+  assert.strictEqual((await api('GET', '/api-keys', { token: alice.token })).status, 403);
+  await admin('PUT', '/settings', { token, body: { features: { developerApi: true } } });
+  assert.strictEqual((await api('GET', '/me', { token: key })).status, 200);
   assert.ok((await call(sa, 'call:start', { convId: store.getOrCreateDirect('alice', 'bob2').id, kind: 'audio' })).ok, 'calls work');
   await call(sa, 'call:end', {});
   await admin('PUT', '/settings', { token, body: { features: { calls: false, developerApi: false } } });

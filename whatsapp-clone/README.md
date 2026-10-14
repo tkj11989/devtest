@@ -161,8 +161,10 @@ A separate dashboard at **`/admin`** (for example `http://localhost:3000/admin`)
 - **Audit log:** who did what and when, for every administrator action (the last 2000).
 - **Administrators:** add or remove administrators, change your own password.
 
+**The developer API is restricted by default.** Out of the box the *Developer API* switch is **off**: the Developer screen (API keys and webhooks) is hidden in the web app and the mobile apps, creating keys and webhooks is refused (`403 feature_disabled`), API keys stop authenticating (REST and Socket.IO) and webhooks are not delivered. People still use the apps normally. A super admin enables it under **Admin → Features → Developer API** when needed; this also applies to existing installs that never set it.
+
 **Feature switches** (each one is enforced **on the server for every client** and hidden in the apps; nothing is ever deleted):
-New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Premium subscriptions · Identity verification · Developer API (API keys and webhooks).
+New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
 A switch never traps people: with Chat lock off you can still unlock and remove locks; with Hide chat off you can still unhide; turning translation or timers *off* still works; Premium already bought keeps working; a payment already made can still be confirmed. A disabled feature answers `403 feature_disabled`.
 
 **Maintenance mode** blocks every user call with `503 maintenance` and shows the message in every app (administrators and `/api/v1/config` keep working); apps come back by themselves when it is turned off.
@@ -311,6 +313,7 @@ REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, 
 Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with ChatApp.
 
 - **Docs**: open **`/api/docs`** (interactive, with "Try it out") or fetch **`/api/v1/openapi.json`** (OpenAPI 3.1; generate a client with any OpenAPI generator).
+- **Availability**: the developer API (API keys, webhooks, API-key access) is **off by default** and must be switched on by an administrator (see *Admin dashboard*). Until then these calls answer `403 feature_disabled`.
 - **Auth**: `Authorization: Bearer <token>` with either a session token (`POST /api/v1/auth/otp`, then `POST /api/v1/auth/login`) or an **API key** (`cak_…`). API keys are for servers and bots: they survive restarts, show when they were last used, and can be revoked. Create them in the app under **Profile → Developer**, or with `POST /api/v1/api-keys` while logged in.
 - **Real-time events**: register a **webhook** (Developer panel or `POST /api/v1/webhooks`), or connect a Socket.IO client with `auth: { token: "<session token or API key>" }` to get the same events live (see Socket events below).
 - **Same behaviour as the app**: messages sent over the API appear instantly in open apps, are delivered to webhooks, and follow the same rules (blocking, membership, limits).

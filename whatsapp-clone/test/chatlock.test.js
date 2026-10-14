@@ -12,6 +12,7 @@ const next = (s, ev) => new Promise((r) => s.once(ev, r));
 
 async function setup(t, opts = {}) {
   const store = new Store({ file: null });
+  store.updateSettings({ features: { developerApi: true } }); // the developer API is off by default
   const app = createApp({ store, webhooks: { allowPrivate: true, retryDelaysMs: [] }, ...opts });
   await new Promise((r) => app.server.listen(0, r));
   const base = `http://localhost:${app.server.address().port}`;
