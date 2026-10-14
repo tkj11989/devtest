@@ -79,7 +79,7 @@ function createWebhookDispatcher({ store, allowPrivate = false, retryDelaysMs = 
 
   /** Fire-and-forget delivery of `event` to every matching webhook of `username`. */
   function dispatch(username, event, data) {
-    if (stopped) return;
+    if (stopped || !store.featureOn('developerApi')) return;
     const hooks = store.webhooksFor(username, event);
     if (!hooks.length) return;
     const createdAt = Date.now();

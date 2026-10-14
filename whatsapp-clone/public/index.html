@@ -16,6 +16,16 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Announcement from the administrator -->
+  <div id="announce" class="announce hidden" role="status"><span id="announce-text"></span><button type="button" id="announce-close" aria-label="Dismiss">&times;</button></div>
+  <!-- Maintenance / update required -->
+  <div id="maintenance" class="maintenance hidden" role="alert">
+    <div class="maintenance-card">
+      <h2 id="maintenance-title">Down for maintenance</h2>
+      <p id="maintenance-text"></p>
+      <button class="primary hidden" type="button" id="maintenance-reload">Reload</button>
+    </div>
+  </div>
   <!-- ========== Auth screen ========== -->
   <section id="auth" class="auth hidden">
     <div class="auth-card">

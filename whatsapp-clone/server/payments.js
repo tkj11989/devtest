@@ -56,11 +56,13 @@ function createPayments({ store, gateway = null, sandbox = false, plans = DEFAUL
   }, 60 * 1000);
   sweep.unref();
 
-  const listPlans = () => Object.entries(plans).map(([id, p]) => ({ id, label: p.label, price: p.price, currency }));
+  const listPlans = () => Object.entries(plans).map(([id, p]) => ({ id, label: p.label, price: store.getSettings().prices[id] ?? p.price, currency }));
 
   async function checkout(user, planId) {
     if (!available) throw new PaymentError(503, 'payments_unavailable', 'Subscriptions are not available right now');
-    const plan = plans[planId];
+    const base = plans[planId];
+    // Administrators can override a plan's price.
+    const plan = base && { ...base, price: store.getSettings().prices[planId] ?? base.price };
     if (!plan) throw new PaymentError(400, 'invalid_request', `plan must be one of: ${Object.keys(plans).join(', ')}`);
     const now = Date.now();
     const recent = (attempts.get(user) || []).filter((t) => t > now - 60 * 60 * 1000);

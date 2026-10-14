@@ -256,7 +256,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E415: errorResponse('Unsupported media type'),
     E423: errorResponse('The chat is locked: unlock it with POST /conversations/{id}/unlock (code `chat_locked`)'),
     E429: errorResponse('Rate limited, or a code was requested too soon (`otp_too_soon`, `otp_limit`); see Retry-After'),
-    E503: errorResponse('Identity verification is not configured on this server (`kyc_unavailable`)'),
+    E503: errorResponse('Not available: the service is in maintenance (`maintenance`) or the feature is not configured on this server (e.g. `kyc_unavailable`, `payments_unavailable`)'),
+    E426: errorResponse('The app is older than the minimum version the administrator allows (`update_required`)'),
     E402: errorResponse('Premium required (`premium_required`: free accounts can lock 3 chats and hide 1) or payment not received yet (`payment_pending`)'),
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
@@ -266,6 +267,19 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
 
+    '/config': {
+      get: op(T.meta, 'App configuration: which features are on', {
+        auth: false,
+        description: 'Read this when your app starts (and again when the Socket.IO event `config:update` arrives). It says which features the administrator has switched on (hide the others in your UI: the server refuses them with `403 feature_disabled`), whether the service is in **maintenance** (every other call then answers `503 maintenance`), an **announcement** to show people, and the **minimum app version** (send your version in the `X-Client-Version` header, or `auth.clientVersion` on the socket; older apps get `426 update_required`). Mobile and web apps use the same endpoint.',
+        responses: { 200: ok(obj({
+          features: { type: 'object', additionalProperties: { type: 'boolean' }, example: { registration: true, calls: true, channels: false } },
+          maintenance: obj({ on: { type: 'boolean' }, message: { type: 'string' } }, ['on']),
+          announcement: { type: 'string' },
+          minClientVersion: { type: ['string', 'null'] },
+          limits: obj({ free: obj({ chatLocks: { type: 'integer' }, hiddenChats: { type: 'integer' } }) }),
+        }, ['features', 'maintenance'])) },
+      }),
+    },
     '/auth/otp': {
       post: op(T.auth, 'Send a one-time code by SMS or email', {
         auth: false,
@@ -886,6 +900,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   // Stable names for generated clients (e.g. client.sendMessage(...)).
   const OPERATION_IDS = {
     'get /health': 'health',
+    'get /config': 'getConfig',
     'post /auth/otp': 'requestOtp',
     'post /auth/register': 'register',
     'post /auth/login': 'login',

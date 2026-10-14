@@ -13,7 +13,7 @@ const { normalisePhone, normaliseEmail } = require('./otp');
  * Flow: `requestCode` sends a code and returns a `requestId`; `register` / `login`
  * take that `requestId` with the code the person typed.
  */
-function createAuth({ store, otp }) {
+function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
   /** `{ phone }` or `{ email }` -> `{ channel, to }` (normalised), or a 400. */
   function destination(body, { allowEmail = true } = {}) {
     const bad = (err) => new ApiError(400, err.code || 'invalid_request', err.message);
@@ -34,6 +34,7 @@ function createAuth({ store, otp }) {
     async requestCode(body = {}) {
       const purpose = body.purpose;
       if (!['register', 'login'].includes(purpose)) throw new ApiError(400, 'invalid_request', 'purpose must be "register" or "login"');
+      if (purpose === 'register') assertSignupsOpen();
       const dest = destination(body);
       const existing = owner(dest);
       if (purpose === 'register' && existing) {
@@ -50,6 +51,7 @@ function createAuth({ store, otp }) {
      * Business: also `accountType: "business"`, `email`, `emailOtp`, and `business: { category, … }`.
      */
     register(body = {}) {
+      assertSignupsOpen();
       const type = body.accountType || 'individual';
       if (!['individual', 'business'].includes(type)) throw new ApiError(400, 'invalid_request', 'accountType must be "individual" or "business"');
       const displayName = String(body.displayName || '').trim();
@@ -96,6 +98,7 @@ function createAuth({ store, otp }) {
         try {
           return store.login(body.username, body.password);
         } catch (err) {
+          if (err.code === 'account_suspended') throw new ApiError(403, 'account_suspended', err.message);
           throw new ApiError(401, 'invalid_credentials', err.message);
         }
       }

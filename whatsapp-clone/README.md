@@ -141,6 +141,36 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Admin dashboard
+
+A separate dashboard at **`/admin`** (for example `http://localhost:3000/admin`) controls the whole platform: the web app and the mobile apps use the same server, so everything here applies to both at once.
+
+**Getting in.** Administrators are not user accounts. Start the server with `ADMIN_USERNAME` (default `admin`) and `ADMIN_PASSWORD` (at least 10 characters), which sets that **super admin's** password each time the server starts. Sign in at `/admin`. Sessions last 8 hours and end when the server restarts; 5 wrong passwords lock further tries for 15 minutes. Without `ADMIN_PASSWORD` no administrator exists and the page says so.
+
+| Role | Can do |
+|------|--------|
+| **Super admin** | Everything: feature switches, settings, Premium/Verified by hand, managing administrators |
+| **Support** | Look at everything and moderate: suspend users, force log-out, delete channels, handle reports |
+
+**Pages**
+- **Overview:** users (total, online, new today / 7 days, Premium, Verified, Business, suspended), content (chats, messages, status updates, channels, posts, products, media size, API keys, webhooks, open reports), 14-day charts of new users and messages, which features are off, which services are connected (login codes, KYC, payments, translation: live / sandbox / off), and server uptime.
+- **Users:** search by name, username, phone or email, filter (Premium, Verified, Business, Suspended). A user's detail panel offers **Suspend** (with a reason; ends their sessions, sockets and API keys, and blocks logging in), **Force log out**, and, for super admins, **Give/Remove Verified badge** and **Give/End Premium**. Administrators see contact details but **never messages** (they are end-to-end encrypted).
+- **Channels & reports:** every channel with followers, posts and reports; **delete** a channel (its followers are told) or **dismiss** a report.
+- **Features:** one switch per feature (below), **maintenance mode**, an **announcement** shown to everyone, and a **minimum app version**.
+- **Settings:** free-account limits (locked chats, hidden chats, channels per owner, products per catalogue) and Premium prices. They apply at once.
+- **Audit log:** who did what and when, for every administrator action (the last 2000).
+- **Administrators:** add or remove administrators, change your own password.
+
+**Feature switches** (each one is enforced **on the server for every client** and hidden in the apps; nothing is ever deleted):
+New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Premium subscriptions · Identity verification · Developer API (API keys and webhooks).
+A switch never traps people: with Chat lock off you can still unlock and remove locks; with Hide chat off you can still unhide; turning translation or timers *off* still works; Premium already bought keeps working; a payment already made can still be confirmed. A disabled feature answers `403 feature_disabled`.
+
+**Maintenance mode** blocks every user call with `503 maintenance` and shows the message in every app (administrators and `/api/v1/config` keep working); apps come back by themselves when it is turned off.
+
+**For mobile apps (and any client):** `GET /api/v1/config` (no sign-in) returns `{ features, maintenance, announcement, minClientVersion, limits }`. Read it when the app starts and again when the Socket.IO event `config:update` arrives (it is sent to every connected app the moment an administrator changes something). Hide controls whose feature is `false`, show `maintenance.message` while `maintenance.on`, show the `announcement`, and send `X-Client-Version` (REST) or `auth.clientVersion` (socket): apps older than `minClientVersion` get `426 update_required`. The web app does all of this itself.
+
+**Security notes:** the dashboard is same-origin only (no CORS), sent with `no-store`, a strict Content-Security-Policy and no framing. Use HTTPS in production, and put `/admin` behind a VPN or IP allow-list if you can. There is no two-factor sign-in yet. Admin API: `/admin/api/*` (internal, not part of the public API docs).
+
 ## Public channels
 
 A **channel** is a public one-to-many feed, like a broadcast or news channel: the owner and admins post, **anyone can find, read and follow it**, and followers can't post. Tap the megaphone in the chat list header.
@@ -434,6 +464,8 @@ whatsapp-clone/
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
 │   ├── translate.js # Translating received messages per chat (gateway)
+│   ├── admin.js     # Admin dashboard API (/admin/api)
+│   ├── features.js  # Feature switches and platform settings
 │   ├── payments.js  # Premium subscriptions: plans, checkout, payment confirmation
 │   ├── kyc.js       # Verified badge: ID check through a KYC gateway (nothing stored)
 │   ├── webauthn.js  # Fingerprint / face lock: challenges and signature checks
@@ -447,6 +479,7 @@ whatsapp-clone/
 │   ├── app.js       # Client logic
 │   ├── call.js      # WebRTC call controller and call screen
 │   ├── e2ee.js      # End-to-end encryption (Web Crypto; also used by the tests)
+│   ├── admin/       # Admin dashboard (index.html, admin.js, admin.css)
 │   ├── channels.js  # Public channels: list, discover and channel screen
 │   ├── status.js    # Status updates: list, composer and viewer
 │   ├── business-hours.js # Opening hours / "open now" (shared with the server)
@@ -467,6 +500,7 @@ whatsapp-clone/
     ├── translate.test.js
     ├── catalogue.test.js
     ├── channels.test.js
+    ├── admin.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

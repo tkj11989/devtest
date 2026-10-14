@@ -265,7 +265,7 @@
   async function apiPost(path, body, token) {
     const res = await fetch(`/api/v1${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { 'Content-Type': 'application/json', 'X-Client-Version': CLIENT_VERSION, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body || {}),
     });
     const data = await res.json().catch(() => ({}));
@@ -509,12 +509,77 @@
     showAuth();
   }
 
+  // ---------- administrator settings: features, announcement, maintenance ----------
+
+  const CLIENT_VERSION = '1.0.0';
+
+  /** Controls to hide when the administrator switches a feature off (the server refuses it as well). */
+  const FEATURE_CONTROLS = {
+    registration: ['.tab[data-mode=register]'],
+    groups: ['#btn-new-group'],
+    voiceMessages: ['#btn-record'],
+    disappearing: ['#menu-timer', '#btn-default-timer@.link-row'],
+    calls: ['#call-buttons', '#btn-join-call'],
+    status: ['#btn-status'],
+    channels: ['#btn-channels'],
+    profileViews: ['#btn-views'],
+    translation: ['#menu-translate', '#translate-banner'],
+    business: ['#btn-business'],
+    catalogue: ['#btn-catalogue-edit', '.catalogue-btn'],
+    premium: ['#premium-row'],
+    verification: ['#verify-row'],
+    developerApi: ['#btn-developer'],
+  };
+
+  function applyConfig(cfg) {
+    if (!cfg) return;
+    state.config = cfg;
+    for (const [feature, selectors] of Object.entries(FEATURE_CONTROLS)) {
+      const off = cfg.features?.[feature] === false;
+      for (const sel of selectors) {
+        const [target, up] = sel.split('@');
+        document.querySelectorAll(target).forEach((n) => (up ? n.closest(up) || n : n).classList.toggle('feature-off', off));
+      }
+    }
+    // Announcement (dismissable until it changes).
+    const text = cfg.announcement || '';
+    const dismissed = storage.get('chat.announce.dismissed') === text;
+    $('#announce-text').textContent = text;
+    $('#announce').classList.toggle('hidden', !text || dismissed);
+    if (cfg.maintenance?.on) showGate('maintenance', cfg.maintenance.message);
+    else if (!$('#maintenance').classList.contains('hidden') && state.gate === 'maintenance') location.reload();
+  }
+  $('#announce-close').addEventListener('click', () => {
+    storage.set('chat.announce.dismissed', state.config?.announcement || '');
+    $('#announce').classList.add('hidden');
+  });
+
+  /** Maintenance, or an app version that is too old: nothing else works, so say so (and come back when it is fixed). */
+  function showGate(kind, message) {
+    state.gate = kind;
+    $('#maintenance-title').textContent = kind === 'update_required' ? 'Update required' : 'Down for maintenance';
+    $('#maintenance-text').textContent = message || (kind === 'update_required' ? 'Please update the app to continue.' : 'We will be back soon.');
+    $('#maintenance-reload').classList.toggle('hidden', kind !== 'update_required');
+    $('#maintenance').classList.remove('hidden');
+    clearInterval(state.gateTimer);
+    if (kind === 'maintenance') {
+      state.gateTimer = setInterval(async () => {
+        const cfg = await fetch('/api/v1/config').then((r) => r.json()).catch(() => null);
+        if (cfg && !cfg.maintenance?.on) location.reload();
+      }, 15000);
+    }
+  }
+  $('#maintenance-reload').addEventListener('click', () => location.reload());
+
+  /** Read the configuration before anyone signs in (also what mobile apps do). */
+  fetch('/api/v1/config', { headers: { 'X-Client-Version': CLIENT_VERSION } }).then((r) => r.json()).then(applyConfig).catch(() => {});
+
   // ---------- startup ----------
 
   function start(token, user) {
     state.token = token;
     state.me = user || null;
-    const socket = io({ auth: { token, appSession: APP_SESSION } });
+    const socket = io({ auth: { token, appSession: APP_SESSION, clientVersion: CLIENT_VERSION } });
     state.socket = socket;
     state.calls = window.createCallController({
       socket,
@@ -532,7 +597,13 @@
       inbox = inbox.then(() => decryptPayload(payload)).then(() => handler(payload)).catch(console.error);
     });
 
+    // The administrator can change features, announcements and maintenance at any time.
+    socket.on('config:update', applyConfig);
     socket.on('connect_error', (err) => {
+      if (err.message === 'maintenance' || err.message === 'update_required') {
+        showGate(err.data?.code || err.message, err.data?.message);
+        return;
+      }
       if (err.message === 'unauthorized') {
         socket.disconnect();
         storage.del('chat.token');

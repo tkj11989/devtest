@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const BusinessHours = require('../public/business-hours.js');
+const { DEFAULT_SETTINGS, applySettings } = require('./features');
 
 /**
  * Simple JSON-file backed data store for users, conversations and messages.
@@ -15,7 +16,7 @@ class Store {
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000 } = {}) {
     this.statusTtlMs = statusTtlMs;
     this.file = file === undefined ? path.join(__dirname, '..', 'data', 'db.json') : file;
-    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [] };
+    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null };
     this.sessions = new Map(); // token -> username
     // Voice-message audio lives next to the data file (or in memory without one).
     this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
@@ -28,7 +29,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], ...parsed };
+      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
     } catch (err) {
       console.error('Could not read data file, starting fresh:', err.message);
     }
@@ -47,6 +48,206 @@ class Store {
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.data));
     fs.renameSync(tmp, this.file);
+  }
+
+  // ---------- platform settings, feature switches (administrators) ----------
+
+  /** Current settings (defaults filled in). Treat as read-only. */
+  getSettings() {
+    if (!this.settingsCache) {
+      const saved = this.data.settings || {};
+      this.settingsCache = {
+        ...DEFAULT_SETTINGS,
+        ...saved,
+        features: { ...DEFAULT_SETTINGS.features, ...(saved.features || {}) },
+        limits: { ...DEFAULT_SETTINGS.limits, ...(saved.limits || {}) },
+        prices: { ...(saved.prices || {}) },
+        maintenance: { ...DEFAULT_SETTINGS.maintenance, ...(saved.maintenance || {}) },
+      };
+    }
+    return this.settingsCache;
+  }
+
+  featureOn(id) {
+    return this.getSettings().features[id] !== false;
+  }
+
+  /** Apply an administrator's settings change. Returns { settings, changes }. */
+  updateSettings(patch) {
+    const result = applySettings(this.getSettings(), patch);
+    this.data.settings = result.settings;
+    this.settingsCache = null;
+    this._save();
+    return { settings: this.getSettings(), changes: result.changes };
+  }
+
+  // ---------- administrators (separate accounts from users) ----------
+
+  /** Create an administrator, or replace their password/role. */
+  upsertAdmin(username, password, role = 'support') {
+    username = String(username || '').trim().toLowerCase();
+    if (!/^[a-z0-9_.-]{3,30}$/.test(username)) throw Object.assign(new Error('Admin username must be 3-30 characters: letters, numbers, "_", "." or "-"'), { status: 400 });
+    if (String(password || '').length < 10) throw Object.assign(new Error('Admin password must be at least 10 characters'), { status: 400 });
+    if (!['super', 'support'].includes(role)) throw Object.assign(new Error('role must be "super" or "support"'), { status: 400 });
+    const salt = crypto.randomBytes(16).toString('hex');
+    const prev = this.data.admins[username];
+    this.data.admins[username] = { username, role, salt, hash: Store._hash(String(password), salt), createdAt: prev?.createdAt || Date.now() };
+    this._save();
+    return { username, role };
+  }
+
+  verifyAdmin(username, password) {
+    const a = this.data.admins[String(username || '').trim().toLowerCase()];
+    // Hash anyway so a missing admin takes as long as a wrong password.
+    const hash = Store._hash(String(password || ''), a?.salt || '0'.repeat(32));
+    if (!a || !crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(a.hash, 'hex'))) return null;
+    return { username: a.username, role: a.role };
+  }
+
+  listAdmins() {
+    return Object.values(this.data.admins).map(({ username, role, createdAt }) => ({ username, role, createdAt }));
+  }
+
+  removeAdmin(username) {
+    if (!this.data.admins[username]) throw Object.assign(new Error('Admin not found'), { status: 404 });
+    delete this.data.admins[username];
+    this._save();
+  }
+
+  /** Every administrator action is written here (newest last, last 2000 kept). */
+  audit(admin, action, target, detail) {
+    this.data.audit.push({ ts: Date.now(), admin, action, target: target || null, detail: detail || null });
+    if (this.data.audit.length > 2000) this.data.audit.splice(0, this.data.audit.length - 2000);
+    this._save();
+  }
+
+  // ---------- administration of users ----------
+
+  suspendUser(username, reason, by) {
+    const u = this.data.users[username];
+    if (!u) throw Object.assign(new Error('User not found'), { status: 404 });
+    u.suspended = { at: Date.now(), reason: String(reason || '').trim().slice(0, 200), by };
+    for (const [t, name] of this.sessions) if (name === username) this.sessions.delete(t);
+    this._save();
+  }
+
+  unsuspendUser(username) {
+    const u = this.data.users[username];
+    if (!u) throw Object.assign(new Error('User not found'), { status: 404 });
+    delete u.suspended;
+    this._save();
+  }
+
+  /** Give or take away the Verified badge by hand (an administrator's decision). */
+  setVerifiedByAdmin(username, verified) {
+    const u = this.data.users[username];
+    if (!u) throw Object.assign(new Error('User not found'), { status: 404 });
+    if (verified) u.verifiedAt = Date.now();
+    else delete u.verifiedAt;
+    this._save();
+  }
+
+  /** Premium until `expiresAt` (grant), or ended now (revoke with null). */
+  setPremiumByAdmin(username, expiresAt) {
+    const u = this.data.users[username];
+    if (!u) throw Object.assign(new Error('User not found'), { status: 404 });
+    if (expiresAt) this.activateSubscription(username, { plan: 'granted', expiresAt });
+    else if (u.subscription) {
+      u.subscription.expiresAt = Date.now();
+      this._save();
+    }
+  }
+
+  /** One page of users for the dashboard. */
+  listUsers({ q = '', filter = '', page = 1, pageSize = 25 } = {}) {
+    q = String(q).trim().toLowerCase();
+    let list = Object.values(this.data.users).filter((u) => !q
+      || u.username.includes(q) || u.displayName.toLowerCase().includes(q) || (u.phone || '').includes(q) || (u.email || '').includes(q));
+    if (filter === 'premium') list = list.filter((u) => this.isPremium(u.username));
+    else if (filter === 'verified') list = list.filter((u) => u.verifiedAt);
+    else if (filter === 'business') list = list.filter((u) => u.business);
+    else if (filter === 'suspended') list = list.filter((u) => u.suspended);
+    list.sort((a, b) => b.createdAt - a.createdAt);
+    const total = list.length;
+    pageSize = Math.max(1, Math.min(100, Number(pageSize) || 25));
+    page = Math.max(1, Number(page) || 1);
+    return { total, page, pageSize, users: list.slice((page - 1) * pageSize, page * pageSize).map((u) => this.adminUserView(u.username)) };
+  }
+
+  /** What administrators see of an account (contact details included; never password hashes or keys). */
+  adminUserView(username) {
+    const u = this.data.users[username];
+    if (!u) return null;
+    return {
+      username: u.username,
+      displayName: u.displayName,
+      phone: u.phone || null,
+      email: u.email || null,
+      createdAt: u.createdAt,
+      lastSeen: u.lastSeen || null,
+      verified: !!u.verifiedAt,
+      premium: this.isPremium(username),
+      premiumUntil: u.subscription?.expiresAt || null,
+      plan: u.subscription?.plan || null,
+      business: u.business ? u.business.category : null,
+      suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason, by: u.suspended.by } : null,
+      chats: Object.values(this.data.conversations).filter((c) => c.members.includes(username)).length,
+      channelsOwned: Object.values(this.data.channels).filter((c) => c.owner === username).length,
+      apiKeys: Object.values(this.data.apiKeys).filter((k) => k.owner === username).length,
+      devices: (u.devices || []).length,
+    };
+  }
+
+  /** Numbers for the overview page. */
+  stats(onlineCount = 0) {
+    const day = 86400000;
+    const now = Date.now();
+    const users = Object.values(this.data.users);
+    const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
+    const bucket = (ts, days) => Math.floor((startOfToday - new Date(new Date(ts).setHours(0, 0, 0, 0)).getTime()) / day) < days ? Math.floor((startOfToday - new Date(new Date(ts).setHours(0, 0, 0, 0)).getTime()) / day) : -1;
+    const days = 14;
+    const signups = Array(days).fill(0);
+    for (const u of users) {
+      const b = bucket(u.createdAt, days);
+      if (b >= 0) signups[days - 1 - b] += 1;
+    }
+    const messages = Array(days).fill(0);
+    let totalMessages = 0;
+    for (const list of Object.values(this.data.messages)) {
+      for (const m of list) {
+        if (m.type === 'system') continue;
+        totalMessages += 1;
+        const b = bucket(m.ts, days);
+        if (b >= 0) messages[days - 1 - b] += 1;
+      }
+    }
+    return {
+      users: {
+        total: users.length,
+        online: onlineCount,
+        newToday: users.filter((u) => u.createdAt >= startOfToday).length,
+        new7d: users.filter((u) => u.createdAt >= now - 7 * day).length,
+        verified: users.filter((u) => u.verifiedAt).length,
+        premium: users.filter((u) => this.isPremium(u.username)).length,
+        business: users.filter((u) => u.business).length,
+        suspended: users.filter((u) => u.suspended).length,
+      },
+      content: {
+        chats: Object.keys(this.data.conversations).length,
+        groups: Object.values(this.data.conversations).filter((c) => c.type === 'group').length,
+        messages: totalMessages,
+        statuses: Object.keys(this.data.statuses).length,
+        channels: Object.keys(this.data.channels).length,
+        channelPosts: Object.values(this.data.channelPosts).reduce((n, l) => n + l.length, 0),
+        products: users.reduce((n, u) => n + (u.catalogue?.products.length || 0), 0),
+        mediaFiles: Object.keys(this.data.media).length,
+        mediaBytes: Object.values(this.data.media).reduce((n, m) => n + (m.size || 0), 0),
+        apiKeys: Object.keys(this.data.apiKeys).length,
+        webhooks: Object.keys(this.data.webhooks).length,
+        openReports: this.data.reports.length,
+      },
+      series: { days, signups, messages, from: startOfToday - (days - 1) * day },
+    };
   }
 
   // ---------- users & auth ----------
@@ -169,6 +370,8 @@ class Store {
   }
 
   createSession(username) {
+    const sus = this.data.users[username]?.suspended;
+    if (sus) throw Object.assign(new Error(`This account is suspended${sus.reason ? `: ${sus.reason}` : ''}`), { status: 403, code: 'account_suspended' });
     const token = crypto.randomBytes(24).toString('hex');
     this.sessions.set(token, username);
     return { token, user: this.publicUser(username) };
@@ -178,11 +381,11 @@ class Store {
   userForToken(token) {
     if (!token) return null;
     const session = this.sessions.get(token);
-    if (session) return session;
+    if (session) return this.data.users[session]?.suspended ? null : session;
     if (!String(token).startsWith(Store.API_KEY_PREFIX)) return null;
     const hash = Store._keyHash(token);
     const key = Object.values(this.data.apiKeys).find((k) => k.hash === hash);
-    if (!key || !this.data.users[key.owner]) return null;
+    if (!key || !this.data.users[key.owner] || this.data.users[key.owner].suspended) return null;
     // Remember roughly when a key was last used, without rewriting the file on every request.
     if (Date.now() - (key.lastUsedAt || 0) > 60 * 1000) {
       key.lastUsedAt = Date.now();
@@ -557,7 +760,8 @@ class Store {
     if (!/^[a-z0-9_]{3,30}$/.test(handle)) throw new Error('Handle must be 3-30 characters: letters, numbers or "_"');
     if (this.getChannel(handle)) throw new Error('That channel handle is already taken');
     const mine = Object.values(this.data.channels).filter((c) => c.owner === owner).length;
-    if (mine >= Store.CHANNELS_PER_OWNER) throw new Error(`You can have at most ${Store.CHANNELS_PER_OWNER} channels`);
+    const maxChannels = this.getSettings().limits.channelsPerOwner;
+    if (mine >= maxChannels) throw new Error(`You can have at most ${maxChannels} channels`);
     const ch = {
       id: crypto.randomBytes(5).toString('hex'),
       handle,
@@ -781,7 +985,8 @@ class Store {
 
   addProduct(username, input) {
     const c = this._catalogueFor(username);
-    if (c.products.length >= Store.CATALOGUE_MAX) throw new Error(`A catalogue can have at most ${Store.CATALOGUE_MAX} products`);
+    const maxProducts = this.getSettings().limits.catalogueMax;
+    if (c.products.length >= maxProducts) throw new Error(`A catalogue can have at most ${maxProducts} products`);
     const now = Date.now();
     const product = { id: crypto.randomBytes(6).toString('hex'), ...Store._checkProduct(input), createdAt: now, updatedAt: now };
     c.products.push(product);

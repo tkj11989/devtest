@@ -29,7 +29,7 @@ const MAX_PARTICIPANTS = 6;
  * `notify(username, event, payload)` reaches all of a user's devices (and their webhooks);
  * per-socket events (joined/left/signal/hold) go only to the sockets in the call.
  */
-function createCallManager({ io, store, isOnline, notify, postMessage, handle, ringTimeoutMs = 30000 }) {
+function createCallManager({ io, store, isOnline, notify, postMessage, handle, assertCallsOn = () => {}, ringTimeoutMs = 30000 }) {
   const calls = new Map(); // callId -> call
 
   const inCall = (u) => [...calls.values()].some((c) => c.participants.has(u) || c.ringing.has(u));
@@ -123,6 +123,7 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, r
     const me = socket.data.username;
 
     socket.on('call:start', handle(({ convId, kind }) => {
+      assertCallsOn();
       if (kind !== 'audio' && kind !== 'video') throw new Error('Invalid call type');
       const conv = store.getConversation(convId);
       if (!conv || !conv.members.includes(me)) throw new Error('Not a member of this chat');

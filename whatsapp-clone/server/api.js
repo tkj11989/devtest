@@ -74,9 +74,17 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   const bearer = (req) => req.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
 
   const auth = (req, res, next) => {
+    try {
+      service.assertAvailable(req.get('x-client-version'));
+    } catch (err) {
+      return next(err);
+    }
     const token = bearer(req);
     const username = store.userForToken(token);
     if (!username) return next(new ApiError(401, 'unauthorized', 'Missing or invalid credentials. Send "Authorization: Bearer <token or API key>".'));
+    if (String(token).startsWith('cak_') && !store.featureOn('developerApi')) {
+      return next(new ApiError(403, 'feature_disabled', 'The developer API is turned off by the administrator'));
+    }
     req.user = username;
     req.credential = token;
     // Chat lock: unlocks last for this credential (optionally narrowed with X-App-Session).
@@ -104,6 +112,14 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   // ---------- meta ----------
 
+  // Developer tools can be switched off by the administrator.
+  router.use(['/api-keys', '/webhooks'], (req, res, next) => (store.featureOn('developerApi')
+    ? next()
+    : next(new ApiError(403, 'feature_disabled', 'The developer API is turned off by the administrator'))));
+
+  // Anyone (signed in or not, web or mobile) reads this to know which features are on, maintenance and announcements.
+  router.get('/config', (req, res) => res.json(service.config()));
+
   router.get('/health', (req, res) => res.json({ ok: true, version: 'v1', time: Date.now() }));
   router.get('/openapi.json', (req, res) => {
     const base = `${req.protocol}://${req.get('host')}${req.baseUrl}`;
@@ -113,9 +129,17 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   // ---------- auth ----------
 
   const authLimit = limiter((req) => `ip:${req.ip}`, limits.authMax);
-  router.post('/auth/otp', authLimit, json, run((req) => accounts.requestCode(req.body || {})));
-  router.post('/auth/register', authLimit, json, run((req) => accounts.register(req.body || {}), 201));
-  router.post('/auth/login', authLimit, json, run((req) => accounts.login(req.body || {})));
+  const open = (req, res, next) => {
+    try {
+      service.assertAvailable(req.get('x-client-version'));
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+  router.post('/auth/otp', authLimit, open, json, run((req) => accounts.requestCode(req.body || {})));
+  router.post('/auth/register', authLimit, open, json, run((req) => accounts.register(req.body || {}), 201));
+  router.post('/auth/login', authLimit, open, json, run((req) => accounts.login(req.body || {})));
   router.post('/auth/logout', ...authed, run((req) => {
     store.logout(req.credential);
     service.forgetUnlocks({ credential: req.credential });

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#061639" />
+  <title>ChatApp Admin</title>
+  <link rel="icon" href="../app-icons/icon-192.png" />
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <!-- Sign in -->
+  <section id="login" class="login hidden">
+    <form id="login-form" class="login-card" autocomplete="on">
+      <div class="brand"><span class="logo">C</span><h1>Chat<span>App</span> <small>Admin</small></h1></div>
+      <p class="muted" id="login-note">Sign in with your administrator account. This is separate from user accounts.</p>
+      <label>Username <input name="username" autocomplete="username" required /></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+      <p class="error" id="login-error" role="alert"></p>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <!-- Dashboard -->
+  <div id="shell" class="shell hidden">
+    <aside class="side">
+      <div class="brand"><span class="logo">C</span><h1>Chat<span>App</span> <small>Admin</small></h1></div>
+      <nav id="nav">
+        <a href="#overview" data-page="overview">Overview</a>
+        <a href="#users" data-page="users">Users</a>
+        <a href="#channels" data-page="channels">Channels &amp; reports <span class="pill hidden" id="nav-reports">0</span></a>
+        <a href="#features" data-page="features">Features</a>
+        <a href="#settings" data-page="settings">Settings</a>
+        <a href="#audit" data-page="audit">Audit log</a>
+        <a href="#admins" data-page="admins">Administrators</a>
+      </nav>
+      <div class="who">
+        <div><strong id="who-name"></strong><br /><span class="muted" id="who-role"></span></div>
+        <button class="btn small" id="btn-logout">Sign out</button>
+      </div>
+    </aside>
+    <main class="main">
+      <div id="status-banner" class="banner hidden"></div>
+      <div id="page"></div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <div id="drawer-bg" class="drawer-bg hidden"></div>
+  <aside id="drawer" class="drawer hidden" aria-label="Details"></aside>
+  <script src="admin.js"></script>
+</body>
+</html>

@@ -3,6 +3,7 @@
 const { Store } = require('./store');
 const { normalisePhone, normaliseEmail } = require('./otp');
 const { createWebAuthn } = require('./webauthn');
+const { FEATURES, versionLess } = require('./features');
 const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -27,9 +28,6 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-/** What a free account can do; Premium has no limit. */
-const FREE_LIMITS = { chatLocks: 3, hiddenChats: 1 };
-
 function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator }) {
   const userRoom = (u) => `user:${u}`;
 
@@ -196,9 +194,10 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
   /** Free accounts: up to 3 locked chats and 1 hidden chat. Past that needs Premium (402). */
   const requireRoom = (me, kind) => {
     if (store.isPremium(me)) return;
+    const { freeChatLocks, freeHiddenChats } = store.getSettings().limits;
     const [used, max, noun] = kind === 'lock'
-      ? [store.lockedChats(me).length, FREE_LIMITS.chatLocks, 'lock up to 3 chats']
-      : [store.hiddenChats(me).length, FREE_LIMITS.hiddenChats, 'hide 1 chat'];
+      ? [store.lockedChats(me).length, freeChatLocks, `lock up to ${freeChatLocks} chat${freeChatLocks === 1 ? '' : 's'}`]
+      : [store.hiddenChats(me).length, freeHiddenChats, `hide ${freeHiddenChats} chat${freeHiddenChats === 1 ? '' : 's'}`];
     if (used >= max) throw new ApiError(402, 'premium_required', `Free accounts can ${noun}. Upgrade to Premium to ${kind === 'lock' ? 'lock' : 'hide'} more.`);
   };
 
@@ -210,7 +209,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       plan: premium ? sub.plan : null,
       expiresAt: sub?.expiresAt || null,
       expired: !!sub && !premium,
-      limits: { free: { chatLocks: FREE_LIMITS.chatLocks, hiddenChats: FREE_LIMITS.hiddenChats }, premium: 'unlimited' },
+      limits: { free: { chatLocks: store.getSettings().limits.freeChatLocks, hiddenChats: store.getSettings().limits.freeHiddenChats }, premium: 'unlimited' },
       usage: { chatLocks: store.lockedChats(me).length, hiddenChats: store.hiddenChats(me).length },
       plans: payments ? payments.listPlans() : [],
       available: !!payments?.available,
@@ -1160,8 +1159,73 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     }
   };
 
+  // ---------- feature switches and platform status (set by administrators) ----------
+
+  const featureLabel = Object.fromEntries(FEATURES.map((f) => [f.id, f.label]));
+  /** Actions that need a feature to be on. A function decides per call (so turning things off or reading stays possible). */
+  const GATES = {
+    createGroup: 'groups',
+    sendVoice: 'voiceMessages',
+    setDisappearing: (p) => (p?.seconds ? 'disappearing' : null),
+    setDefaultDisappear: (p) => (p?.seconds ? 'disappearing' : null),
+    statuses: 'status', postStatus: 'status', viewStatus: 'status', deleteStatus: 'status', replyStatus: 'status',
+    channelsSearch: 'channels', channelsMine: 'channels', channelGet: 'channels', channelCreate: 'channels', channelUpdate: 'channels',
+    channelDelete: 'channels', channelFollow: 'channels', channelUnfollow: 'channels', channelAdmin: 'channels', channelPosts: 'channels',
+    channelPost: 'channels', channelPostDelete: 'channels', channelRead: 'channels', channelReport: 'channels',
+    viewProfile: 'profileViews', profileViews: 'profileViews',
+    translateLanguages: 'translation', translateTexts: 'translation', setTranslation: (p) => (p?.lang ? 'translation' : null),
+    lockChat: 'chatLock',
+    hideChat: 'hideChat',
+    setBusiness: 'business',
+    catalogue: 'catalogue', saveProduct: 'catalogue', deleteProduct: 'catalogue', setProductImage: 'catalogue', removeProductImage: 'catalogue', setCatalogueCurrency: 'catalogue',
+    subscriptionCheckout: 'premium',
+    kycStart: 'verification',
+  };
+  const assertFeature = (id) => {
+    if (!store.featureOn(id)) throw new ApiError(403, 'feature_disabled', `${featureLabel[id] || id} is turned off by the administrator`);
+  };
+  for (const [name, gate] of Object.entries(GATES)) {
+    const fn = actions[name];
+    actions[name] = function gated(me, payload, ctx) {
+      const id = typeof gate === 'function' ? gate(payload) : gate;
+      if (id) assertFeature(id);
+      return fn.call(actions, me, payload, ctx);
+    };
+  }
+
+  /** The public configuration every client (web and mobile) reads at start-up and when it changes. */
+  const config = () => {
+    const s = store.getSettings();
+    return {
+      features: Object.fromEntries(FEATURES.map((f) => [f.id, s.features[f.id] !== false])),
+      maintenance: s.maintenance.on ? { on: true, message: s.maintenance.message } : { on: false },
+      announcement: s.announcement || '',
+      minClientVersion: s.minClientVersion || null,
+      limits: { free: { chatLocks: s.limits.freeChatLocks, hiddenChats: s.limits.freeHiddenChats } },
+    };
+  };
+  const broadcastConfig = () => io.emit('config:update', config());
+
+  /** Throws while maintenance is on, or when the client is older than the minimum version. */
+  const assertAvailable = (clientVersion) => {
+    const s = store.getSettings();
+    if (s.maintenance.on) throw new ApiError(503, 'maintenance', s.maintenance.message);
+    if (s.minClientVersion && clientVersion && versionLess(clientVersion, s.minClientVersion)) {
+      throw new ApiError(426, 'update_required', `Please update the app to version ${s.minClientVersion} or newer`);
+    }
+  };
+
   return {
     actions,
+    config,
+    broadcastConfig,
+    /** An administrator changed someone's badge or Premium: tell their devices and their contacts. */
+    refreshAccount(username) {
+      announceProfile(username);
+      io.to(userRoom(username)).emit('subscription:update', subscriptionView(username));
+    },
+    assertAvailable,
+    assertFeature,
     notify,
     lockKeyFor,
     mediaAllowed,

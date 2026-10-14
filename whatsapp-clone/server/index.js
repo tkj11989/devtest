@@ -13,6 +13,7 @@ const { createWebhookDispatcher } = require('./webhooks');
 const { createApiRouter } = require('./api');
 const { createOtpService, createOtpSender } = require('./otp');
 const { createAuth } = require('./auth');
+const { createAdminRouter } = require('./admin');
 const { createKyc, createKycGateway } = require('./kyc');
 const { createTranslator, createTranslateGateway } = require('./translate');
 const { createPayments, createPaymentGateway, plansFromEnv } = require('./payments');
@@ -146,6 +147,7 @@ function createApp({
   otp: otpOptions = {},
   kyc: kycOptions = {},
   payments: paymentOptions = {},
+  admin: adminOptions = {},
   translate: translateOptions = {},
 } = {}) {
   const app = express();
@@ -159,7 +161,7 @@ function createApp({
 
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
   const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
-  const auth = createAuth({ store, otp });
+  const auth = createAuth({ store, otp, assertSignupsOpen: () => service.assertFeature('registration') });
   const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
   const payments = createPayments({
     store,
@@ -183,10 +185,33 @@ function createApp({
     }
   };
 
-  const calls = createCallManager({ io, store, isOnline, notify: service.notify, postMessage: service.postMessage, handle, ringTimeoutMs });
+  const calls = createCallManager({ io, store, isOnline, notify: service.notify, postMessage: service.postMessage, handle, ringTimeoutMs, assertCallsOn: () => service.assertFeature('calls') });
   service.setCalls(calls);
 
   // Public REST API for other platforms (see /api/docs). It parses its own bodies.
+  // Administrator accounts come from the environment (ADMIN_USERNAME, ADMIN_PASSWORD) or the `admin` option.
+  const adminUser = adminOptions.username ?? process.env.ADMIN_USERNAME ?? 'admin';
+  const adminPassword = adminOptions.password ?? process.env.ADMIN_PASSWORD;
+  if (adminPassword) store.upsertAdmin(adminUser, adminPassword, 'super');
+  const adminRouter = createAdminRouter({
+    store,
+    service,
+    io,
+    onlineCount: () => online.size,
+    integrations: () => ({
+      otp: process.env.OTP_WEBHOOK_URL ? 'gateway' : 'console',
+      kyc: kyc.available ? (kyc.sandbox ? 'sandbox' : 'live') : 'off',
+      payments: payments.available ? (payments.sandbox ? 'sandbox' : 'live') : 'off',
+      translation: translator.available ? (translator.sandbox ? 'sandbox' : 'live') : 'off',
+    }),
+    ...(adminOptions.router || {}),
+  });
+  app.use('/admin/api', adminRouter);
+  app.use('/admin', (req, res, next) => {
+    // The dashboard is its own page: no framing, no outside scripts.
+    res.set({ 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" });
+    next();
+  });
   app.use('/api/v1', createApiRouter({ store, service, accounts: auth, webhooks, rateLimit, corsOrigins }));
   app.get('/api/docs', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'api-docs.html')));
   // Swagger UI is served from node_modules so the docs work without internet access.
@@ -238,14 +263,23 @@ function createApp({
     otp.stop();
     kyc.stop();
     payments.stop();
+    adminRouter.stop();
   });
 
   // ---------- realtime ----------
 
   // Accepts a login session token or an API key.
   io.use((socket, next) => {
-    const username = store.userForToken(socket.handshake.auth?.token);
+    // Maintenance mode, or an app older than the minimum version: nobody gets in.
+    try {
+      service.assertAvailable(socket.handshake.auth?.clientVersion);
+    } catch (err) {
+      return next(Object.assign(new Error(err.code), { data: { code: err.code, message: err.message } }));
+    }
+    const token = socket.handshake.auth?.token;
+    const username = store.userForToken(token);
     if (!username) return next(new Error('unauthorized'));
+    if (String(token).startsWith('cak_') && !store.featureOn('developerApi')) return next(new Error('unauthorized'));
     socket.data.username = username;
     // One page load of the web app = one app session for chat lock (survives reconnects, not reloads).
     socket.data.lockKey = service.lockKeyFor(username, socket.handshake.auth.token, socket.handshake.auth.appSession);
@@ -264,7 +298,10 @@ function createApp({
     calls.attach(socket);
     const ctx = { lockKey: socket.data.lockKey };
     for (const [event, action] of Object.entries(SOCKET_ACTIONS)) {
-      socket.on(event, handle((payload) => actions[action](me, payload, ctx)));
+      socket.on(event, handle((payload) => {
+        service.assertAvailable();
+        return actions[action](me, payload, ctx);
+      }));
     }
 
     socket.on('disconnect', () => {
