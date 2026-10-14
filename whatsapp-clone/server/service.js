@@ -4,6 +4,7 @@ const { Store } = require('./store');
 const { normalisePhone, normaliseEmail } = require('./otp');
 const { createWebAuthn } = require('./webauthn');
 const { FEATURES, versionLess } = require('./features');
+const appearance = require('./appearance');
 const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -209,6 +210,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       plan: premium ? sub.plan : null,
       expiresAt: sub?.expiresAt || null,
       expired: !!sub && !premium,
+      perks: ['Unlimited locked and hidden chats', 'Call recording', 'Colour themes', 'Custom app icons and avatar shapes'],
       limits: { free: { chatLocks: store.getSettings().limits.freeChatLocks, hiddenChats: store.getSettings().limits.freeHiddenChats }, premium: 'unlimited' },
       usage: { chatLocks: store.lockedChats(me).length, hiddenChats: store.hiddenChats(me).length },
       plans: payments ? payments.listPlans() : [],
@@ -224,6 +226,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     for (const u of store.expiredBetween(lastSweep, now)) {
       announceProfile(u);
       io.to(userRoom(u)).emit('subscription:update', subscriptionView(u));
+      io.to(userRoom(u)).emit('appearance:update', appearance.effective(store.prefsOf(u), false));
     }
     lastSweep = now;
   };
@@ -400,7 +403,33 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
         business: store.getBusiness(me),
         contact: store.contactOf(me),
         privacy: { profileViews: store.profileViewsEnabled(me) },
+        appearance: appearance.effective(store.prefsOf(me), store.isPremium(me)),
       };
+    },
+
+    // ----- personalisation (colour theme, app icon, avatar shape) -----
+
+    /** My look. Premium options revert to the defaults while Premium is not active (my choices are kept for when it comes back). */
+    appearance(me) {
+      const premium = store.isPremium(me);
+      return { appearance: appearance.effective(store.prefsOf(me), premium), saved: store.prefsOf(me), premium };
+    },
+
+    setAppearance(me, patch) {
+      const { patch: clean, needsPremium } = (() => {
+        try {
+          return appearance.checkPatch(patch);
+        } catch (err) {
+          throw new ApiError(400, 'invalid_request', err.message);
+        }
+      })();
+      if (needsPremium && !store.isPremium(me)) {
+        throw new ApiError(402, 'premium_required', `${needsPremium} are a Premium feature. Upgrade to Premium to use them.`);
+      }
+      store.setPrefs(me, clean);
+      const result = actions.appearance(me);
+      io.to(userRoom(me)).emit('appearance:update', result.appearance);
+      return result;
     },
 
     // ----- profile views -----
@@ -620,6 +649,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       const view = subscriptionView(me);
       announceProfile(me);
       io.to(userRoom(me)).emit('subscription:update', view);
+      io.to(userRoom(me)).emit('appearance:update', appearance.effective(store.prefsOf(me), true));
       return view;
     },
 
@@ -1175,6 +1205,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     viewProfile: 'profileViews', profileViews: 'profileViews',
     translateLanguages: 'translation', translateTexts: 'translation', setTranslation: (p) => (p?.lang ? 'translation' : null),
     lockChat: 'chatLock',
+    setAppearance: 'appearance',
     hideChat: 'hideChat',
     setBusiness: 'business',
     catalogue: 'catalogue', saveProduct: 'catalogue', deleteProduct: 'catalogue', setProductImage: 'catalogue', removeProductImage: 'catalogue', setCatalogueCurrency: 'catalogue',
@@ -1223,6 +1254,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     refreshAccount(username) {
       announceProfile(username);
       io.to(userRoom(username)).emit('subscription:update', subscriptionView(username));
+      io.to(userRoom(username)).emit('appearance:update', appearance.effective(store.prefsOf(username), store.isPremium(username)));
     },
     assertAvailable,
     assertFeature,

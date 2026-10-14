@@ -11,6 +11,7 @@
   <meta name="apple-mobile-web-app-title" content="ChatApp" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="32x32" href="app-icons/icon-32.png" />
+  <script src="appearance.js"></script>
   <link rel="apple-touch-icon" href="app-icons/apple-touch-icon.png" />
   <title>ChatApp</title>
   <link rel="stylesheet" href="styles.css" />
@@ -217,6 +218,22 @@
         </form>
       </div>
 
+      <!-- Appearance -->
+      <div class="panel overlay hidden" id="panel-appearance">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Appearance</h2></header>
+        <div class="pad" id="appearance-panel">
+          <h3>Mode</h3>
+          <div class="mode-grid" id="ap-modes"></div>
+          <h3>Colour theme <span class="muted">· Premium</span></h3>
+          <div class="swatches" id="ap-themes"></div>
+          <h3>App icon <span class="muted">· Premium</span></h3>
+          <div class="icon-grid" id="ap-icons"></div>
+          <h3>Picture shape <span class="muted">· Premium</span></h3>
+          <div class="shape-grid" id="ap-shapes"></div>
+          <p class="muted" id="ap-note"></p>
+        </div>
+      </div>
+
       <!-- Who viewed my profile -->
       <div class="panel overlay hidden" id="panel-views">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Who viewed my profile</h2></header>
@@ -329,6 +346,10 @@
           </button>
         </div>
         <div class="pad stack">
+          <button class="link-row" type="button" id="btn-appearance">
+            <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.3-.5-.8-.5-1.2 0-1.1.9-2 2-2h2.4a4.1 4.1 0 0 0 4.1-4.1C21.5 6.4 17.2 3 12 3ZM6.5 12a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
+            <span><strong>Appearance</strong><small id="appearance-summary">Light or dark. Colour themes, app icons and avatar shapes are Premium</small></span>
+          </button>
           <button class="link-row" type="button" id="btn-views">
             <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
             <span><strong>Who viewed my profile</strong><small id="views-summary">See who looked at your profile, and when</small></span>

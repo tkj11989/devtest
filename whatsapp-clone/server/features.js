@@ -13,6 +13,7 @@ const FEATURES = [
   { id: 'disappearing', group: 'Messaging', label: 'Disappearing messages', description: 'Setting auto-delete timers on chats.' },
   { id: 'calls', group: 'Messaging', label: 'Voice & video calls', description: 'Starting and joining calls.' },
   { id: 'callRecording', group: 'Messaging', label: 'Call recording', description: 'Asking to record a call. Recording only starts when everyone in the call agrees, and is saved on the requester\'s own device. Off: the Record button is hidden and requests are refused (stopping always works).' },
+  { id: 'appearance', group: 'Social', label: 'Personalisation', description: 'Changing the colour theme, app icon and avatar shape (Premium options). Off: everyone sees the default look.' },
   { id: 'status', group: 'Social', label: 'Status updates', description: 'Posting, viewing and replying to status updates.' },
   { id: 'channels', group: 'Social', label: 'Public channels', description: 'Creating, finding, following and posting in channels.' },
   { id: 'profileViews', group: 'Social', label: 'Who viewed my profile', description: 'Recording and showing profile views.' },

@@ -10,7 +10,7 @@
  *   const calls = createCallController({ socket, emit, iceServers: () => [...], displayName, paintAvatar });
  *   calls.start(convId, { kind: 'audio' | 'video', group, title, key });
  */
-window.createCallController = function createCallController({ socket, emit, iceServers, displayName, paintAvatar, me = () => '', toast = () => {} }) {
+window.createCallController = function createCallController({ socket, emit, iceServers, displayName, paintAvatar, me = () => '', toast = () => {}, isPremium = () => true, needPremium = (m) => toast(m) }) {
   const $ = (sel) => document.querySelector(sel);
   const screen = $('#call');
   const grid = $('#call-grid');
@@ -163,10 +163,12 @@ window.createCallController = function createCallController({ socket, emit, iceS
       socket.emit('call:record-stop', { callId: call.id }, () => {});
       return;
     }
+    if (!isPremium()) return needPremium('Recording calls is a Premium feature.');
     // Create the audio context now, while the click allows it; the recording itself starts when everyone has agreed.
     try { call.recCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { /* recording will report it */ }
     socket.emit('call:record-request', { callId: call.id }, (res) => {
-      if (!res?.ok) toast(res?.error || 'Could not ask to record');
+      if (res?.code === 'premium_required') needPremium(res.error);
+      else if (!res?.ok) toast(res?.error || 'Could not ask to record');
     });
   });
   $('#record-allow').addEventListener('click', () => {

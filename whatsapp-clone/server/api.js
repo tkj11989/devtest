@@ -180,6 +180,10 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     run((req) => actions.setProductImage(req.user, { id: p(req, 'id'), data: req.body, mime: req.get('content-type') })));
   router.delete('/me/catalogue/products/:id/image', ...authed, run((req) => actions.removeProductImage(req.user, { id: p(req, 'id') })));
 
+  // Colour themes, app icons and avatar shapes (the catalogue is public so apps can apply the colours).
+  router.get('/appearance', (req, res) => res.json(require('./appearance').catalogue()));
+  router.get('/me/appearance', ...authed, run((req) => actions.appearance(req.user)));
+  router.put('/me/appearance', ...authed, json, run((req) => actions.setAppearance(req.user, req.body)));
   router.get('/translate/languages', ...authed, run((req) => actions.translateLanguages(req.user)));
   router.put('/conversations/:id/translation', ...authed, json, run((req) => actions.setTranslation(req.user, { convId: p(req, 'id'), lang: req.body?.lang })));
   router.post('/conversations/:id/translate', ...authed, json, run((req) => actions.translateTexts(req.user, { convId: p(req, 'id'), texts: req.body?.texts }, req.ctx)));

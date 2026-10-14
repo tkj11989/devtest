@@ -266,6 +266,19 @@ The person pays on the provider's page; then the **server** asks the provider wh
 
 API: `GET /me/subscription`, `POST /me/subscription/checkout`, `POST /me/subscription/confirm`; `user.premium` appears wherever users are returned. Socket: `subscription:status`, `subscription:checkout`, `subscription:confirm`; server → client `subscription:update`.
 
+## Premium personalisation and call recording
+
+Premium accounts also get:
+
+- **Colour themes**: Emerald, Teal, Indigo, Violet, Rose, Crimson and Graphite (Ocean, the PrayukTech blue, is free). Every theme is generated so text and backgrounds meet WCAG AA contrast in both light and dark (checked by the tests).
+- **App icons**: Spark, Heart, Bolt, Leaf, Star, Plane and Smile replace the logo in the app and the browser tab icon (Classic is free).
+- **Picture shapes**: rounded or square avatars (circle is free).
+- **Call recording** (see "Recording a call"): asking to record needs Premium; everyone else on the call only has to agree.
+
+Light, dark and automatic mode are free. Open **Profile → Appearance**. Choices are saved on the account and follow you to every device (`appearance:update`). When Premium ends, the free look is shown again; the saved choices come back if Premium is renewed. Free users who tap a Premium option are offered the plans.
+
+API: `GET /api/v1/appearance` (public catalogue with the colour values, so mobile apps can apply them), `GET /api/v1/me/appearance`, `PUT /api/v1/me/appearance` (`{ mode, theme, appIcon, avatarShape }`; a Premium option without Premium is `402 premium_required`). Socket events: `appearance:get`, `appearance:set`. Administrators can switch the feature off (`appearance`) and the call recording feature (`callRecording`) in the dashboard.
+
 ## Verified badge (KYC)
 
 Everyone has a badge next to their name: a **blue Verified seal** once they have verified their identity, or a **grey outlined "Not verified" seal** otherwise (business accounts also keep their briefcase badge). It shows in the chat list, chat header, contact info, search results and group members, and updates live.

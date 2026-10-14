@@ -222,7 +222,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       data: { type: 'object', description: 'Same payload as the Socket.IO event of that name' },
     }, ['id', 'event', 'createdAt', 'user', 'data']),
     Session: obj({ token: { type: 'string' }, user: ref('User') }, ['token', 'user']),
+    AppearancePrefs: obj({
+      mode: { type: 'string', enum: ['auto', 'light', 'dark'] },
+      theme: { type: 'string', example: 'ocean' },
+      appIcon: { type: 'string', example: 'classic' },
+      avatarShape: { type: 'string', enum: ['circle', 'rounded', 'square'] },
+    }),
     Subscription: obj({
+      perks: arrayOf({ type: 'string' }),
       premium: { type: 'boolean' },
       plan: { type: ['string', 'null'], enum: ['daily', 'monthly', 'yearly', null] },
       expiresAt: { type: ['integer', 'null'], description: 'ms since epoch' },
@@ -457,6 +464,30 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ product: ref('Product') })), ...errors(401, 404, 413, 415) },
       }),
       delete: op(T.biz, 'Remove a product picture', { params: [idParam('id')], responses: { 200: ok(obj({ product: ref('Product') })), ...errors(401, 404) } }),
+    },
+    '/appearance': {
+      get: op(T.me, 'Colour themes, app icons and avatar shapes', {
+        auth: false,
+        description: 'The catalogue of looks. `themes[].tokens` has the colour values for light and dark (CSS variable names, usable as design tokens in a mobile app); `premium: true` options need a Premium subscription. Every theme meets WCAG AA contrast.',
+        responses: { 200: ok(obj({
+          defaults: ref('AppearancePrefs'),
+          modes: arrayOf({ type: 'string' }),
+          themes: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' }, swatch: { type: 'string' }, tokens: { type: ['object', 'null'], description: '`{ light: {...}, dark: {...} }`; null = the default brand colours' } })),
+          icons: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' }, svg: { type: 'string', description: 'SVG; colours use `var(--primary)`, replace with the theme colour' } })),
+          avatarShapes: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' } })),
+        })) },
+      }),
+    },
+    '/me/appearance': {
+      get: op(T.me, 'My look', {
+        description: '`appearance` is what to show now (Premium choices fall back to the defaults while Premium is not active); `saved` is what the person chose, restored when Premium returns.',
+        responses: { 200: ok(obj({ appearance: ref('AppearancePrefs'), saved: ref('AppearancePrefs'), premium: { type: 'boolean' } })), ...errors(401) },
+      }),
+      put: op(T.me, 'Change my look', {
+        description: 'Send any of `mode` (auto, light, dark: free), `theme`, `appIcon`, `avatarShape`. Premium options answer `402 premium_required` without Premium; going back to the defaults always works. Other devices get the `appearance:update` event.',
+        body: jsonBody(ref('AppearancePrefs'), { theme: 'violet', appIcon: 'heart' }),
+        responses: { 200: ok(obj({ appearance: ref('AppearancePrefs'), saved: ref('AppearancePrefs'), premium: { type: 'boolean' } })), ...errors(400, 401, 402, 403) },
+      }),
     },
     '/translate/languages': {
       get: op(T.i18n, 'Languages for translating received messages', {
@@ -930,6 +961,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /me/catalogue/products/{id}': 'deleteProduct',
     'put /me/catalogue/products/{id}/image': 'setProductImage',
     'delete /me/catalogue/products/{id}/image': 'removeProductImage',
+    'get /appearance': 'getAppearanceCatalogue',
+    'get /me/appearance': 'getMyAppearance',
+    'put /me/appearance': 'setMyAppearance',
     'get /translate/languages': 'listTranslationLanguages',
     'put /conversations/{id}/translation': 'setChatTranslation',
     'post /conversations/{id}/translate': 'translateTexts',

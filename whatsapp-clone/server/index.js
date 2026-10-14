@@ -99,6 +99,8 @@ const SOCKET_ACTIONS = {
   'translate:languages': 'translateLanguages',
   'translate:set': 'setTranslation',
   'translate:text': 'translateTexts',
+  'appearance:get': 'appearance',
+  'appearance:set': 'setAppearance',
   'subscription:status': 'subscriptionStatus',
   'subscription:checkout': 'subscriptionCheckout',
   'subscription:confirm': 'subscriptionConfirm',

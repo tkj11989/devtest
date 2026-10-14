@@ -287,6 +287,8 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
 
     socket.on('call:record-request', handle(({ callId }) => {
       assertRecordingOn();
+      // Recording is a Premium feature for the person who records (everyone else just answers the consent prompt).
+      if (!store.isPremium(me)) throw Object.assign(new Error('Call recording is a Premium feature. Upgrade to Premium to record calls.'), { code: 'premium_required' });
       const call = participantCall(callId, me);
       if (call.participants.get(me) !== socket.id) throw new Error('This call is on another device');
       if (!call.answeredAt || call.participants.size < 2) throw new Error('Recording needs at least two people in the call');

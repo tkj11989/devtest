@@ -607,6 +607,20 @@ class Store {
     return (this.data.messages[Store.directId(a, b)] || []).some((m) => m.type !== 'system');
   }
 
+  // ---------- appearance preferences ----------
+
+  prefsOf(username) {
+    return { ...(this.data.users[username]?.prefs || {}) };
+  }
+
+  setPrefs(username, patch) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.prefs = { ...(u.prefs || {}), ...patch };
+    this._save();
+    return u.prefs;
+  }
+
   // ---------- premium subscription ----------
 
   subscriptionOf(username) {

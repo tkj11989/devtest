@@ -31,7 +31,11 @@ async function setup(t, opts = {}) {
     s.once('connect_error', reject);
   });
   const tokens = {};
-  for (const u of ['alice', 'bob', 'carol', 'dave']) tokens[u] = store.register(u, 'pass').token;
+  for (const u of ['alice', 'bob', 'carol', 'dave']) {
+    tokens[u] = store.register(u, 'pass').token;
+    // Recording is a Premium feature for whoever asks to record.
+    if (!opts.free) store.activateSubscription(u, { plan: 'monthly', expiresAt: Date.now() + 30 * 86400000 });
+  }
   return { store, client, tokens, app };
 }
 
@@ -182,4 +186,28 @@ test('recording: switched off by the administrator, one-person calls and ringing
   assert.match((await call(c, 'call:record-request', { callId: started.callId })).error, /Call not found/);
   assert.match((await call(c, 'call:record-respond', { callId: started.callId, accept: true })).error, /Call not found/);
   assert.match((await call(c, 'call:record-stop', { callId: started.callId })).error, /Call not found/);
+});
+
+test('recording is a Premium feature for the person who records; others only answer', async (t) => {
+  const { client, tokens, store } = await setup(t, { free: true });
+  store.activateSubscription('alice', { plan: 'daily', expiresAt: Date.now() + 86400000 }); // only Alice is Premium
+  const dm = store.getOrCreateDirect('alice', 'bob');
+  const alice = await client(tokens.alice);
+  const bob = await client(tokens.bob);
+  const incoming = next(bob, 'call:incoming');
+  const started = await call(alice, 'call:start', { convId: dm.id, kind: 'audio' });
+  await incoming;
+  await call(bob, 'call:accept', { callId: started.callId });
+  const free = await call(bob, 'call:record-request', { callId: started.callId });
+  assert.deepStrictEqual([free.ok, free.code], [false, 'premium_required']);
+  assert.match(free.error, /Premium feature/);
+  // A Premium person asks; the free person can agree (they are not recording).
+  assert.ok((await call(alice, 'call:record-request', { callId: started.callId })).ok);
+  const on = next(bob, 'call:record', (p) => p.state === 'on');
+  assert.ok((await call(bob, 'call:record-respond', { callId: started.callId, accept: true })).ok);
+  assert.strictEqual((await on).by, 'alice');
+  // Premium ending mid-call doesn't stop a recording everyone agreed to, but no new one can start.
+  store.data.users.alice.subscription.expiresAt = Date.now() - 1;
+  await call(bob, 'call:record-stop', { callId: started.callId });
+  assert.strictEqual((await call(alice, 'call:record-request', { callId: started.callId })).code, 'premium_required');
 });

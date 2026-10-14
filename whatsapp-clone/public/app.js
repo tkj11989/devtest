@@ -521,6 +521,7 @@
     disappearing: ['#menu-timer', '#btn-default-timer@.link-row'],
     calls: ['#call-buttons', '#btn-join-call'],
     callRecording: ['#call-record'],
+    appearance: ['#btn-appearance'],
     status: ['#btn-status'],
     channels: ['#btn-channels'],
     profileViews: ['#btn-views'],
@@ -590,6 +591,8 @@
       paintAvatar,
       me: () => state.me.username,
       toast: (text) => toast(text),
+      isPremium: () => !!state.me?.premium,
+      needPremium: (text) => offerUpgrade(text),
     });
     statusUpdates.attach(socket);
     channelsUI.attach(socket);
@@ -616,7 +619,7 @@
 
     socket.on('connect', async () => {
       try {
-        const [{ user: me, iceServers, blocked, defaultDisappear, business, contact, privacy }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        const [{ user: me, iceServers, blocked, defaultDisappear, business, contact, privacy, appearance }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
         state.defaultDisappear = defaultDisappear || null;
         state.contact = contact || { phone: null, email: null };
         state.privacy = privacy || { profileViews: true };
@@ -624,6 +627,7 @@
         state.myBusiness = business || null;
         setLockSettings(lockSettings);
         state.me = me;
+        window.Appearance.load().then(() => window.Appearance.apply(appearance)).catch(() => {});
         // This device's encryption key (made once, kept in the browser) must be ready before any message is read.
         if (!state.e2ee) state.e2ee = window.E2EE.createClient({ emit, username: me.username, deviceName: deviceName() });
         await state.e2ee.init();
@@ -671,10 +675,17 @@
     onOrdered('message:expired', ({ convId, ids }) => removeMessages(convId, new Set(ids)));
     // Translation language changed for a chat (maybe on another device).
     socket.on('translate:update', ({ convId, lang }) => applyTranslation(convId, lang));
+    // My look changed (another device, or Premium started or ended).
+    socket.on('appearance:update', (prefs) => {
+      window.Appearance.apply(prefs);
+      if (!$('#panel-appearance').classList.contains('hidden')) renderAppearance();
+    });
     // My Premium started or ended (maybe on another device).
     socket.on('subscription:update', (sub) => {
       state.sub = sub;
+      if (state.me) state.me.premium = !!sub.premium;
       renderPremiumRow();
+      if (!$('#panel-appearance').classList.contains('hidden')) renderAppearance();
     });
     // Someone viewed my profile (or I changed the setting elsewhere): refresh the list if it is open.
     socket.on('profile:viewed', () => {
@@ -3309,6 +3320,71 @@
     }
   }
 
+  // ---------- appearance ----------
+
+  function renderAppearance() {
+    const cat = window.Appearance.catalogue;
+    const box = (id) => { const n = $(id); n.textContent = ''; return n; };
+    if (!cat) return;
+    const premium = !!state.me?.premium;
+    const current = window.Appearance.prefs;
+    const option = (cls, key, item, content) => {
+      const b = el('button', `${cls}${item.premium && !premium ? ' locked' : ''}`);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(current[key] === item.id));
+      b.dataset.shape = item.id;
+      b.append(...content);
+      b.addEventListener('click', () => chooseAppearance({ [key]: item.id }, item.premium));
+      return b;
+    };
+    const modeLabels = { auto: 'Automatic', light: 'Light', dark: 'Dark' };
+    const modes = box('#ap-modes');
+    for (const m of cat.modes) modes.appendChild(option('mode-opt', 'mode', { id: m }, [modeLabels[m]]));
+    const themes = box('#ap-themes');
+    for (const t of cat.themes) {
+      const sw = el('i');
+      sw.style.background = t.swatch;
+      const b = option('swatch', 'theme', t, [sw, t.label]);
+      b.title = t.label;
+      themes.appendChild(b);
+    }
+    const icons = box('#ap-icons');
+    for (const i of cat.icons) {
+      const holder = el('span');
+      holder.innerHTML = i.svg; // from our own server's fixed catalogue
+      icons.appendChild(option('icon-opt', 'appIcon', i, [holder.firstChild, i.label]));
+    }
+    const shapes = box('#ap-shapes');
+    for (const s of cat.avatarShapes) shapes.appendChild(option('shape-opt', 'avatarShape', s, [el('i'), s.label]));
+    $('#ap-note').textContent = premium ? 'Your choices follow you to every device.' : 'Colour themes, app icons and picture shapes need Premium. Light and dark mode are free.';
+    const themeName = cat.themes.find((t) => t.id === current.theme)?.label;
+    $('#appearance-summary').textContent = `${modeLabels[current.mode]} · ${themeName} theme`;
+  }
+
+  async function chooseAppearance(patch, needsPremium) {
+    if (needsPremium && !state.me?.premium) {
+      return offerUpgrade('Colour themes, app icons and picture shapes are a Premium feature.');
+    }
+    const before = { ...window.Appearance.prefs };
+    window.Appearance.apply({ ...before, ...patch });
+    renderAppearance();
+    try {
+      const res = await emit('appearance:set', patch);
+      window.Appearance.apply(res.appearance);
+    } catch (err) {
+      window.Appearance.apply(before);
+      if (err.code === 'premium_required') offerUpgrade(err.message);
+      else toast(err.message);
+    }
+    renderAppearance();
+  }
+
+  $('#btn-appearance').addEventListener('click', async () => {
+    openPanel('#panel-appearance');
+    await window.Appearance.load().catch(() => {});
+    renderAppearance();
+  });
+
   $('#btn-views').addEventListener('click', openViews);
   $('#views-toggle').addEventListener('change', async (e) => {
     const enabled = e.target.checked;
@@ -3356,7 +3432,7 @@
   async function offerUpgrade(message) {
     const go = await dialog({
       title: 'Premium required',
-      text: `${message}\n\nFree: up to 3 locked chats and 1 hidden chat.\nPremium: unlimited.`,
+      text: `${message}\n\nFree: up to 3 locked chats and 1 hidden chat.\nPremium: unlimited locked and hidden chats, call recording, colour themes, app icons and picture shapes.`,
       fields: [],
       submit: 'See plans',
       onSubmit: async () => {},
