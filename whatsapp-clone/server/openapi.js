@@ -305,6 +305,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
             defaultDisappear: { type: ['integer', 'null'], description: 'timer (seconds) for chats you start' },
             business: { oneOf: [ref('Business'), { type: 'null' }] },
             contact: ref('Contact'),
+            privacy: obj({ profileViews: { type: 'boolean' } }),
           })),
           ...errors(401),
         },
@@ -315,6 +316,26 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
 
+    '/users/{username}/view': {
+      post: op(T.users, 'Record that I viewed someone\'s profile', {
+        description: 'Call this when your app opens a person\'s profile. They can then see you in **Who viewed my profile** with the date of your last view, whether or not you are in their contacts. Nothing is recorded when you or they have profile views turned off, when either of you has blocked the other, or when you view yourself. Only your latest view is kept.',
+        params: [idParam('username')],
+        responses: { 204: noContent, ...errors(401, 404) },
+      }),
+    },
+    '/me/profile-views': {
+      get: op(T.me, 'Who viewed my profile', {
+        description: 'Everyone who viewed your profile in the last 90 days, newest first, each with `inContact` (you have a one-to-one chat with messages) and `lastViewedAt`. Empty with `enabled: false` when you turned profile views off.',
+        responses: { 200: ok(obj({ enabled: { type: 'boolean' }, retentionDays: { type: 'integer' }, viewers: arrayOf(obj({ user: ref('User'), inContact: { type: 'boolean' }, lastViewedAt: { type: 'integer', description: 'ms since epoch' } }, ['user', 'inContact', 'lastViewedAt'])) }, ['enabled', 'viewers'])), ...errors(401) },
+      }),
+    },
+    '/me/privacy': {
+      put: op(T.me, 'Privacy settings', {
+        description: '`profileViews: false` stops recording your own views of other people, hides who viewed you, and erases your current list. It is a trade: with it off you can\'t see viewers either.',
+        body: jsonBody(obj({ profileViews: { type: 'boolean' } }, ['profileViews']), { profileViews: false }),
+        responses: { 200: ok(obj({ privacy: obj({ profileViews: { type: 'boolean' } }) })), ...errors(400, 401) },
+      }),
+    },
     '/me/subscription': {
       get: op(T.me, 'Plan, limits and usage', {
         description: '**Free** accounts can lock up to 3 chats and hide 1 chat. **Premium** has no limits. Premium is bought in advance as a daily, monthly or yearly plan (no auto-renewal); buying while Premium extends it. When it ends, chats that are already locked or hidden stay protected, but no more can be added until Premium is renewed.',
@@ -722,6 +743,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /auth/logout': 'logout',
     'get /me': 'getMe',
     'patch /me': 'updateMe',
+    'post /users/{username}/view': 'viewProfile',
+    'get /me/profile-views': 'getProfileViews',
+    'put /me/privacy': 'updatePrivacy',
     'get /me/subscription': 'getSubscription',
     'post /me/subscription/checkout': 'startCheckout',
     'post /me/subscription/confirm': 'confirmSubscription',

@@ -341,6 +341,69 @@ class Store {
     return out;
   }
 
+  // ---------- profile views ----------
+  //
+  // Who looked at someone's profile, and when they last did. Only the last time per viewer
+  // is kept (no counts, no history), for 90 days. A person who turns this off is not
+  // recorded and cannot see who viewed them (and their list is deleted).
+
+  profileViewsEnabled(username) {
+    const u = this.data.users[username];
+    return !!u && !u.profileViewsOff;
+  }
+
+  setProfileViewsEnabled(username, enabled) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    if (enabled) delete u.profileViewsOff;
+    else {
+      u.profileViewsOff = true;
+      delete u.profileViews; // forget who looked
+    }
+    this._save();
+  }
+
+  /** Record that `viewer` looked at `viewed`'s profile. Returns whether it was recorded. */
+  recordProfileView(viewer, viewed) {
+    const v = this.data.users[viewed];
+    if (!v || viewer === viewed || !this.data.users[viewer]) return false;
+    if (!this.profileViewsEnabled(viewer) || !this.profileViewsEnabled(viewed)) return false;
+    if (this.blockedEither(viewer, viewed)) return false;
+    v.profileViews = v.profileViews || {};
+    v.profileViews[viewer] = Date.now();
+    // Keep it bounded: drop the oldest beyond 500.
+    const entries = Object.entries(v.profileViews);
+    if (entries.length > Store.PROFILE_VIEWS_MAX) {
+      entries.sort((a, b) => b[1] - a[1]);
+      v.profileViews = Object.fromEntries(entries.slice(0, Store.PROFILE_VIEWS_MAX));
+    }
+    this._save();
+    return true;
+  }
+
+  /** [{ username, lastViewedAt, inContact }] newest first, last 90 days only. */
+  profileViewsOf(username) {
+    const u = this.data.users[username];
+    if (!u?.profileViews) return [];
+    const cutoff = Date.now() - Store.PROFILE_VIEWS_DAYS * 86400000;
+    let pruned = false;
+    for (const [who, ts] of Object.entries(u.profileViews)) {
+      if (ts < cutoff || !this.data.users[who]) {
+        delete u.profileViews[who];
+        pruned = true;
+      }
+    }
+    if (pruned) this._save();
+    return Object.entries(u.profileViews)
+      .map(([who, lastViewedAt]) => ({ username: who, lastViewedAt, inContact: this.areContacts(username, who) }))
+      .sort((a, b) => b.lastViewedAt - a.lastViewedAt);
+  }
+
+  /** In contact = a one-to-one chat with at least one message between them. */
+  areContacts(a, b) {
+    return (this.data.messages[Store.directId(a, b)] || []).some((m) => m.type !== 'system');
+  }
+
   // ---------- premium subscription ----------
 
   subscriptionOf(username) {
@@ -1228,6 +1291,8 @@ Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */
 Store.MAX_DEVICES = 5;
+Store.PROFILE_VIEWS_MAX = 500;
+Store.PROFILE_VIEWS_DAYS = 90;
 Store.WEBHOOK_EVENTS = [
   'message:new', 'message:status', 'message:deleted', 'message:starred',
   'conversation:new', 'typing', 'presence', 'user:updated', 'blocked:update',

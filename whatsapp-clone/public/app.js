@@ -491,7 +491,7 @@
     state.calls?.dispose();
     statusUpdates.reset();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null, privacy: null, profileCard: null });
     state.conversations.clear();
     state.messages.clear();
     state.outbox.clear();
@@ -538,9 +538,11 @@
 
     socket.on('connect', async () => {
       try {
-        const [{ user: me, iceServers, blocked, defaultDisappear, business, contact }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        const [{ user: me, iceServers, blocked, defaultDisappear, business, contact, privacy }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
         state.defaultDisappear = defaultDisappear || null;
         state.contact = contact || { phone: null, email: null };
+        state.privacy = privacy || { profileViews: true };
+        renderViewsRow();
         state.myBusiness = business || null;
         setLockSettings(lockSettings);
         state.me = me;
@@ -592,6 +594,10 @@
     socket.on('subscription:update', (sub) => {
       state.sub = sub;
       renderPremiumRow();
+    });
+    // Someone viewed my profile (or I changed the setting elsewhere): refresh the list if it is open.
+    socket.on('profile:viewed', () => {
+      if (!$('#panel-views').classList.contains('hidden')) loadViews();
     });
     // Someone added or removed a device: refresh keys so new messages are encrypted for the right devices.
     socket.on('e2ee:update', () => {
@@ -1592,6 +1598,16 @@
 
   const renderNewChatResults = (q) => searchPeople(q, $('#user-results'), (u) => {
     const li = userRow(u);
+    const avatarEl = li.querySelector('.avatar');
+    if (avatarEl) {
+      avatarEl.classList.add('tappable');
+      avatarEl.title = 'View profile';
+      avatarEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        $('#panel-new-chat').classList.add('hidden');
+        showProfile(u.username);
+      });
+    }
     const hide = el('button', 'icon-btn row-action');
     hide.type = 'button';
     hide.title = `Hide chat with ${u.displayName}`;
@@ -2200,6 +2216,8 @@
       body.appendChild(encCard);
     }
 
+    if (!group) body.appendChild(viewNote());
+
     // Hide this one chat (a contact or a group) from the chat list.
     if (!isLockedView(conv)) {
       const hideCard = el('section', 'info-card info-action');
@@ -2230,6 +2248,11 @@
         if (conv.admins?.includes(m)) row.appendChild(el('span', 'admin-tag', 'Admin'));
         b.append(row, el('div', 'sub', u.business ? u.business.category : `@${m}`));
         li.appendChild(b);
+        if (m !== state.me.username) {
+          li.classList.add('tappable');
+          li.title = 'View profile';
+          li.addEventListener('click', () => showProfile(m));
+        }
         ul.appendChild(li);
       }
       members.appendChild(ul);
@@ -2240,13 +2263,59 @@
   function openContactInfo() {
     const conv = state.conversations.get(state.activeId);
     if (!conv) return;
+    state.profileCard = null;
     openPanel('#panel-contact');
     renderContactInfo(conv);
+    const peer = convPeer(conv);
+    if (peer && conv.type === 'direct') emit('profile:view', { username: peer }).catch(() => {});
   }
   function refreshContactInfo() {
     if ($('#panel-contact').classList.contains('hidden')) return;
+    if (state.profileCard) return renderProfileCard(state.users[state.profileCard] || { username: state.profileCard, displayName: state.profileCard });
     const conv = state.conversations.get(state.activeId);
     if (conv) renderContactInfo(conv);
+  }
+
+  /** A person's profile (from a group, or search), for people I may not have a chat with. Opening it records a view. */
+  function renderProfileCard(user) {
+    const body = $('#contact-body');
+    body.textContent = '';
+    $('#contact-title').textContent = user.business ? 'Business info' : 'Profile';
+    const top = el('section', 'info-top');
+    const av = el('div', 'avatar xl');
+    paintAvatar(av, user.displayName, user.username);
+    const name = el('h2', 'info-name', user.displayName);
+    name.append(...userBadges(user));
+    top.append(av, name, el('p', 'muted', `@${user.username}`), el('p', 'muted', user.online ? 'online' : lastSeenText(user.username) || ''));
+    body.appendChild(top);
+    if (user.about) {
+      const about = el('section', 'info-card');
+      about.append(el('div', 'info-label', 'About'), el('div', '', user.about));
+      body.appendChild(about);
+    }
+    if (user.business) body.appendChild(businessCard(user.business));
+    body.appendChild(viewNote());
+  }
+
+  async function showProfile(username) {
+    if (!username || username === state.me.username) return;
+    try {
+      const { user } = await emit('user:get', { username });
+      state.users[username] = { ...(state.users[username] || {}), ...user };
+      state.profileCard = username;
+      openPanel('#panel-contact');
+      renderProfileCard(state.users[username]);
+      emit('profile:view', { username }).catch(() => {});
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  /** A one-line reminder that looking at a profile is visible to them. */
+  function viewNote() {
+    return el('p', 'muted small-note view-note', state.privacy?.profileViews === false
+      ? "Profile views are off: people can't see that you looked, and you can't see who looks at you."
+      : 'They can see that you viewed their profile. Change this in Profile → Who viewed my profile.');
   }
   $('#chat-title-btn').addEventListener('click', openContactInfo);
   $('#menu-info').addEventListener('click', openContactInfo);
@@ -2764,6 +2833,70 @@
         toast('Fingerprint / face lock is on');
       },
     });
+  });
+
+  // ---------- who viewed my profile ----------
+
+  const viewedAt = (ts) => new Date(ts).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+
+  function renderViewsRow() {
+    const on = state.privacy?.profileViews !== false;
+    $('#views-summary').textContent = on ? 'See who looked at your profile, and when' : 'Off · views are not recorded or shown';
+  }
+
+  async function openViews() {
+    openPanel('#panel-views');
+    $('#views-toggle').checked = state.privacy?.profileViews !== false;
+    await loadViews();
+  }
+
+  async function loadViews() {
+    const list = $('#views-list');
+    try {
+      const res = await emit('profile:views');
+      list.textContent = '';
+      $('#views-off').classList.toggle('hidden', res.enabled);
+      $('#views-empty').classList.toggle('hidden', !res.enabled || res.viewers.length > 0);
+      $('#views-count').textContent = res.enabled && res.viewers.length
+        ? `${res.viewers.length} ${res.viewers.length === 1 ? 'person' : 'people'} viewed your profile in the last ${res.retentionDays} days`
+        : '';
+      for (const v of res.viewers) {
+        const u = v.user;
+        state.users[u.username] = { ...(state.users[u.username] || {}), ...u };
+        const li = el('li');
+        li.appendChild(avatar(u.displayName, u.username, { online: u.online }));
+        const body = el('div', 'body');
+        const top = el('div', 'row');
+        top.appendChild(el('span', 'name', u.displayName));
+        top.append(...userBadges(u));
+        top.appendChild(el('span', `contact-tag${v.inContact ? ' in' : ''}`, v.inContact ? 'In contacts' : 'Not in contacts'));
+        body.appendChild(top);
+        body.appendChild(el('div', 'row')).appendChild(el('span', 'preview', `Last viewed ${viewedAt(v.lastViewedAt)}`));
+        li.appendChild(body);
+        li.addEventListener('click', () => showProfile(u.username));
+        list.appendChild(li);
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  $('#btn-views').addEventListener('click', openViews);
+  $('#views-toggle').addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    if (!enabled && !confirm("Turn off profile views? Your current list is erased, people won't see when you look at their profile, and you won't see who looks at yours.")) {
+      e.target.checked = true;
+      return;
+    }
+    try {
+      const res = await emit('profile:views-set', { enabled });
+      state.privacy = res.privacy;
+      renderViewsRow();
+      await loadViews();
+    } catch (err) {
+      e.target.checked = !enabled;
+      toast(err.message);
+    }
   });
 
   // ---------- Premium ----------

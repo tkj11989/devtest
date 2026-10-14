@@ -154,6 +154,16 @@
 
       <!-- Contact / group info -->
 
+      <!-- Who viewed my profile -->
+      <div class="panel overlay hidden" id="panel-views">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Who viewed my profile</h2></header>
+        <label class="pad views-switch"><input type="checkbox" id="views-toggle" checked /> <span><strong>Profile views</strong><small class="muted">When on, people can see you looked at their profile, and you can see who looked at yours. Only the last view date is kept, for 90 days. Turning it off erases your list.</small></span></label>
+        <p class="pad muted" id="views-count"></p>
+        <ul class="list" id="views-list"></ul>
+        <p class="muted pad hidden" id="views-empty">Nobody has viewed your profile yet.</p>
+        <p class="muted pad hidden" id="views-off">Profile views are off, so views are not recorded and you can't see who viewed you.</p>
+      </div>
+
       <!-- Encryption: devices that can read my messages -->
       <div class="panel overlay hidden" id="panel-devices">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Encryption</h2></header>
@@ -252,6 +262,10 @@
           </button>
         </div>
         <div class="pad stack">
+          <button class="link-row" type="button" id="btn-views">
+            <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+            <span><strong>Who viewed my profile</strong><small id="views-summary">See who looked at your profile, and when</small></span>
+          </button>
           <div class="link-row static" id="premium-row">
             <span id="premium-name" class="verify-name" aria-hidden="true"></span>
             <span><strong>Premium</strong><small id="premium-summary">Free plan</small></span>

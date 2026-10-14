@@ -141,6 +141,17 @@ It is enforced by the server, not just hidden in the page. Until a chat is unloc
 
 Over the REST API, the "session" is the credential (session token or API key), optionally narrowed with an `X-App-Session` header: `PUT /conversations/{id}/lock`, `POST /conversations/{id}/unlock` `{ "code": "…" }`, `DELETE /conversations/{id}/lock`, `GET /chat-lock`, `PUT /chat-lock/code`, `POST /chat-lock/reset/otp` + `POST /chat-lock/reset`, `POST /chat-lock/relock`.
 
+## Who viewed my profile
+
+**Profile → Who viewed my profile** lists everyone who looked at your profile, **whether or not they are in your contacts**, each with the **date and time of their last view** and a tag: *In contacts* (you have a one-to-one chat with messages) or *Not in contacts*. Newest first.
+
+- **What counts as a view:** opening someone's Contact info, opening their profile from a group's member list, or tapping their picture in New chat. Looking at your own profile doesn't count.
+- **What is kept:** one row per viewer with only the **last view time**: no counts, no history, nothing about what they looked at. Entries older than **90 days** are deleted, and at most 500 are kept.
+- **It's mutual and visible:** Contact info and profiles say *"They can see that you viewed their profile"*. A person who **turns profile views off** is not recorded when they look at others, can't see who viewed them, and their list is erased. You can't have one without the other.
+- Nothing is recorded if either person has blocked the other. Webhooks never receive profile views.
+
+API: `POST /users/{username}/view` (call when your app opens a profile), `GET /me/profile-views`, `PUT /me/privacy {"profileViews": false}`. Socket: `profile:view`, `profile:views`, `profile:views-set`, `user:get`; server → client `profile:viewed`.
+
 ## Free and Premium accounts
 
 | | Free | Premium |
@@ -409,6 +420,7 @@ whatsapp-clone/
     ├── e2ee.test.js
     ├── kyc.test.js
     ├── premium.test.js
+    ├── profileviews.test.js
     ├── calls.test.js
     ├── status.test.js
     ├── api.test.js

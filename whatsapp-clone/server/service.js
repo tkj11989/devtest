@@ -392,7 +392,38 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
         defaultDisappear: store.defaultDisappear(me),
         business: store.getBusiness(me),
         contact: store.contactOf(me),
+        privacy: { profileViews: store.profileViewsEnabled(me) },
       };
+    },
+
+    // ----- profile views -----
+
+    /** I opened someone's profile: they can see that (when both of us have profile views on). */
+    viewProfile(me, { username }) {
+      const target = String(username || '').toLowerCase();
+      if (!store.publicUser(target)) throw new ApiError(404, 'not_found', 'User not found');
+      if (store.recordProfileView(me, target)) io.to(userRoom(target)).emit('profile:viewed', {});
+      return {};
+    },
+
+    /** Who viewed my profile (last 90 days), whether or not they are in my contacts, with the last view date. */
+    profileViews(me) {
+      if (!store.profileViewsEnabled(me)) {
+        return { enabled: false, retentionDays: Store.PROFILE_VIEWS_DAYS, viewers: [] };
+      }
+      const list = store.profileViewsOf(me);
+      return {
+        enabled: true,
+        retentionDays: Store.PROFILE_VIEWS_DAYS,
+        viewers: list.map((v) => ({ user: userView(v.username, me), inContact: v.inContact, lastViewedAt: v.lastViewedAt })),
+      };
+    },
+
+    /** Turn profile views on or off. Off: my views are not recorded, I can't see who viewed me, and my list is erased. */
+    setProfileViews(me, { enabled }) {
+      store.setProfileViewsEnabled(me, !!enabled);
+      io.to(userRoom(me)).emit('profile:viewed', {});
+      return { privacy: { profileViews: store.profileViewsEnabled(me) } };
     },
 
     // ----- Premium subscription -----

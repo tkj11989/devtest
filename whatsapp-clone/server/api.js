@@ -126,6 +126,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.get('/me', ...authed, run((req) => actions.me(req.user, {}, req.ctx)));
   router.patch('/me', ...authed, json, run((req) => actions.updateProfile(req.user, req.body || {})));
+  router.post('/users/:username/view', ...authed, run((req) => { actions.viewProfile(req.user, { username: p(req, 'username') }); return undefined; }));
+  router.get('/me/profile-views', ...authed, run((req) => actions.profileViews(req.user)));
+  router.put('/me/privacy', ...authed, json, run((req) => actions.setProfileViews(req.user, { enabled: req.body?.profileViews })));
   router.get('/me/subscription', ...authed, run((req) => actions.subscriptionStatus(req.user)));
   router.post('/me/subscription/checkout', ...authed, json, run((req) => actions.subscriptionCheckout(req.user, { plan: req.body?.plan })));
   router.post('/me/subscription/confirm', ...authed, json, run((req) => actions.subscriptionConfirm(req.user, { orderId: req.body?.orderId })));

@@ -1239,3 +1239,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .premium-badge { width: 15px; height: 15px; fill: var(--accent); flex: none; vertical-align: -2px; margin-left: 2px; }
 .info-name .premium-badge { width: 20px; height: 20px; }
 .verify-name .premium-badge { width: 26px; height: 26px; margin: 0; }
+
+/* Profile views */
+.views-switch { display: flex; gap: 12px; align-items: flex-start; flex-direction: row; color: var(--text); }
+.views-switch input { width: 20px; height: 20px; flex: none; margin-top: 2px; accent-color: var(--primary); }
+.views-switch small { display: block; font-size: 12.5px; margin-top: 2px; }
+.contact-tag { margin-left: auto; font-size: 11.5px; padding: 1px 8px; border-radius: 10px; color: var(--muted); border: 1px solid var(--border); white-space: nowrap; }
+.contact-tag.in { color: var(--primary-text); border-color: var(--primary); }
+.tappable { cursor: pointer; }
+.view-note { padding: 8px 16px 14px; text-align: center; }
