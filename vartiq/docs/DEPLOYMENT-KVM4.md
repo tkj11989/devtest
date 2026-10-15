@@ -2,7 +2,7 @@
 
 **Read this first.** ExamSuit is live on this server. Everything below is built so that VartiQ is added *next to* ExamSuit without touching it: its own system user, its own folders, its own database, its own web-server file, its own ports, hard CPU and memory limits, and a one-command way to switch VartiQ off again. Nothing here edits an ExamSuit file, restarts ExamSuit, or reloads anything but a *tested* nginx configuration.
 
-Assumptions (check them in Phase 0): Hostinger KVM 4 (about 4 vCPU, 16 GB RAM, 200 GB NVMe, public IPv4), Ubuntu or Debian, Cloudflare in front of your domain, ExamSuit served by nginx. Where ExamSuit uses something else (Apache, Docker, a different database) the guide says what to change.
+Assumptions (check them in Phase 0): Hostinger KVM 4 (about 4 vCPU, 16 GB RAM, 200 GB NVMe, public IPv4), Ubuntu or Debian, **no Cloudflare for now** (Let's Encrypt certificates; Cloudflare can be added later, see the end of Phase 6), ExamSuit served by nginx. Where ExamSuit uses something else (Apache, Docker, a different database) the guide says what to change.
 
 > **Rules while you do this**
 > 1. Work in a quiet period for ExamSuit (no exams, no sign-up rush).
@@ -22,9 +22,8 @@ Assumptions (check them in Phase 0): Hostinger KVM 4 (about 4 vCPU, 16 GB RAM, 2
 ## 0. What you are building
 
 ```
- People ──► Cloudflare (HTTPS, DDoS protection, WebSockets)
+ People ──► vartiq.prayuktech.com (DNS A record straight to this server, HTTPS from Let's Encrypt)
                 │
-                ▼  vartiq.prayuktech.com (proxied)
           nginx on the server  ── ExamSuit's own site files stay as they are
                 │  127.0.0.1:3100
                 ▼
@@ -34,7 +33,7 @@ Assumptions (check them in Phase 0): Hostinger KVM 4 (about 4 vCPU, 16 GB RAM, 2
                 └──► /var/lib/vartiq/media (voice notes, status photos, product pictures)
 
  Calls, when phones cannot connect directly:
- People ──► turn.prayuktech.com (NOT proxied by Cloudflare) ──► coturn on UDP/TCP 3478
+ People ──► turn.prayuktech.com ──► coturn on UDP/TCP 3478
 ```
 
 Sizes to plan with (my estimates, not measurements on your server): VartiQ about 1 GB of RAM and one CPU core at 10,000 connected people; coturn a few hundred MB plus network bandwidth; PostgreSQL a few hundred MB. Together roughly 2.5 to 4 GB of the 16 GB, **if ExamSuit leaves that room**. Phase 0 tells you whether it does.
@@ -83,7 +82,7 @@ Fill in this table:
 | nginx 1.24 | One site `sites-enabled/examsuit` (Certbot certificate), `conf.d/` empty, no `default_server` | VartiQ goes in **`sites-enabled/vartiq`**, so ExamSuit's file is read first and stays the default site (6.2). |
 | PostgreSQL 16 | One cluster on 5432, `max_connections=100`, 11 in use. ExamSuit's log shows a past PostgreSQL restart cut its connections | **Option B** (own cluster on 5433): a restart or tuning of VartiQ's database can never touch ExamSuit's. |
 | Traefik container | Restarts every minute: it cannot bind port 80 because nginx holds it | Leave it alone, but **never `systemctl stop nginx`**: Traefik would take ports 80/443. Only `nginx -t && systemctl reload nginx`. |
-| Cloudflare | `examsuit.com` is served directly (no `cf-ray` header) | Cloudflare is used only for `prayuktech.com`, if that domain is on it. |
+| Cloudflare | Not used (`examsuit.com` is served directly, and you confirmed `prayuktech.com` is not on it) | Let's Encrypt certificates and nginx protections instead (Phase 2 and 6). |
 | Firewall | ufw: 22, 80, 443 only; Docker present | Phase 8 adds only what calls need (3478 and a relay range). |
 | Backups | No cron backup of ExamSuit's database or files exists on this server | Not VartiQ's job, but take the Phase 1 snapshot, and consider a nightly `pg_dump examsuit` of your own. |
 | ExamSuit warnings (not ours) | PM2 shows 18 restarts, 0 unstable; log has a Next.js "Failed to find Server Action" (stale browser tabs after a deploy) and an unknown `outputFileTracingRoot` option in `next.config.js` | Harmless today; mention to the ExamSuit team. |
@@ -103,28 +102,21 @@ Fill in this table:
 
 ---
 
-## Phase 2. Domain and Cloudflare
+## Phase 2. Domain names (no Cloudflare)
 
-You need two names under `prayuktech.com`. Check first that `prayuktech.com` is a zone in your Cloudflare account (ExamSuit's `examsuit.com` is *not* behind Cloudflare, which is fine: Cloudflare works per domain, so nothing changes for ExamSuit). If `prayuktech.com` is not on Cloudflare, either move its DNS there, or skip the orange cloud: use a Let's Encrypt certificate instead (see 6.2) and skip steps 1 to 8 below.
+Add two `A` records at wherever `prayuktech.com`'s DNS is managed now (your registrar or Hostinger DNS), both pointing to this server's public IP (`AAAA` only if the server has IPv6 and you open it in the firewall):
 
-| Name | Purpose | Cloudflare proxy |
-| --- | --- | --- |
-| `vartiq.prayuktech.com` | the VartiQ web app, API and admin | **Proxied (orange cloud)** |
-| `turn.prayuktech.com` | the call relay | **DNS only (grey cloud)**: Cloudflare's proxy cannot carry call traffic |
+| Name | Purpose |
+| --- | --- |
+| `vartiq.prayuktech.com` | the VartiQ web app, API and admin |
+| `turn.prayuktech.com` | the call relay |
 
-Both point to the server's public IP (`A` record; add `AAAA` only if the server has IPv6 and you open it in the firewall).
+Use a short TTL (300) until everything works. Check from your own computer: `dig +short vartiq.prayuktech.com` and `dig +short turn.prayuktech.com` must both show the server IP before you ask for certificates in Phase 6. Do not touch the existing `examsuit.com` records.
 
-Cloudflare settings for `vartiq.prayuktech.com`:
-
-1. **SSL/TLS → Overview:** mode **Full (strict)**.
-2. **SSL/TLS → Origin Server → Create Certificate** for `vartiq.prayuktech.com` (15 years). Save the two files on the server (Phase 5):
-   `/etc/ssl/vartiq/origin.pem` and `/etc/ssl/vartiq/origin.key` (mode `600`).
-3. **Network:** WebSockets **On** (it is by default).
-4. **Caching → Configuration:** make sure `vartiq.prayuktech.com/api/*`, `/socket.io/*` and `/admin/*` are **not cached** (add a Cache Rule "Bypass cache" for those paths).
-5. **Speed → Optimization:** turn **off** Rocket Loader and Auto Minify for this hostname (they can break the app's scripts).
-6. **SSL/TLS → Edge Certificates:** Always Use HTTPS **On**; Minimum TLS **1.2**.
-7. **Security → WAF:** keep the managed rules on. Add a rule that **challenges or blocks** `vartiq.prayuktech.com/admin*` for everyone except your office IPs (or put `/admin` behind Cloudflare Access). The admin dashboard should never be open to the whole internet.
-8. If you use "Bot Fight Mode" or "Super Bot Fight", test the app with your phone before launch; if sign-in OTP calls get blocked, add a skip rule for `/api/v1/*`.
+Without Cloudflare, nothing sits in front of the server, so these protections matter more:
+- nginx rate limits (Phase 6) and the app's own limits are the first line of defence against abuse. A large flood attack would take the whole server, ExamSuit included, so decide early whether to add Cloudflare (free plan) for `vartiq.prayuktech.com` later: the app needs no change, only DNS, the real-IP snippet in 6.4, and `TRUST_PROXY=1` stays.
+- The admin dashboard is limited to your office IPs in nginx (6.2), so it is not open to the internet.
+- Hostinger's own network-level DDoS filtering applies to the server anyway; ask them what it covers.
 
 ---
 
@@ -358,35 +350,32 @@ Run the **ExamSuit check**.
 
 Use a **separate file**. Never edit ExamSuit's. Names starting with `vq_` avoid clashing with anything ExamSuit already defines (a duplicate `map` or `limit_req_zone` name would make `nginx -t` fail, which is exactly why you test first).
 
-### 6.1 Cloudflare addresses (so nginx logs and passes on the real visitor address)
-
-`/etc/nginx/snippets/vartiq-cloudflare-realip.conf` (a small script keeps it current):
-
-```bash
-sudo tee /usr/local/bin/vartiq-update-cf-ips >/dev/null <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-OUT=/etc/nginx/snippets/vartiq-cloudflare-realip.conf
-{
-  echo "# generated $(date -u +%F) from cloudflare.com/ips"
-  for u in https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6; do
-    curl -fsS "$u" | sed 's/^/set_real_ip_from /; s/$/;/'
-    echo
-  done
-  echo "real_ip_header CF-Connecting-IP;"
-} > "$OUT.new"
-mv "$OUT.new" "$OUT"
-nginx -t && systemctl reload nginx
-EOF
-sudo chmod +x /usr/local/bin/vartiq-update-cf-ips
-sudo mkdir -p /etc/nginx/snippets && sudo /usr/local/bin/vartiq-update-cf-ips
-```
-
 ### 6.2 The site
 
-Create it as `/etc/nginx/sites-available/vartiq` and enable it with a link (done in 6.3). nginx reads `conf.d/` *before* `sites-enabled/`, and the first server block for a port answers requests for unknown names. A file in `conf.d/` would therefore become the default site and take over ExamSuit's role; `sites-enabled/vartiq` sorts after `examsuit`, so ExamSuit stays the default.
+Create it as `/etc/nginx/sites-available/vartiq` and enable it with a link (6.3). nginx reads `conf.d/` *before* `sites-enabled/`, and the first server block for a port answers requests for unknown names. A file in `conf.d/` would therefore become the default site and take over ExamSuit's role; `sites-enabled/vartiq` sorts after `examsuit`, so ExamSuit stays the default.
 
-If `prayuktech.com` is **not** on Cloudflare: remove the `include .../vartiq-cloudflare-realip.conf;` line, do not use `TRUST_PROXY=1` blindly (keep it, nginx is still one proxy), and get a certificate without touching ExamSuit's: add a port-80 `location /.well-known/acme-challenge/ { root /var/www/html; }` to the first server block, then `sudo certbot certonly --webroot -w /var/www/html -d vartiq.prayuktech.com` and point `ssl_certificate` at `/etc/letsencrypt/live/vartiq.prayuktech.com/fullchain.pem` and `privkey.pem`. Do **not** use `certbot --nginx`: it rewrites nginx files.
+Do **not** use `certbot --nginx`: it rewrites nginx files. Certificates are requested with `certonly --webroot`, so nothing of ExamSuit's is changed. Because a certificate cannot exist before nginx answers the Let's Encrypt check, you do this in **two steps**.
+
+**Step 1 (HTTP only).** Put only this in `/etc/nginx/sites-available/vartiq`, then run 6.3 and the certificate commands below:
+
+```nginx
+server {
+    listen 80;
+    server_name vartiq.prayuktech.com turn.prayuktech.com;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://vartiq.prayuktech.com$request_uri; }
+}
+```
+
+```bash
+sudo mkdir -p /var/www/html/.well-known/acme-challenge
+sudo certbot certonly --webroot -w /var/www/html -d vartiq.prayuktech.com
+sudo certbot certonly --webroot -w /var/www/html -d turn.prayuktech.com   # used in 7.2
+```
+
+Certbot's renewal timer already exists on this server and renews these too. If it fails, the usual causes are the DNS records not pointing here yet, or port 80 blocked; nothing was changed for ExamSuit.
+
+**Step 2 (the full site).** Replace the file with the following and run 6.3 again:
 
 ```nginx
 # WebSocket upgrade (names are unique to VartiQ)
@@ -397,8 +386,9 @@ limit_req_zone $binary_remote_addr zone=vq_auth:10m rate=10r/s;
 
 server {
     listen 80;
-    server_name vartiq.prayuktech.com;
-    return 301 https://$host$request_uri;
+    server_name vartiq.prayuktech.com turn.prayuktech.com;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://vartiq.prayuktech.com$request_uri; }
 }
 
 server {
@@ -406,16 +396,25 @@ server {
     server_name vartiq.prayuktech.com;
     # nginx 1.25.1 or newer: add the line  http2 on;  (older versions: write  listen 443 ssl http2;  above instead)
 
-    ssl_certificate     /etc/ssl/vartiq/origin.pem;
-    ssl_certificate_key /etc/ssl/vartiq/origin.key;
+    ssl_certificate     /etc/letsencrypt/live/vartiq.prayuktech.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vartiq.prayuktech.com/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
-    include /etc/nginx/snippets/vartiq-cloudflare-realip.conf;
+    # (Cloudflare real-IP include: only if you add Cloudflare later, see 6.4)
 
     client_max_body_size 5m;                 # voice notes and photos are small
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Admin dashboard and its API: only from your office/home addresses (replace the examples)
+    location /admin {
+        allow 203.0.113.10;       # example: your office IP
+        allow 198.51.100.20;      # example: your home IP
+        deny all;
+        proxy_pass http://127.0.0.1:3100;
+        include /etc/nginx/snippets/vartiq-proxy.conf;
+    }
 
     location /api/v1/auth/ {
         limit_req zone=vq_auth burst=30 nodelay;
@@ -444,14 +443,6 @@ proxy_send_timeout 3600s;
 proxy_buffering off;
 ```
 
-Put the Cloudflare **origin certificate** from Phase 2 in place first:
-
-```bash
-sudo mkdir -p /etc/ssl/vartiq && sudo nano /etc/ssl/vartiq/origin.pem   # paste certificate
-sudo nano /etc/ssl/vartiq/origin.key                                    # paste private key
-sudo chmod 600 /etc/ssl/vartiq/origin.key
-```
-
 ### 6.3 Test, then load. Never restart.
 
 ```bash
@@ -463,6 +454,33 @@ sudo systemctl reload nginx
 If `nginx -t` fails, **do not reload**. Read the message (usually a duplicate name or a missing certificate), fix `sites-available/vartiq`, and test again. `reload` swaps the configuration without dropping ExamSuit's connections. If you cannot fix it quickly: `sudo rm /etc/nginx/sites-enabled/vartiq` and ExamSuit is exactly as before. (A failed test with the link in place only blocks *later* reloads, so remove the link first if you must leave it for a while.)
 
 Run the **ExamSuit check**, then open `https://vartiq.prayuktech.com`. You should see the VartiQ sign-in page.
+
+### 6.4 If you add Cloudflare later
+
+In Cloudflare set SSL mode **Full (strict)**, proxy only `vartiq.prayuktech.com` (orange cloud; keep `turn.prayuktech.com` grey), turn off Rocket Loader and Auto Minify, and bypass cache for `/api/*`, `/socket.io/*`, `/admin/*`. Then add the real-visitor-address step so nginx and rate limits see people, not Cloudflare:
+
+`/etc/nginx/snippets/vartiq-cloudflare-realip.conf` (a small script keeps it current), and put `include /etc/nginx/snippets/vartiq-cloudflare-realip.conf;` back into the `vartiq` 443 server block:
+
+```bash
+sudo tee /usr/local/bin/vartiq-update-cf-ips >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+OUT=/etc/nginx/snippets/vartiq-cloudflare-realip.conf
+{
+  echo "# generated $(date -u +%F) from cloudflare.com/ips"
+  for u in https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6; do
+    curl -fsS "$u" | sed 's/^/set_real_ip_from /; s/$/;/'
+    echo
+  done
+  echo "real_ip_header CF-Connecting-IP;"
+} > "$OUT.new"
+mv "$OUT.new" "$OUT"
+nginx -t && systemctl reload nginx
+EOF
+sudo chmod +x /usr/local/bin/vartiq-update-cf-ips
+sudo mkdir -p /etc/nginx/snippets && sudo /usr/local/bin/vartiq-update-cf-ips
+```
+
 
 *If ExamSuit is not behind nginx:* Apache needs `mod_proxy`, `mod_proxy_wstunnel` and `ProxyPass "/socket.io/" "ws://127.0.0.1:3100/socket.io/"` plus `ProxyPass "/" "http://127.0.0.1:3100/"` and `ProxyPreserveHost On` in a new `VirtualHost` file; Docker/Traefik/Caddy users add a router for `vartiq.prayuktech.com` to `127.0.0.1:3100` with WebSocket support. The rules are the same: separate file, test first, reload not restart, and pass the real visitor address (`TRUST_PROXY`).
 
@@ -524,20 +542,9 @@ Put the same secret in `/etc/vartiq/vartiq.env` (`TURN_SECRET`, `TURN_URLS`) and
 
 ### 7.2 TURN over TLS (recommended from day one)
 
-Many school, college and office networks block UDP. TURN over TLS on port 5349 lets calls work there. It needs a certificate for `turn.prayuktech.com` (DNS only, pointing at this server). Get it **without touching ExamSuit's nginx file**, using a tiny extra block in your own `sites-available/vartiq`:
-
-```nginx
-server {                      # add to /etc/nginx/sites-available/vartiq
-    listen 80;
-    server_name turn.prayuktech.com;
-    location /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 404; }
-}
-```
+Many school, college and office networks block UDP. TURN over TLS on port 5349 lets calls work there. It needs a certificate for `turn.prayuktech.com`, which you already requested in Phase 6 (Step 1; the port-80 block there also answers the Let's Encrypt check for this name, so ExamSuit's nginx file is never touched). Now let coturn read it and keep it fresh at every renewal:
 
 ```bash
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot certonly --webroot -w /var/www/html -d turn.prayuktech.com
 # let coturn read the certificate, and keep it fresh at every renewal
 sudo mkdir -p /etc/coturn/certs
 sudo tee /etc/letsencrypt/renewal-hooks/deploy/coturn.sh >/dev/null <<'EOF'
@@ -632,7 +639,7 @@ Use a staff phone on mobile data, and a laptop on Wi-Fi.
 
 1. `https://vartiq.prayuktech.com` loads with a valid lock icon; `http://` redirects to `https://`.
 2. `https://vartiq.prayuktech.com/legal/privacy` and `/legal/terms` show **your company details, no `[square brackets]`**.
-3. `https://vartiq.prayuktech.com/admin` is blocked for the public (Cloudflare rule) and works for you. Sign in; the Overview shows no "Legal details are missing" warning.
+3. `https://vartiq.prayuktech.com/admin` is blocked for the public (your office IPs only, in nginx) and works for you. Sign in; the Overview shows no "Legal details are missing" warning.
 4. Sign up with a real mobile number: the SMS arrives, you must tick the consent box, the account is created.
 5. Open two accounts on two devices, send text and a voice note, see delivery ticks. Reload: the chat history is still there (PostgreSQL works).
 6. **Restart test:** `sudo systemctl restart vartiq`; the app reconnects by itself and **nobody is logged out** (sessions are saved in the database).
@@ -691,4 +698,4 @@ To remove VartiQ completely later: disable the services, remove `/opt/vartiq`, `
 - **One server, one process.** A hardware or Hostinger outage takes both ExamSuit and VartiQ down. Daily backups and snapshots limit the damage; a second machine is the real fix.
 - **Calls use the server's bandwidth** when they need the relay. Large group video calls are not supported well (everyone sends video to everyone).
 - **A shared server means shared risk.** If a busy VartiQ day or exam day pushes memory or CPU too high, the limits in the service file keep VartiQ from taking more than its share, and `Nice` gives ExamSuit priority, but the machine is still shared. If you see ExamSuit slow down, lower `CPUQuota` or move VartiQ to its own server.
-- **Cloudflare is a middleman for chat traffic** (HTTPS is ended at Cloudflare). Messages typed in the web app are still end-to-end encrypted, but Cloudflare can see who connects and the unencrypted parts (API messages, public channels, status updates). The Privacy Notice already says which parts are not end-to-end encrypted; tell your lawyer that Cloudflare is one of your providers.
+- **No Cloudflare means no shield in front of the server.** A flood of traffic hits the server (and so ExamSuit) directly. The nginx limits, the admin allow list and Hostinger's network filtering help, but if you see abuse, adding Cloudflare to `vartiq.prayuktech.com` is a DNS-only change (6.4). Without it, HTTPS ends on your own server and no third party sees the traffic.
