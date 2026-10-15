@@ -265,8 +265,9 @@ test('deleting an account: permanently disabled at once, chats and personal data
   // The erase step (the server runs it by itself within the deadline).
   store.data.users[ua].deletion.eraseAt = Date.now() - 1;
   assert.deepStrictEqual(app.service.eraseDueAccounts(), [ua]);
-  const tomb = store.data.users[ua];
-  assert.deepStrictEqual(Object.keys(tomb).sort(), ['about', 'consent', 'createdAt', 'deletedAt', 'disabledAt', 'displayName', 'lastSeen', 'status', 'username'], 'a basic record: no phone, email, name, settings, keys, chats or media');
+  const tomb = store.data.archivedUsers[ua];
+  assert.strictEqual(store.data.users[ua], undefined, 'moved out of the live users');
+  assert.deepStrictEqual(Object.keys(tomb).sort(), ['about', 'archivedAt', 'consent', 'createdAt', 'deletedAt', 'disabledAt', 'displayName', 'lastSeen', 'status', 'username'], 'a basic archived record: no phone, email, name, settings, keys, chats or media');
   assert.deepStrictEqual([tomb.status, tomb.displayName, tomb.consent.accepted], ['permanently_disabled', 'Deleted account', ['terms']], 'the record of consent is kept');
   assert.strictEqual(store.findByEmail('asha@example.com'), null);
   const left = store.getMessages(dm.id, ub);
@@ -274,7 +275,17 @@ test('deleting an account: permanently disabled at once, chats and personal data
   assert.ok(!JSON.stringify(store.data).includes('a secret from asha') && !JSON.stringify(store.data).includes('group hello') && !JSON.stringify(store.data).includes('my status'));
   assert.deepStrictEqual([store.data.conversations[group.id].members.sort(), store.data.conversations[group.id].owner === ua], [[ub, uc].sort(), false]);
   assert.deepStrictEqual([store.data.channels[channel.id], Object.values(store.data.statuses).length, Object.values(store.data.apiKeys).length], [undefined, 0, 0]);
-  assert.strictEqual(store.stats().users.deleting, 0);
+  assert.deepStrictEqual([store.stats().users.deleting, store.stats().users.deleted], [0, 1]);
+  assert.strictEqual(store.publicUser(ua).displayName, 'Deleted account', 'other people\'s chats still resolve');
+  assert.deepStrictEqual(store.listUsers({ filter: 'deleted' }).users.map((x) => [x.username, x.status]), [[ua, 'permanently_disabled']]);
+  assert.ok(!store.listUsers({}).users.some((x) => x.username === ua), 'not among the live users');
+
+  // No duplicates: the archived username is reserved, so a new account with the same name gets another one and none of the old chats.
+  const twin = await signup('Asha Rao', '+919811100071');
+  assert.strictEqual(twin.status, 201, twin.text);
+  assert.notStrictEqual(twin.body.user.username, ua);
+  assert.throws(() => store.registerVerified({ displayName: 'Asha Rao', username: ua, phone: '+919811100072' }), /already taken/);
+  assert.strictEqual((await api('GET', '/conversations', { token: twin.body.token })).body.conversations.length, 0, 'the new account does not inherit the old chats');
 
 });
 
@@ -283,8 +294,8 @@ test('the server erases a closed account by itself, within the deadline', async 
   const a = (await signup('Asha Rao', '+919811100061')).body;
   const res = await deleteWith(api, codeFor, a.token, '+919811100061');
   assert.strictEqual(res.status, 200);
-  for (let i = 0; i < 40 && !store.data.users[a.user.username].deletedAt; i++) await new Promise((r) => setTimeout(r, 25));
-  assert.ok(store.data.users[a.user.username].deletedAt, 'erased without anybody asking');
+  for (let i = 0; i < 40 && !store.data.archivedUsers[a.user.username]; i++) await new Promise((r) => setTimeout(r, 25));
+  assert.ok(store.data.archivedUsers[a.user.username]?.deletedAt, 'erased and archived without anybody asking');
   assert.strictEqual(store.findByPhone('+919811100061'), null);
 });
 

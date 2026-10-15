@@ -16,7 +16,7 @@ class Store {
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000, persistence = null, initialData = null, mediaDir } = {}) {
     this.statusTtlMs = statusTtlMs;
     this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
-    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
+    this.data = { users: {}, archivedUsers: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     this.sessions = new Map(); // token -> username
     // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
     this.mediaDir = mediaDir || (this.file ? path.join(path.dirname(this.file), 'media') : null);
@@ -42,7 +42,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
+      this.data = { users: {}, archivedUsers: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
       this._convIdx = null;
       this._contactIdx = null;
     } catch (err) {
@@ -224,7 +224,7 @@ class Store {
   /** Is this account closed (deletion requested, or already erased)? */
   isClosed(username) {
     const u = this.data.users[username];
-    return !!(u && (u.deletion || u.deletedAt));
+    return !!((u && (u.deletion || u.deletedAt)) || this.data.archivedUsers[username]);
   }
 
   /** Accounts whose deletion was requested and whose data is due to be erased now. */
@@ -304,8 +304,11 @@ class Store {
     }
     for (const [id, meta] of Object.entries(this.data.media)) if (meta.publicBy === username) this.deleteMedia(id);
 
-    // What stays is a basic record that the account existed, marked permanently disabled: no chats, media or personal data.
-    this.data.users[username] = {
+    // The account leaves the live users and goes to the archive: a basic record that it existed, marked permanently
+    // disabled, with no chats, media or personal data. Its username stays reserved there, so a new account can never
+    // get it (and so never inherits the old chats); other people's chats keep showing "Deleted account".
+    delete this.data.users[username];
+    this.data.archivedUsers[username] = {
       username,
       displayName: 'Deleted account',
       about: '',
@@ -314,6 +317,7 @@ class Store {
       status: 'permanently_disabled',
       disabledAt: u.deletion?.requestedAt || now,
       deletedAt: now,
+      archivedAt: now,
       ...(u.consent ? { consent: u.consent } : {}),
       ...(u.subscription ? { subscription: u.subscription } : {}),
       ...(u.verifiedAt ? { verifiedAt: u.verifiedAt } : {}),
@@ -434,7 +438,11 @@ class Store {
   /** One page of users for the dashboard. */
   listUsers({ q = '', filter = '', page = 1, pageSize = 25 } = {}) {
     q = String(q).trim().toLowerCase();
-    let list = Object.values(this.data.users).filter((u) => (filter === 'deleted' ? (u.deletedAt || u.deletion) : !(u.deletedAt || u.deletion))).filter((u) => !q
+    // "Permanently disabled": accounts waiting for their data to be erased, plus the archive.
+    const source = filter === 'deleted'
+      ? [...Object.values(this.data.users).filter((u) => u.deletion), ...Object.values(this.data.archivedUsers)]
+      : Object.values(this.data.users).filter((u) => !(u.deletedAt || u.deletion));
+    let list = source.filter((u) => !q
       || u.username.includes(q) || u.displayName.toLowerCase().includes(q) || (u.phone || '').includes(q) || (u.email || '').includes(q));
     if (filter === 'premium') list = list.filter((u) => this.isPremium(u.username));
     else if (filter === 'verified') list = list.filter((u) => u.verifiedAt);
@@ -449,7 +457,7 @@ class Store {
 
   /** What administrators see of an account (contact details included; never password hashes or keys). */
   adminUserView(username) {
-    const u = this.data.users[username];
+    const u = this.data.users[username] || this.data.archivedUsers[username];
     if (!u) return null;
     return {
       username: u.username,
@@ -503,7 +511,7 @@ class Store {
     return {
       users: {
         total: users.length,
-        deleted: everyone.filter((u) => u.deletedAt).length,
+        deleted: Object.keys(this.data.archivedUsers).length,
         deleting: everyone.filter((u) => u.deletion && !u.deletedAt).length,
         deletionOverdue: everyone.filter((u) => u.deletion && !u.deletedAt && Date.now() - u.deletion.requestedAt > 24 * 3600 * 1000).length,
         online: onlineCount,
@@ -546,7 +554,7 @@ class Store {
     if (!password || String(password).length < 4) {
       throw new Error('Password must be at least 4 characters');
     }
-    if (this.data.users[username]) throw new Error('Username already taken');
+    if (this._nameTaken(username)) throw new Error('Username already taken');
     const salt = crypto.randomBytes(16).toString('hex');
     this.data.users[username] = {
       username,
@@ -576,7 +584,7 @@ class Store {
     if (username) {
       username = String(username).trim().toLowerCase();
       if (!/^[a-z0-9_.]{3,20}$/.test(username)) throw new Error('Username must be 3-20 characters: letters, numbers, "_" or "."');
-      if (this.data.users[username]) throw new Error('Username already taken');
+      if (this._nameTaken(username)) throw new Error('Username already taken');
     } else {
       username = this._freeUsername(displayName);
     }
@@ -605,13 +613,18 @@ class Store {
   }
 
   /** "Anita's Café" -> "anitascafe", or "anitascafe4821" when taken. */
+  /** Is this username in use, by a live account or by one that was permanently disabled and archived? */
+  _nameTaken(name) {
+    return !!this.data.users[name] || !!this.data.archivedUsers[name];
+  }
+
   _freeUsername(displayName) {
     let base = displayName.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14);
     if (base.length < 3) base = `user${base}`;
-    if (!this.data.users[base]) return base;
+    if (!this._nameTaken(base)) return base;
     for (;;) {
       const candidate = `${base}${crypto.randomInt(1000, 1000000)}`;
-      if (!this.data.users[candidate]) return candidate;
+      if (!this._nameTaken(candidate)) return candidate;
     }
   }
 
@@ -835,7 +848,7 @@ class Store {
 
   publicUser(username) {
     const u = this.data.users[username];
-    if (!u) return null;
+    if (!u) return this.data.archivedUsers[username] ? { username, displayName: 'Deleted account', about: '', lastSeen: null, deleted: true } : null;
     if (u.deletion || u.deletedAt) return { username: u.username, displayName: 'Deleted account', about: '', lastSeen: null, deleted: true };
     const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
     if (u.business) out.business = { ...Store._publicBusiness(u.business), productCount: (u.catalogue?.products || []).length };
