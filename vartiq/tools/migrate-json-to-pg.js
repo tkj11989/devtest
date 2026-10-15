@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { Store } = require('../server/store');
 
-const DOC_MAPS = ['users', 'archivedUsers', 'conversations', 'media', 'statuses', 'apiKeys', 'webhooks', 'channels', 'admins'];
+const DOC_MAPS = ['users', 'archivedUsers', 'sessions', 'conversations', 'media', 'statuses', 'apiKeys', 'webhooks', 'channels', 'admins'];
 const LIST_MAPS = ['messages', 'channelPosts'];
 const SINGLES = ['settings', 'reports', 'audit'];
 

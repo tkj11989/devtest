@@ -128,7 +128,7 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
 
   router.post('/users/:username/logout', auth, run((req) => {
     const u = user(req);
-    for (const [t, name] of store.sessions) if (name === u.username) store.sessions.delete(t);
+    store.dropSessionsOf(u.username);
     io.in(`user:${u.username}`).disconnectSockets(true);
     log(req, 'force-logout', u.username, null);
     return { user: store.adminUserView(u.username) };

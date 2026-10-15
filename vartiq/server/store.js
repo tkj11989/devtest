@@ -16,8 +16,7 @@ class Store {
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000, persistence = null, initialData = null, mediaDir } = {}) {
     this.statusTtlMs = statusTtlMs;
     this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
-    this.data = { users: {}, archivedUsers: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
-    this.sessions = new Map(); // token -> username
+    this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
     this.mediaDir = mediaDir || (this.file ? path.join(path.dirname(this.file), 'media') : null);
     this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
@@ -42,7 +41,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, archivedUsers: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
+      this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
       this._convIdx = null;
       this._contactIdx = null;
     } catch (err) {
@@ -214,7 +213,7 @@ class Store {
     delete u.phone;
     delete u.email;
     this._contactIdx = null;
-    for (const [token, name] of this.sessions) if (name === username) this.sessions.delete(token);
+    this.dropSessionsOf(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
     for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
     this._save();
@@ -243,7 +242,7 @@ class Store {
     const u = this.data.users[username];
     if (!u || u.deletedAt) throw new Error('No such account');
     const now = Date.now();
-    for (const [token, name] of this.sessions) if (name === username) this.sessions.delete(token);
+    this.dropSessionsOf(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
     for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
 
@@ -404,7 +403,7 @@ class Store {
     const u = this.data.users[username];
     if (!u) throw Object.assign(new Error('User not found'), { status: 404 });
     u.suspended = { at: Date.now(), reason: String(reason || '').trim().slice(0, 200), by };
-    for (const [t, name] of this.sessions) if (name === username) this.sessions.delete(t);
+    this.dropSessionsOf(username);
     this._save();
   }
 
@@ -685,14 +684,38 @@ class Store {
     const sus = this.data.users[username]?.suspended;
     if (sus) throw Object.assign(new Error(`This account is suspended${sus.reason ? `: ${sus.reason}` : ''}`), { status: 403, code: 'account_suspended' });
     const token = crypto.randomBytes(24).toString('hex');
-    this.sessions.set(token, username);
+    this.data.sessions[Store._tokenKey(token)] = { u: username, at: Date.now() };
+    this._save();
     return { token, user: this.publicUser(username) };
+  }
+
+  // Login sessions are saved with the rest of the data (only a hash of each token), so restarting the server does not log
+  // everybody out. A session lasts `Store.SESSION_MS` (90 days) from login.
+  static _tokenKey(token) {
+    return crypto.createHash('sha256').update(String(token)).digest('hex');
+  }
+
+  /** Who a login session token belongs to, or null (unknown, expired or logged out). */
+  sessionUser(token) {
+    const key = Store._tokenKey(token);
+    const s = this.data.sessions[key];
+    if (!s) return null;
+    if (Date.now() - s.at > Store.SESSION_MS) {
+      delete this.data.sessions[key];
+      return null;
+    }
+    return s.u;
+  }
+
+  /** End every login session of one person. */
+  dropSessionsOf(username) {
+    for (const [key, s] of Object.entries(this.data.sessions)) if (s.u === username) delete this.data.sessions[key];
   }
 
   /** A login session token or an API key, as sent in `Authorization: Bearer …`. */
   userForToken(token) {
     if (!token) return null;
-    const session = this.sessions.get(token);
+    const session = this.sessionUser(token);
     if (session) return this.data.users[session]?.suspended ? null : session;
     if (!String(token).startsWith(Store.API_KEY_PREFIX)) return null;
     const hash = Store._keyHash(token);
@@ -843,7 +866,8 @@ class Store {
   }
 
   logout(token) {
-    this.sessions.delete(token);
+    delete this.data.sessions[Store._tokenKey(token)];
+    this._save();
   }
 
   publicUser(username) {
@@ -2208,6 +2232,7 @@ Store.TIMER_MIN = 60;
 Store.TIMER_MAX = 365 * 24 * 60 * 60;
 Store.API_KEY_PREFIX = 'cak_';
 Store.MAX_API_KEYS = 10;
+Store.SESSION_MS = 90 * 24 * 60 * 60 * 1000;
 Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */

@@ -21,7 +21,7 @@
 const RAW = Symbol('raw');
 
 // How each top-level part of the data is saved.
-const DOC_MAPS = new Set(['users', 'archivedUsers', 'conversations', 'media', 'statuses', 'apiKeys', 'webhooks', 'channels', 'admins']); // { id: record }
+const DOC_MAPS = new Set(['users', 'archivedUsers', 'sessions', 'conversations', 'media', 'statuses', 'apiKeys', 'webhooks', 'channels', 'admins']); // { id: record }
 const LIST_MAPS = new Set(['messages', 'channelPosts']); // { key: [records with an id] }
 const SINGLES = new Set(['settings', 'reports', 'audit']); // one value each
 

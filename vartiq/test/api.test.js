@@ -314,3 +314,14 @@ test('api: every route is documented in the OpenAPI spec, and vice versa', async
   assert.deepStrictEqual([...routes].filter((r) => !documented.has(r)), [], 'routes missing from the spec');
   assert.deepStrictEqual([...documented].filter((r) => !routes.has(r)), [], 'spec paths with no route');
 });
+
+test('behind a proxy: rate limits count each visitor by the forwarded address, not the proxy', async (t) => {
+  const store = new Store({ file: null });
+  const app = createApp({ store, trustProxy: 'loopback', rateLimit: { authMax: 2, windowMs: 60000 } });
+  await new Promise((r) => app.server.listen(0, r));
+  t.after(() => { app.io.close(); app.server.close(); });
+  const base = `http://localhost:${app.server.address().port}/api/v1`;
+  const hit = (ip) => fetch(`${base}/auth/otp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify({ purpose: 'login', phone: '+919876543210' }) }).then((r) => r.status);
+  assert.deepStrictEqual([await hit('203.0.113.7'), await hit('203.0.113.7'), await hit('203.0.113.7')], [404, 404, 429], 'the third request from one visitor is limited');
+  assert.strictEqual(await hit('198.51.100.9'), 404, 'another visitor is not affected');
+});

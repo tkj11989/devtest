@@ -418,7 +418,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     me(me) {
       return {
         user: store.publicUser(me),
-        iceServers,
+        iceServers: typeof iceServers === 'function' ? iceServers(me) : iceServers,
         blocked: store.blockedList(me),
         defaultDisappear: store.defaultDisappear(me),
         business: store.getBusiness(me),

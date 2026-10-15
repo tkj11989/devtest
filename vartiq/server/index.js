@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const http = require('http');
 const https = require('https');
@@ -21,6 +22,18 @@ const { createPayments, createPaymentGateway, plansFromEnv } = require('./paymen
 // STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
 // e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'
 function iceServersFromEnv() {
+  // Your own TURN server (coturn with use-auth-secret): every person gets short-lived credentials, so the relay
+  // cannot be used by strangers. TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349 TURN_SECRET=... [TURN_TTL_SECONDS=86400]
+  if (process.env.TURN_URLS && process.env.TURN_SECRET) {
+    const urls = process.env.TURN_URLS.split(',').map((u) => u.trim()).filter(Boolean);
+    const ttl = Number(process.env.TURN_TTL_SECONDS) || 24 * 60 * 60;
+    const stun = urls.filter((u) => u.startsWith('turn:')).map((u) => u.replace(/^turn:/, 'stun:').replace(/\?.*$/, '')); // STUN addresses take no ?transport=
+    return (username) => {
+      const name = `${Math.floor(Date.now() / 1000) + ttl}:${username}`;
+      const credential = crypto.createHmac('sha1', process.env.TURN_SECRET).update(name).digest('base64');
+      return [{ urls: [...new Set(stun)] }, { urls, username: name, credential }];
+    };
+  }
   if (process.env.ICE_SERVERS) {
     try {
       return JSON.parse(process.env.ICE_SERVERS);
@@ -138,6 +151,7 @@ const SOCKET_ACTIONS = {
  *   webhooks         { allowPrivate, retryDelaysMs } for webhook delivery
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
+ *   trustProxy       Express `trust proxy` setting (env TRUST_PROXY) so the real client address is used behind nginx/Cloudflare
  *   messageSweepMs   how often expired disappearing messages are removed
  *   accountEraseDelayMs  how long after a deletion request the account's data is erased (default 1 hour; never more than 24 hours)
  *   kyc              { gateway, sandbox } for identity verification (see kyc.js; KYC_WEBHOOK_URL, KYC_SANDBOX=1)
@@ -162,8 +176,12 @@ function createApp({
   payments: paymentOptions = {},
   admin: adminOptions = {},
   translate: translateOptions = {},
+  trustProxy = process.env.TRUST_PROXY,
 } = {}) {
   const app = express();
+  // Behind nginx or Cloudflare every request comes from the proxy: trust its forwarded address, or the sign-in rate limits
+  // would treat all visitors as one person. TRUST_PROXY: `loopback` (one proxy on this machine), a number of proxies, or a list of addresses.
+  if (trustProxy !== undefined && trustProxy !== '') app.set('trust proxy', /^\d+$/.test(String(trustProxy)) ? Number(trustProxy) : trustProxy);
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
   // Voice messages and status photos are uploaded over the socket.
   const io = new Server(server, { maxHttpBufferSize: 4 * 1024 * 1024 });
@@ -373,8 +391,10 @@ if (require.main === module) {
       ? await Store.open({ databaseUrl: process.env.DATABASE_URL, mediaDir: process.env.MEDIA_DIR })
       : new Store();
     const { server } = createApp({ tls, store });
-    server.listen(port, () => {
-      console.log(`VartiQ running at ${tls ? 'https' : 'http'}://localhost:${port}`);
+    // HOST=127.0.0.1 keeps the app reachable only through nginx on the same machine (recommended in production).
+    const host = process.env.HOST || undefined;
+    server.listen(port, host, () => {
+      console.log(`VartiQ running at ${tls ? 'https' : 'http'}://${host || 'localhost'}:${port}`);
       console.log(process.env.DATABASE_URL ? 'Data: PostgreSQL' : 'Data: data/db.json (set DATABASE_URL to use PostgreSQL)');
       if (!process.env.OTP_WEBHOOK_URL) console.log('Login codes are printed here (set OTP_WEBHOOK_URL to send real SMS/email).');
       if (process.env.OTP_DEV_CODES === '1') console.warn('OTP_DEV_CODES=1: login codes are also shown in the app. Never use this in production.');

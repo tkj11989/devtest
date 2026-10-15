@@ -362,6 +362,8 @@ The web app keeps a copy of each chat in the browser (IndexedDB, one database pe
 - Profile → **Chats on this device** switches saving off or clears it. Logging out deletes it.
 - The server stays the master copy, so a new device or browser still shows the full history after login. This is a cache, not a backup, and it does not make the app work offline.
 
+**Deploying for real (a shared server that already runs another app, nginx, Cloudflare, calls through your own TURN server, backups): see [docs/DEPLOYMENT-KVM4.md](docs/DEPLOYMENT-KVM4.md).** Production settings worth knowing: `HOST=127.0.0.1` (listen only for the local web server), `TRUST_PROXY=loopback` (use the real visitor address behind nginx/Cloudflare), `TURN_URLS` + `TURN_SECRET` (short-lived call-relay credentials for your own coturn server). Login sessions are saved in the database (only a hash of each token) and last 90 days, so a restart does not log anyone out.
+
 ## PostgreSQL storage (for production)
 
 By default VartiQ keeps its data in `data/db.json`. For real use set `DATABASE_URL` and the data lives in PostgreSQL instead:
