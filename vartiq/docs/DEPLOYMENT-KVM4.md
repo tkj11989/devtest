@@ -272,7 +272,7 @@ LEGAL_CITY=City for courts
 LEGAL_HOSTING=India (your data centre location)
 
 # ---- calls (Phase 7): short-lived credentials for your own TURN server
-TURN_URLS=turn:turn.prayuktech.com:3478?transport=udp,turn:turn.prayuktech.com:3478?transport=tcp
+TURN_URLS=turn:turn.prayuktech.com:3478?transport=udp,turn:turn.prayuktech.com:3478?transport=tcp,turns:turn.prayuktech.com:5349?transport=tcp   # last one: after 7.2
 TURN_SECRET=THE-SAME-SECRET-AS-IN-coturn
 TURN_TTL_SECONDS=86400
 
@@ -470,7 +470,7 @@ Run the **ExamSuit check**, then open `https://vartiq.prayuktech.com`. You shoul
 
 ## Phase 7. Calls (coturn)
 
-Without a relay, many calls on mobile networks fail. Install the relay and **limit it so it cannot eat the server's bandwidth**.
+**Voice and video calls are on from day one, so this phase is required before launch** (do it before Phase 10, whose call test must pass). Without a relay, many calls on mobile networks, campus and office Wi-Fi fail. Install the relay and **limit it so it cannot eat the server's bandwidth**. On your server nothing else uses 3478 or the relay ports, and the `denied-peer-ip` list below also blocks Docker's internal networks (172.16.0.0/12), so the relay cannot be used to reach ExamSuit's containers or databases.
 
 ```bash
 sudo apt-get install -y coturn
@@ -520,7 +520,36 @@ sudo systemctl enable --now coturn
 sudo ss -ulnp | grep 3478; sudo ss -tlnp | grep 3478
 ```
 
-Put the same secret in `/etc/vartiq/vartiq.env` (`TURN_SECRET`, `TURN_URLS`) and `sudo systemctl restart vartiq`. Each person's app then gets credentials that expire after `TURN_TTL_SECONDS`, so strangers cannot use your relay. (TURN over TLS on port 5349 helps people on networks that block UDP; add it later with a certificate for `turn.prayuktech.com`, for example from `certbot certonly --dns-cloudflare`.)
+Put the same secret in `/etc/vartiq/vartiq.env` (`TURN_SECRET`, `TURN_URLS`) and `sudo systemctl restart vartiq`. Each person's app then gets credentials that expire after `TURN_TTL_SECONDS`, so strangers cannot use your relay.
+
+### 7.2 TURN over TLS (recommended from day one)
+
+Many school, college and office networks block UDP. TURN over TLS on port 5349 lets calls work there. It needs a certificate for `turn.prayuktech.com` (DNS only, pointing at this server). Get it **without touching ExamSuit's nginx file**, using a tiny extra block in your own `sites-available/vartiq`:
+
+```nginx
+server {                      # add to /etc/nginx/sites-available/vartiq
+    listen 80;
+    server_name turn.prayuktech.com;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 404; }
+}
+```
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot certonly --webroot -w /var/www/html -d turn.prayuktech.com
+# let coturn read the certificate, and keep it fresh at every renewal
+sudo mkdir -p /etc/coturn/certs
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/coturn.sh >/dev/null <<'EOF'
+#!/bin/sh
+install -m 640 -o root -g turnserver /etc/letsencrypt/live/turn.prayuktech.com/fullchain.pem /etc/coturn/certs/fullchain.pem
+install -m 640 -o root -g turnserver /etc/letsencrypt/live/turn.prayuktech.com/privkey.pem /etc/coturn/certs/privkey.pem
+systemctl restart coturn
+EOF
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/coturn.sh && sudo /etc/letsencrypt/renewal-hooks/deploy/coturn.sh
+```
+
+Add to `/etc/turnserver.conf`: `tls-listening-port=5349`, `cert=/etc/coturn/certs/fullchain.pem`, `pkey=/etc/coturn/certs/privkey.pem`, `no-tlsv1`, `no-tlsv1_1`; then `sudo systemctl restart coturn`. In `/etc/vartiq/vartiq.env` extend `TURN_URLS` with `,turns:turn.prayuktech.com:5349?transport=tcp` and restart VartiQ. (Certbot's renewal timer already exists on this server; it will renew this certificate too and run the hook. Restarting coturn only drops calls that were using the relay at that moment, about every 60 days.)
 
 **Bandwidth reality check:** one relayed 720p video call is about 3 Mbit/s in total. 100 such calls is about 300 Mbit/s. Ask Hostinger what network speed and monthly transfer your plan includes and keep `total-quota` below what it can carry. Most calls connect directly and never touch the relay.
 
@@ -534,6 +563,7 @@ Open **only** what is new. Do not remove or reorder existing rules. In whichever
 | --- | --- | --- | --- |
 | 80, 443 | TCP | anywhere (already open for ExamSuit) | the web app |
 | 3478 | UDP and TCP | anywhere | TURN |
+| 5349 | TCP | anywhere | TURN over TLS (7.2) |
 | 50000-50499 | UDP | anywhere | TURN relay range |
 | 3100 | TCP | **nobody** | VartiQ listens on 127.0.0.1 only |
 | 5432 / 5433 | TCP | **nobody** | PostgreSQL |
@@ -542,6 +572,7 @@ Open **only** what is new. Do not remove or reorder existing rules. In whichever
 # only if you use ufw, and only these lines:
 sudo ufw allow 3478/udp
 sudo ufw allow 3478/tcp
+sudo ufw allow 5349/tcp
 sudo ufw allow 50000:50499/udp
 sudo ufw status numbered
 ```
