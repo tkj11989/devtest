@@ -1,4 +1,4 @@
-# ChatApp — a real-time messenger
+# VartiQ — a real-time messenger
 
 A real-time chat application built with **Node.js**, **Express** and **Socket.IO**, with a dependency-free vanilla JS frontend.
 
@@ -43,7 +43,7 @@ All colours are CSS variables at the top of `public/styles.css`; text and backgr
 ## Getting started
 
 ```bash
-cd chatapp
+cd vartiq
 npm install
 npm start          # http://localhost:3000  (set PORT to change)
 ```
@@ -71,11 +71,11 @@ There are no passwords. You sign up and log in with a 6-digit code:
 
 ### Sending real SMS and email
 
-Set `OTP_WEBHOOK_URL` and ChatApp POSTs every code to it as JSON, so you can plug in any provider (Twilio, MSG91, Gupshup, SendGrid, Amazon SES/SNS…) with a small relay:
+Set `OTP_WEBHOOK_URL` and VartiQ POSTs every code to it as JSON, so you can plug in any provider (Twilio, MSG91, Gupshup, SendGrid, Amazon SES/SNS…) with a small relay:
 
 ```json
 { "channel": "sms", "to": "+919876543210", "code": "482913", "purpose": "login",
-  "text": "482913 is your ChatApp verification code. It expires in 5 minutes. Never share it with anyone." }
+  "text": "482913 is your VartiQ verification code. It expires in 5 minutes. Never share it with anyone." }
 ```
 
 `channel` is `sms` or `email`; `purpose` is `register`, `login`, `contact` or `chatlock-reset`. With `OTP_WEBHOOK_TOKEN` set, the request carries `Authorization: Bearer <token>`. Answer with any 2xx; anything else (or no answer in 10 seconds) tells the user the code couldn't be sent (`502 otp_delivery_failed`).
@@ -114,7 +114,7 @@ During a connected call, tap the **red record button**. **Nothing records until 
 
 It also stops by itself if **someone new joins** the call (they haven't agreed; the group can ask again together) or the person recording **leaves**. A muted microphone is not recorded. Voice calls save audio; video calls save a video of the participants' tiles in a grid with everyone's audio mixed.
 
-**Where it goes:** the recording is made **on the requester's own device** and saved there as a `.webm` file. **ChatApp's servers never receive or store it** (calls are peer to peer and encrypted), so it can't be listened to by anyone else. The server only keeps track of who has agreed, and the chat's call entry says **"Recorded"**. Everyone who agreed is trusting the person who asked to keep the file private: tell people that.
+**Where it goes:** the recording is made **on the requester's own device** and saved there as a `.webm` file. **VartiQ's servers never receive or store it** (calls are peer to peer and encrypted), so it can't be listened to by anyone else. The server only keeps track of who has agreed, and the chat's call entry says **"Recorded"**. Everyone who agreed is trusting the person who asked to keep the file private: tell people that.
 
 Administrators can switch **Call recording** off in the admin dashboard (Features → Messaging): the button disappears and requests are refused, while stopping always works. Socket events: `call:record-request`, `call:record-respond {accept}`, `call:record-stop`; server → client `call:record { state: pending|on|off, by, waiting, startedAt, reason }`.
 
@@ -209,7 +209,7 @@ Business accounts can list products with prices. **Profile → Business account 
 - **Product:** name, price (up to 2 decimals) with an optional unit (*each, per kg, per hour*), description, category, item code, link, an **in stock / out of stock** switch and a **picture** (JPEG, PNG or WebP up to 1 MB). **Price on request** shows no price. One **currency** for the whole catalogue (default INR; 14 offered in the app, any 3-letter code over the API). Up to 100 products.
 - **Customers** see a card per product (out-of-stock items are marked) and **Ask about this**, which opens the chat with the business and starts a message about the product ("Hi, I'm interested in "Margherita pizza" (₹299.00)."). It is an ordinary end-to-end encrypted message.
 - Pictures are public to signed-in people (so any customer can see them); deleting or replacing a product deletes its old picture. Switching back to a personal account deletes the catalogue and its pictures.
-- Prices are information only: ChatApp does not take orders or payments for products.
+- Prices are information only: VartiQ does not take orders or payments for products.
 
 API: `GET /users/{username}/catalogue`, `GET /me/catalogue`, `POST /me/catalogue/products`, `PUT/DELETE /me/catalogue/products/{id}`, `PUT/DELETE /me/catalogue/products/{id}/image`, `PUT /me/catalogue/currency`; the profile's `business.productCount` says how many. Socket: `catalogue:get`, `catalogue:save`, `catalogue:delete`, `catalogue:image`, `catalogue:image-remove`, `catalogue:currency`.
 
@@ -217,7 +217,7 @@ API: `GET /users/{username}/catalogue`, `GET /me/catalogue`, `POST /me/catalogue
 
 In any chat, ⋮ → **Translate messages** lets you pick a language (27 offered, including Hindi, Bengali, Tamil, Telugu, Marathi, Spanish, French, Arabic, Chinese, Japanese…). From then on, **messages you receive in that chat are shown in that language**, each with *"Translated from English · Show original"*. It is set **per chat, so per contact**, is private to you (the other person isn't told), syncs across your devices, and your own messages are never translated. Messages already in your language are left alone. Turn it off from the same menu or the banner's *Change* link.
 
-**Privacy:** messages are end-to-end encrypted, so the server cannot translate them. When translation is on for a chat, your app decrypts each received message and sends its text to the translation service, which returns it; **texts are not stored or logged** by ChatApp. The dialog says this before you turn it on. Chats where it is off never send anything.
+**Privacy:** messages are end-to-end encrypted, so the server cannot translate them. When translation is on for a chat, your app decrypts each received message and sends its text to the translation service, which returns it; **texts are not stored or logged** by VartiQ. The dialog says this before you turn it on. Chats where it is off never send anything.
 
 Connect a translation service (Google Cloud Translation, DeepL, Azure Translator, AWS Translate, LibreTranslate…) behind a small relay with `TRANSLATE_WEBHOOK_URL` (and `TRANSLATE_WEBHOOK_TOKEN`):
 
@@ -251,11 +251,11 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 
 Past a free limit, locking or hiding shows *"Premium required"* with the plans (API: `402 premium_required`). Everything else is the same on both. Profile → **Premium** shows the plan, how much of the free allowance you use, and **Upgrade / Extend**.
 
-**Plans: Daily, Monthly (a calendar month) and Yearly**, paid in advance. They do not renew by themselves; buying again while Premium **extends** it from the current end. Default prices (INR): 9 / 99 / 999; set your own with `PLAN_PRICES='{"daily":19,"monthly":149,"yearly":1499}'` and `PLAN_CURRENCY`. Only the plan and its dates are stored on the account: no card or bank details are ever handled by ChatApp.
+**Plans: Daily, Monthly (a calendar month) and Yearly**, paid in advance. They do not renew by themselves; buying again while Premium **extends** it from the current end. Default prices (INR): 9 / 99 / 999; set your own with `PLAN_PRICES='{"daily":19,"monthly":149,"yearly":1499}'` and `PLAN_CURRENCY`. Only the plan and its dates are stored on the account: no card or bank details are ever handled by VartiQ.
 
 **When Premium ends**, the ★ goes away and no *more* chats can be locked or hidden beyond the free limits. Chats that are already locked or hidden **stay protected** (they are never silently exposed); removing locks or unhiding is always allowed, and renewing Premium restores adding more.
 
-**Payments** need a provider behind a small relay (Razorpay, Stripe, PayU, Cashfree…). Set `PAYMENT_WEBHOOK_URL` (and `PAYMENT_WEBHOOK_TOKEN`) and ChatApp POSTs JSON to it:
+**Payments** need a provider behind a small relay (Razorpay, Stripe, PayU, Cashfree…). Set `PAYMENT_WEBHOOK_URL` (and `PAYMENT_WEBHOOK_TOKEN`) and VartiQ POSTs JSON to it:
 
 ```
 { "action": "create", "reference": "ord_…", "plan": "monthly", "amount": 99, "currency": "INR", "user": "alice" }  ->  { "paymentUrl": "https://…" }
@@ -287,7 +287,7 @@ Everyone has a badge next to their name: a **blue Verified seal** once they have
 
 **No KYC information is stored, anywhere.** The ID number goes from the form to the verification gateway and is dropped: it is not saved on the server, not kept in the app (the field is cleared from the page when the dialog closes), and not logged. The only thing kept on the account is a "verified" yes/no with the time (`verifiedAt`). Not the ID type, number, name or gateway reply. Changing your display name removes the badge until you verify again, because a verified identity belongs to a name.
 
-ChatApp doesn't do KYC itself; it needs a verification service (DigiLocker, Aadhaar eKYC, Signzy, IDfy, Onfido…) behind a small relay. Set `KYC_WEBHOOK_URL` and ChatApp POSTs JSON to it (with `Authorization: Bearer $KYC_WEBHOOK_TOKEN` if set):
+VartiQ doesn't do KYC itself; it needs a verification service (DigiLocker, Aadhaar eKYC, Signzy, IDfy, Onfido…) behind a small relay. Set `KYC_WEBHOOK_URL` and VartiQ POSTs JSON to it (with `Authorization: Bearer $KYC_WEBHOOK_TOKEN` if set):
 
 ```
 { "action": "start",  "type": "pan", "idNumber": "ABCDE1234F" }  ->  { "requestId": "…" }   (the service sends the code)
@@ -320,7 +320,7 @@ API integrations: `GET/POST /e2ee/devices`, `DELETE /e2ee/devices/{id}`, `GET /c
 **Hide chat** (chat menu **⋮ → Hide chat**) takes a chat off your dashboard completely. Hidden chats are opened with your **secret code** or, once set up, your phone's **fingerprint / face lock**.
 
 - A hidden chat is not in the chat list, search, or unread badges, and nothing about it (new messages, previews, typing, delivery ticks) reaches the app until you open it. Webhooks never hear about it either.
-- **Profile → Hidden chats** asks for the code (or fingerprint / face) and shows the hidden chats. They **close again** when you leave that screen, tap *Lock all chats now*, close ChatApp or log in again; their messages are removed from the page.
+- **Profile → Hidden chats** asks for the code (or fingerprint / face) and shows the hidden chats. They **close again** when you leave that screen, tap *Lock all chats now*, close VartiQ or log in again; their messages are removed from the page.
 - **Unhide chat** (chat menu, while the chats are open) puts a chat back in the list. Hiding replaces that chat's own lock; a chat is either locked or hidden.
 - **Hide any specific contact**, not everything: from the chat menu, from **Contact info → Hide chat**, or with the eye icon next to a person in **New chat** (even if you have never chatted). A contact you hid stays hidden *always*: their first and every later message stays out of your chat list. Other chats are unaffected.
 - Hiding needs a secret code (you're asked to create one the first time). Wrong tries share the chat lock's limit (5, then a growing wait).
@@ -339,7 +339,7 @@ REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, 
 
 ## API for other platforms
 
-Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with ChatApp.
+Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with VartiQ.
 
 - **Docs**: open **`/api/docs`** (interactive, with "Try it out") or fetch **`/api/v1/openapi.json`** (OpenAPI 3.1; generate a client with any OpenAPI generator).
 - **Availability**: the developer API (API keys, webhooks, API-key access) is **off by default** and must be switched on by an administrator (see *Admin dashboard*). Until then these calls answer `403 feature_disabled`.
@@ -373,7 +373,7 @@ curl -s "$BASE/conversations/$CONV/messages?limit=20" -H "Authorization: Bearer 
 
 # Get events at your URL
 curl -s -X POST $BASE/webhooks -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/chatapp","events":["message:new","call:incoming"]}'
+  -d '{"url":"https://example.com/vartiq","events":["message:new","call:incoming"]}'
 ```
 
 Conversation ids for direct chats contain colons (`dm:alice:bob`): URL-encode them in paths.
@@ -406,11 +406,11 @@ Each event is POSTed to your URL as JSON:
 
 `data` is the same payload as the Socket.IO event of that name. Events: `message:new`, `message:status`, `message:deleted`, `message:starred`, `conversation:new`, `typing`, `presence`, `user:updated`, `blocked:update`, `call:incoming`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `chatlock:update`, `conversation:updated`, `message:expired`, `ping`. Messages from chats you've locked arrive redacted (`{ "locked": true }`, no content). Subscribing to `*` (the default) means everything except the chatty `typing` and `presence`.
 
-**Verify every delivery**: `X-ChatApp-Signature` is `sha256=` + the hex HMAC-SHA256 of `"<X-ChatApp-Timestamp>.<raw body>"` using the webhook's secret (shown once when you create it). Reject old timestamps to stop replays.
+**Verify every delivery**: `X-VartiQ-Signature` is `sha256=` + the hex HMAC-SHA256 of `"<X-VartiQ-Timestamp>.<raw body>"` using the webhook's secret (shown once when you create it). Reject old timestamps to stop replays.
 
 ```js
-const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${req.headers['x-chatapp-timestamp']}.${rawBody}`).digest('hex');
-const valid = crypto.timingSafeEqual(Buffer.from(req.headers['x-chatapp-signature']), Buffer.from(expected));
+const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${req.headers['x-vartiq-timestamp']}.${rawBody}`).digest('hex');
+const valid = crypto.timingSafeEqual(Buffer.from(req.headers['x-vartiq-signature']), Buffer.from(expected));
 ```
 
 Reply with any 2xx within 5 seconds. Failed deliveries are retried after 2 s, 10 s and 60 s; after 20 failures in a row the webhook is switched off (turn it back on in the Developer panel or with `PATCH /webhooks/{id}` `{"active": true}`). The last delivery result is shown in the panel and in `GET /webhooks/{id}`.
@@ -487,7 +487,7 @@ npm test           # unit + realtime integration tests
 ## Project structure
 
 ```
-chatapp/
+vartiq/
 ├── server/
 │   ├── index.js     # Express app and Socket.IO wiring
 │   ├── service.js   # Every user action, shared by Socket.IO and the REST API

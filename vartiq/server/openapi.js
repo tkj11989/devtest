@@ -538,7 +538,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     },
     '/me/subscription/checkout': {
       post: op(T.me, 'Start paying for a plan', {
-        description: 'Creates an order and returns the provider\'s `paymentUrl` (open it so the person can pay; card details never touch ChatApp). `paymentUrl` is null in the sandbox, where no real payment is taken. Then call `POST /me/subscription/confirm`.',
+        description: 'Creates an order and returns the provider\'s `paymentUrl` (open it so the person can pay; card details never touch VartiQ). `paymentUrl` is null in the sandbox, where no real payment is taken. Then call `POST /me/subscription/confirm`.',
         body: jsonBody(obj({ plan: { type: 'string', enum: ['daily', 'monthly', 'yearly'] } }, ['plan']), { plan: 'monthly' }),
         responses: { 200: ok(obj({ orderId: { type: 'string' }, plan: { type: 'string' }, amount: { type: 'number' }, currency: { type: 'string' }, paymentUrl: { type: ['string', 'null'] }, sandbox: { type: 'boolean' } }, ['orderId', 'plan', 'amount', 'currency'])), ...errors(400, 401, 429, 502, 503) },
       }),
@@ -563,7 +563,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     },
     '/me/verification/otp': {
       post: op(T.me, 'Start identity verification (KYC)', {
-        description: 'Send the ID `type` (e.g. `aadhaar`, `pan`, `passport`; business accounts: `gstin`, `cin`, `pan`) and `idNumber`. The number is checked for format and passed to the verification gateway, which sends a one-time code to the mobile number linked to the ID; it is **never stored or logged** by ChatApp. 3 attempts per hour. Finish with `POST /me/verification`.',
+        description: 'Send the ID `type` (e.g. `aadhaar`, `pan`, `passport`; business accounts: `gstin`, `cin`, `pan`) and `idNumber`. The number is checked for format and passed to the verification gateway, which sends a one-time code to the mobile number linked to the ID; it is **never stored or logged** by VartiQ. 3 attempts per hour. Finish with `POST /me/verification`.',
         body: jsonBody(obj({ type: { type: 'string' }, idNumber: { type: 'string' } }, ['type', 'idNumber']), { type: 'pan', idNumber: 'ABCDE1234F' }),
         responses: { 200: ok(obj({ requestId: { type: 'string' }, expiresIn: { type: 'integer' }, sentTo: { type: 'string' }, devCode: { type: 'string', description: 'sandbox with OTP_DEV_CODES=1 only' } }, ['requestId', 'expiresIn'])), ...errors(400, 401, 409, 429, 502, 503) },
       }),
@@ -625,7 +625,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.hooks, 'Create a webhook', {
         description: 'Events for you are POSTed to `url` (see the Webhooks section). `events` defaults to `["*"]` = everything except `typing` and `presence`. The `secret` (shown once) signs deliveries.',
         body: jsonBody(obj({ url: { type: 'string', format: 'uri' }, events: arrayOf({ type: 'string', enum: ['*', ...webhookEvents] }), description: { type: 'string' } }, ['url']),
-          { url: 'https://example.com/chatapp/webhook', events: ['message:new', 'call:incoming'] }),
+          { url: 'https://example.com/vartiq/webhook', events: ['message:new', 'call:incoming'] }),
         responses: { 201: ok(obj({ secret: { type: 'string' }, webhook: ref('Webhook') })), ...errors(400, 401, 409) },
       }),
     },
@@ -922,7 +922,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   const webhooks = Object.fromEntries(webhookEvents.map((event) => [event, {
     post: {
       summary: `"${event}" event`,
-      description: 'Headers: `X-ChatApp-Event`, `X-ChatApp-Delivery`, `X-ChatApp-Timestamp` and `X-ChatApp-Signature: sha256=<hex HMAC-SHA256(secret, timestamp + "." + raw body)>`. Reply 2xx within 5 s; failures are retried after 2 s, 10 s and 60 s.',
+      description: 'Headers: `X-VartiQ-Event`, `X-VartiQ-Delivery`, `X-VartiQ-Timestamp` and `X-VartiQ-Signature: sha256=<hex HMAC-SHA256(secret, timestamp + "." + raw body)>`. Reply 2xx within 5 s; failures are retried after 2 s, 10 s and 60 s.',
       requestBody: { content: { 'application/json': { schema: ref('WebhookEvent') } } },
       responses: { 200: { description: 'Received' } },
     },
@@ -1062,7 +1062,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     [T.status]: 'Status updates that disappear after 24 hours',
     [T.lock]: 'Lock chats with a secret code, required again in every new session',
     [T.e2ee]: [
-      'End-to-end encryption for messages typed in the ChatApp web app. Each device makes a key pair and registers the public key; senders encrypt each message on their device, once per recipient device, so the server stores only ciphertext.',
+      'End-to-end encryption for messages typed in the VartiQ web app. Each device makes a key pair and registers the public key; senders encrypt each message on their device, once per recipient device, so the server stores only ciphertext.',
       '',
       '**Scheme (v1)**: a random 256-bit content key encrypts the message JSON (`{"t": "text"}`) with AES-256-GCM. The content key is wrapped for every recipient device with AES-256-GCM under a key from HKDF-SHA-256 over two ECDH (P-256) secrets: one-time key × recipient device key, and sender device key × recipient device key (which proves who sent it). Additional authenticated data is `convId|sender|senderDeviceId`. Voice messages encrypt the audio with the same content key (nonce `mi`).',
       '',
@@ -1078,10 +1078,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
   return {
     openapi: '3.1.0',
     info: {
-      title: 'ChatApp API',
+      title: 'VartiQ API',
       version: '1.0.0',
       description: [
-        'REST API for integrating ChatApp with other platforms: send and read messages, manage chats, status updates and blocking, and receive events by webhook.',
+        'REST API for integrating VartiQ with other platforms: send and read messages, manage chats, status updates and blocking, and receive events by webhook.',
         '',
         '**Authentication**: `Authorization: Bearer <token>` with a session token from `POST /auth/login` (after `POST /auth/otp`), or an API key (`cak_…`) from `POST /api-keys` (recommended for servers and bots: it survives restarts and can be revoked).',
         '',

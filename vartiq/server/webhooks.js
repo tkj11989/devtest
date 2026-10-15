@@ -10,8 +10,8 @@ const net = require('net');
  * Each delivery is a POST with a JSON body:
  *   { id, event, createdAt, user, data }
  * and headers:
- *   X-ChatApp-Event, X-ChatApp-Delivery, X-ChatApp-Timestamp,
- *   X-ChatApp-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>.<raw body>" with the webhook secret>
+ *   X-VartiQ-Event, X-VartiQ-Delivery, X-VartiQ-Timestamp,
+ *   X-VartiQ-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>.<raw body>" with the webhook secret>
  *
  * A delivery succeeds on any 2xx response. Failures are retried (see retryDelaysMs);
  * after Store.WEBHOOK_MAX_FAILURES failed deliveries in a row the webhook is switched off.
@@ -50,11 +50,11 @@ function createWebhookDispatcher({ store, allowPrivate = false, retryDelaysMs = 
         signal: AbortSignal.timeout(timeoutMs),
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'ChatApp-Webhooks/1.0',
-          'X-ChatApp-Event': delivery.event,
-          'X-ChatApp-Delivery': delivery.id,
-          'X-ChatApp-Timestamp': timestamp,
-          'X-ChatApp-Signature': sign(hook.secret, timestamp, body),
+          'User-Agent': 'VartiQ-Webhooks/1.0',
+          'X-VartiQ-Event': delivery.event,
+          'X-VartiQ-Delivery': delivery.id,
+          'X-VartiQ-Timestamp': timestamp,
+          'X-VartiQ-Signature': sign(hook.secret, timestamp, body),
         },
         body,
       });

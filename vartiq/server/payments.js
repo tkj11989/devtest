@@ -5,7 +5,7 @@ const crypto = require('crypto');
 /**
  * Premium subscriptions: daily, monthly or yearly, paid in advance (no auto-renewal).
  *
- * ChatApp never handles card or bank details. Paying happens on the payment provider's own
+ * VartiQ never handles card or bank details. Paying happens on the payment provider's own
  * page; the server only creates an order, then asks the provider whether it was paid before
  * switching Premium on (nothing the browser says is trusted).
  *

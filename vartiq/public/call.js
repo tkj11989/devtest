@@ -107,7 +107,7 @@ window.createCallController = function createCallController({ socket, emit, iceS
         if (!chunks.length) return;
         const blob = new Blob(chunks, { type: recorder.mimeType || (video ? 'video/webm' : 'audio/webm') });
         const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-        const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `ChatApp-call-${title.replace(/[^\w-]+/g, '_')}-${stamp}.${video ? 'webm' : 'webm'}` });
+        const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `VartiQ-call-${title.replace(/[^\w-]+/g, '_')}-${stamp}.${video ? 'webm' : 'webm'}` });
         document.body.appendChild(a);
         a.click();
         a.remove();

@@ -195,9 +195,9 @@ test('api: webhooks are signed, filtered, retried and can be tested', async (t) 
   const d = await hook.waitFor((x) => x.json.event === 'message:new');
   assert.strictEqual(d.json.user, 'alice');
   assert.strictEqual(d.json.data.message.text, 'ping me');
-  assert.strictEqual(d.headers['x-chatapp-event'], 'message:new');
-  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${d.headers['x-chatapp-timestamp']}.${d.raw}`).digest('hex');
-  assert.strictEqual(d.headers['x-chatapp-signature'], expected, 'HMAC signature verifies');
+  assert.strictEqual(d.headers['x-vartiq-event'], 'message:new');
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${d.headers['x-vartiq-timestamp']}.${d.raw}`).digest('hex');
+  assert.strictEqual(d.headers['x-vartiq-signature'], expected, 'HMAC signature verifies');
   assert.ok(hook.received.every((x) => x.json.event !== 'typing'), 'unsubscribed events are not sent');
 
   const status = await api('GET', `/webhooks/${webhook.id}`, { token: aliceKey });

@@ -269,7 +269,7 @@ class Store {
     this.data.users[username] = {
       username,
       displayName: String(displayName || username).trim().slice(0, 40) || username,
-      about: 'Hey there! I am using ChatApp.',
+      about: 'Hey there! I am using VartiQ.',
       salt,
       hash: Store._hash(String(password), salt),
       lastSeen: Date.now(),
@@ -302,7 +302,7 @@ class Store {
     this.data.users[username] = {
       username,
       displayName,
-      about: business ? 'Business account' : 'Hey there! I am using ChatApp.',
+      about: business ? 'Business account' : 'Hey there! I am using VartiQ.',
       phone,
       ...(email ? { email } : {}),
       lastSeen: now,

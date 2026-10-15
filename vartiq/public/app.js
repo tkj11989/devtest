@@ -2713,7 +2713,7 @@
       title: changing ? 'Change secret code' : 'Create a secret code',
       text: changing
         ? 'Enter your current code, then the new one.'
-        : 'Locked chats ask for this code every time you open ChatApp or log in. Keep it private.',
+        : 'Locked chats ask for this code every time you open VartiQ or log in. Keep it private.',
       fields: changing ? [{ name: 'currentCode', label: 'Current secret code' }, ...codeFields] : codeFields,
       submit: changing ? 'Change code' : 'Create code',
       onSubmit: async (v) => {
@@ -2882,7 +2882,7 @@
       const cred = await navigator.credentials.create({
         publicKey: {
           challenge: b64uToBuf(ch.challenge),
-          rp: { name: 'ChatApp', id: location.hostname },
+          rp: { name: 'VartiQ', id: location.hostname },
           user: { id: b64uToBuf(ch.userId), name: state.me.username, displayName: state.me.displayName },
           pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
           authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
@@ -3464,7 +3464,7 @@
       title: order.sandbox ? 'Pay (sandbox)' : 'Complete your payment',
       text: order.sandbox
         ? 'Sandbox: no real payment is taken.'
-        : `Finish paying on the payment page that opened (${order.paymentUrl}). Then tap "I have paid". Your card details never reach ChatApp.`,
+        : `Finish paying on the payment page that opened (${order.paymentUrl}). Then tap "I have paid". Your card details never reach VartiQ.`,
       fields: [],
       submit: order.sandbox ? 'Pay (test)' : 'I have paid',
       onSubmit: async () => { state.sub = await emit('subscription:confirm', { orderId: order.orderId }); },

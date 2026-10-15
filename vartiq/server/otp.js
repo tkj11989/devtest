@@ -105,7 +105,7 @@ function createOtpService({
 
     const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
     const requestId = `otp_${crypto.randomBytes(12).toString('hex')}`;
-    const text = `${code} is your ChatApp verification code. It expires in ${Math.round(ttlMs / 60000)} minutes. Never share it with anyone.`;
+    const text = `${code} is your VartiQ verification code. It expires in ${Math.round(ttlMs / 60000)} minutes. Never share it with anyone.`;
     try {
       await deliver({ channel, to, code, purpose, text });
     } catch (err) {

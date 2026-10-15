@@ -3,7 +3,7 @@
 /**
  * Identity verification (KYC) for the "Verified" badge.
  *
- * Privacy rule: ChatApp never stores KYC information, on the server or in the app. The ID
+ * Privacy rule: VartiQ never stores KYC information, on the server or in the app. The ID
  * number passes straight through to the verification gateway and is dropped; only a
  * "verified" yes/no (with the time) is kept on the account. The one-time code comes from
  * the gateway (it is sent to the mobile number linked to the ID) and is checked once.

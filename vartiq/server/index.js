@@ -335,7 +335,7 @@ if (require.main === module) {
     : null;
   const { server, store } = createApp({ tls });
   server.listen(port, () => {
-    console.log(`ChatApp running at ${tls ? 'https' : 'http'}://localhost:${port}`);
+    console.log(`VartiQ running at ${tls ? 'https' : 'http'}://localhost:${port}`);
     if (!process.env.OTP_WEBHOOK_URL) console.log('Login codes are printed here (set OTP_WEBHOOK_URL to send real SMS/email).');
     if (process.env.OTP_DEV_CODES === '1') console.warn('OTP_DEV_CODES=1: login codes are also shown in the app. Never use this in production.');
   });

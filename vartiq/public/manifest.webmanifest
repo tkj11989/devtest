@@ -1,6 +1,6 @@
 {
-  "name": "ChatApp",
-  "short_name": "ChatApp",
+  "name": "VartiQ",
+  "short_name": "VartiQ",
   "description": "Real-time messaging, calls and status updates",
   "start_url": "/",
   "scope": "/",

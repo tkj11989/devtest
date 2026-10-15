@@ -48,10 +48,10 @@ async function api(method, path, body, headers = {}) {
   return data;
 }
 
-/** Check X-ChatApp-Signature = sha256=HMAC(secret, "<timestamp>.<raw body>") and that the timestamp is recent. */
+/** Check X-VartiQ-Signature = sha256=HMAC(secret, "<timestamp>.<raw body>") and that the timestamp is recent. */
 function verify(secret, headers, raw) {
-  const ts = headers['x-chatapp-timestamp'];
-  const sig = headers['x-chatapp-signature'] || '';
+  const ts = headers['x-vartiq-timestamp'];
+  const sig = headers['x-vartiq-signature'] || '';
   if (!ts || Math.abs(Date.now() / 1000 - Number(ts)) > MAX_SKEW_SECONDS) return false;
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${ts}.${raw}`).digest('hex');
   return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));

@@ -48,7 +48,7 @@ test('otp: phone/email formats, wrong tries, single use, resend limits', async (
   const r = await otp.request({ channel: 'sms', to, purpose: 'login' });
   assert.match(r.devCode, /^\d{6}$/);
   assert.strictEqual(sent[0].code, r.devCode);
-  assert.match(sent[0].text, new RegExp(`^${r.devCode} is your ChatApp verification code`));
+  assert.match(sent[0].text, new RegExp(`^${r.devCode} is your VartiQ verification code`));
   assert.strictEqual(r.sentTo, '+91•••••••210');
   const wrong = r.devCode === '000000' ? '111111' : '000000';
 

@@ -1,4 +1,4 @@
-/* ChatApp admin dashboard. Plain JS; every piece of text from the server is shown with textContent (never as HTML). */
+/* VartiQ admin dashboard. Plain JS; every piece of text from the server is shown with textContent (never as HTML). */
 (() => {
   'use strict';
 

@@ -1,5 +1,5 @@
 /*
- * End-to-end encryption for ChatApp messages (scheme v1). Runs in the browser and in Node (tests).
+ * End-to-end encryption for VartiQ messages (scheme v1). Runs in the browser and in Node (tests).
  *
  * Each device owns a P-256 key pair; the private key never leaves it. To send, the sender
  *   1. makes a random 256-bit content key and encrypts the message JSON with AES-256-GCM,
