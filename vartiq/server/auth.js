@@ -2,6 +2,7 @@
 
 const { ApiError } = require('./service');
 const { normalisePhone, normaliseEmail } = require('./otp');
+const legal = require('./legal');
 
 /**
  * Sign-up and login with one-time codes.
@@ -52,6 +53,15 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
      */
     register(body = {}) {
       assertSignupsOpen();
+      // Nobody gets an account without agreeing to the Terms and Privacy Notice and confirming their age.
+      // Checked first, so a missing tick doesn't use up a login code.
+      const consent = body.consent || {};
+      if (consent.terms !== true || consent.age !== true) {
+        throw new ApiError(400, 'consent_required', 'To create an account you must accept the Terms of Use and Privacy Notice and confirm you are 18 or older');
+      }
+      if (consent.version !== legal.VERSION) {
+        throw new ApiError(409, 'consent_outdated', 'The Terms of Use or Privacy Notice changed. Please read and accept the current version.');
+      }
       const type = body.accountType || 'individual';
       if (!['individual', 'business'].includes(type)) throw new ApiError(400, 'invalid_request', 'accountType must be "individual" or "business"');
       const displayName = String(body.displayName || '').trim();
@@ -86,6 +96,7 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
       }
       otp.consume(body.phoneOtp.requestId);
       if (email) otp.consume(body.emailOtp.requestId);
+      store.recordConsent(result.user.username, { version: legal.VERSION, items: ['terms', 'age'], via: 'registration' });
       return result;
     },
 

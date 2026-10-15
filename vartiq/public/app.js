@@ -181,6 +181,7 @@
 
   const emit = (event, payload) => new Promise((resolve, reject) => {
     state.socket.emit(event, payload, (res) => {
+      if (res?.code === 'consent_required') showConsentGate(); // the Terms or Privacy Notice changed while the app was open
       if (!(res && res.ok)) return reject(Object.assign(new Error(res?.error || 'Request failed'), { code: res?.code }));
       // End-to-end encrypted messages in the reply are decrypted before anyone sees them.
       decryptPayload(res).then(() => resolve(res), () => resolve(res));
@@ -431,6 +432,15 @@
       authError('Choose a business category');
       return authForm.category.focus();
     }
+    // Agreement comes first: nothing is sent to anyone's phone before the person has agreed.
+    if (register && !(authForm.agreeTerms.checked && authForm.agreeAge.checked)) {
+      authError('Please accept the Terms of Use and Privacy Notice, and confirm you are 18 or older, to create an account');
+      return (authForm.agreeTerms.checked ? authForm.agreeAge : authForm.agreeTerms).focus();
+    }
+    if (register && !state.legal) {
+      authError('Could not load the Terms of Use and Privacy Notice. Check your connection and try again.');
+      return loadLegal();
+    }
     // Step through the codes: send the next one that wasn't sent, then ask for any missing code.
     const submit = $('#auth-submit');
     submit.disabled = true;
@@ -456,6 +466,7 @@
           displayName: authForm.displayName.value.trim(),
           phone: fullPhone(authForm),
           phoneOtp: phoneField.proof(),
+          consent: { terms: true, age: true, version: state.legal.version },
           ...(business ? {
             email: authForm.email.value.trim(),
             emailOtp: emailField.proof(),
@@ -582,6 +593,137 @@
   /** Read the configuration before anyone signs in (also what mobile apps do). */
   fetch('/api/v1/config', { headers: { 'X-Client-Version': CLIENT_VERSION } }).then((r) => r.json()).then(applyConfig).catch(() => {});
 
+  // ---------- Terms of Use, Privacy Notice and consent ----------
+
+  const consentById = (id) => state.legal?.consents?.find((c) => c.id === id);
+  /** The exact wording a person agrees to (the server records which version they accepted). */
+  const consentText = (id) => consentById(id)?.text || '';
+  function paintConsentTexts() {
+    if (!state.legal) return;
+    $('#consent-terms-text').textContent = consentText('terms');
+    $('#consent-age-text').textContent = consentText('age');
+    $('#gate-terms-text').textContent = consentText('terms');
+  }
+  function loadLegal() {
+    return fetch('/api/v1/legal').then((r) => r.json()).then((l) => { state.legal = l; paintConsentTexts(); }).catch(() => {});
+  }
+  loadLegal();
+
+  function downloadJson(name, data) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const link = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function downloadMyData() {
+    try {
+      const data = await emit('account:export');
+      delete data.ok;
+      downloadJson(`vartiq-${state.me.username}-data.json`, data);
+      toast('Your data was downloaded');
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  /** Two steps, both confirmed: a code sent to the account's mobile number, then typing DELETE. */
+  async function deleteAccountFlow() {
+    if (!confirm('Delete your account for good? Your profile, contact details, keys, statuses, channels and the content of the messages you sent will be erased. This cannot be undone.')) return;
+    let sent;
+    try {
+      sent = await emit('account:delete-code');
+    } catch (err) {
+      return toast(err.message);
+    }
+    const done = await dialog({
+      title: 'Confirm: delete my account',
+      text: `Enter the code we sent to ${sent.sentTo || 'your mobile number'} and type DELETE. Your account is erased at once.${sent.devCode ? ` (Sandbox code: ${sent.devCode})` : ''}`,
+      fields: [
+        { name: 'code', label: 'Code from SMS', type: 'text', maxLength: 8, autocomplete: 'one-time-code' },
+        { name: 'confirm', label: 'Type DELETE', type: 'text', maxLength: 10, autocomplete: 'off' },
+      ],
+      submit: 'Delete my account',
+      onSubmit: async (v) => {
+        await emit('account:delete', { requestId: sent.requestId, code: v.code.trim(), confirm: v.confirm.trim() });
+      },
+    });
+    if (done) {
+      storage.del('chat.token');
+      alert('Your account was deleted.');
+      location.reload();
+    }
+  }
+
+  function showConsentGate() {
+    paintConsentTexts();
+    $('#gate-terms').checked = false;
+    $('#gate-age').checked = false;
+    $('#gate-error').textContent = '';
+    $('#consent-gate').classList.remove('hidden');
+    $('#auth').classList.add('hidden');
+  }
+  function hideConsentGate() {
+    $('#consent-gate').classList.add('hidden');
+  }
+  $('#gate-accept').addEventListener('click', async () => {
+    if (!$('#gate-terms').checked || !$('#gate-age').checked) {
+      $('#gate-error').textContent = 'Please tick both boxes to continue';
+      return;
+    }
+    try {
+      await emit('consent:accept', { terms: true, age: true });
+      location.reload();
+    } catch (err) {
+      $('#gate-error').textContent = err.message;
+    }
+  });
+  $('#gate-export').addEventListener('click', downloadMyData);
+  $('#gate-delete').addEventListener('click', deleteAccountFlow);
+  $('#gate-logout').addEventListener('click', () => { hideConsentGate(); logout(); });
+
+  async function openPrivacy() {
+    openPanel('#panel-privacy');
+    let st;
+    try {
+      st = await emit('consent:status');
+    } catch (err) {
+      return toast(err.message);
+    }
+    state.consent = { ...state.consent, optional: st.optional };
+    $('#privacy-accepted').textContent = st.acceptedVersion
+      ? `You accepted version ${st.acceptedVersion} on ${new Date(st.acceptedAt).toLocaleDateString([], { dateStyle: 'long' })}. Current version: ${st.version}.`
+      : `Current version: ${st.version}.`;
+    const g = st.summary.company.grievanceOfficer;
+    $('#privacy-contact').textContent = `Grievance Officer: ${g.name}, ${g.email}${g.phone ? `, ${g.phone}` : ''}. ${st.summary.company.name}, ${st.summary.company.address}.`;
+    const box = $('#privacy-optional');
+    box.textContent = '';
+    box.appendChild(el('strong', '', 'Things you can switch on or off'));
+    for (const c of st.summary.consents.filter((x) => !x.required)) {
+      const row = el('label', 'consent-toggle');
+      const input = el('input');
+      Object.assign(input, { type: 'checkbox', checked: !!st.optional[c.id] });
+      input.addEventListener('change', async () => {
+        try {
+          const res = await emit('consent:set', { id: c.id, granted: input.checked });
+          state.consent = { ...state.consent, optional: res.optional };
+          toast(input.checked ? 'Saved' : `${c.title}: consent withdrawn`);
+        } catch (err) {
+          input.checked = !input.checked;
+          toast(err.message);
+        }
+      });
+      const text = el('span');
+      text.append(el('strong', '', c.title), el('br'), c.text);
+      row.append(input, text);
+      box.appendChild(row);
+    }
+  }
+  $('#btn-privacy').addEventListener('click', openPrivacy);
+  $('#btn-export').addEventListener('click', downloadMyData);
+  $('#btn-delete-account').addEventListener('click', deleteAccountFlow);
+
   // ---------- startup ----------
 
   function start(token, user) {
@@ -625,7 +767,17 @@
 
     socket.on('connect', async () => {
       try {
-        const [{ user: me, iceServers, blocked, defaultDisappear, business, contact, privacy, appearance }, lockSettings] = await Promise.all([emit('me'), emit('chatlock:settings')]);
+        const meReply = await emit('me');
+        // Changed Terms or Privacy Notice? Nothing else works until they are accepted.
+        if (meReply.consent && !meReply.consent.upToDate) {
+          state.me = meReply.user;
+          showConsentGate();
+          return;
+        }
+        hideConsentGate();
+        const { user: me, iceServers, blocked, defaultDisappear, business, contact, privacy, appearance, consent } = meReply;
+        state.consent = consent || null;
+        const lockSettings = await emit('chatlock:settings');
         state.defaultDisappear = defaultDisappear || null;
         state.contact = contact || { phone: null, email: null };
         state.privacy = privacy || { profileViews: true };
@@ -704,6 +856,8 @@
       if (!$('#panel-devices').classList.contains('hidden')) renderDevices().catch(() => {});
       if (state.activeId) renderHeader();
     });
+    // Someone I chat with deleted their account: their name and messages change.
+    socket.on('peer:deleted', () => loadConversations());
     // Chats were hidden/unhidden (maybe on another device): reload the list.
     socket.on('hidden:update', () => loadConversations());
     socket.on('chatlock:update', async (settings) => {
@@ -2748,6 +2902,14 @@
       const box = $('#modal-fields');
       box.textContent = '';
       for (const f of fields) {
+        if (f.type === 'checkbox') {
+          const row = el('label', 'agree');
+          const tick = el('input');
+          Object.assign(tick, { type: 'checkbox', name: f.name, required: f.required !== false });
+          row.append(tick, el('span', '', f.label));
+          box.appendChild(row);
+          continue;
+        }
         const label = el('label', '', f.label);
         let input;
         if (f.options) {
@@ -3353,9 +3515,17 @@
     const opened = dialog({
       title: `Translate messages from ${who}`,
       text: 'Messages you receive in this chat will be shown in the language you choose, with a way back to the original. Only this chat is affected.\n\nMessages are end-to-end encrypted, so to translate one your app sends its text to the translation service, which returns it and does not store it. Turn translation off to stop.',
-      fields: [{ name: 'lang', label: 'Show received messages in', options: [['', 'Off (show original)'], ...info.languages.map((l) => [l.code, `${l.name} · ${l.native}`])] }],
+      fields: [
+        { name: 'lang', label: 'Show received messages in', options: [['', 'Off (show original)'], ...info.languages.map((l) => [l.code, `${l.name} · ${l.native}`])] },
+        ...(state.consent?.optional?.translation ? [] : [{ name: 'agree', type: 'checkbox', required: false, label: consentText('translation') }]),
+      ],
       submit: 'Save',
       onSubmit: async (v) => {
+        if (v.lang && !state.consent?.optional?.translation) {
+          if (!v.agree) throw new Error('Tick the box to agree to this, or choose "Off"');
+          await emit('consent:set', { id: 'translation', granted: true });
+          state.consent = { ...state.consent, optional: { ...state.consent?.optional, translation: true } };
+        }
         const res = await emit('translate:set', { convId: conv.id, lang: v.lang || null });
         applyTranslation(conv.id, res.lang);
       },
@@ -3646,9 +3816,14 @@
       fields: [
         { name: 'type', label: 'ID type', options: info.types.map((t) => [t.id, `${t.label} (${t.hint})`]) },
         { name: 'idNumber', label: 'ID number', type: 'text', maxLength: 30, autocomplete: 'off' },
+        ...(state.consent?.optional?.kyc ? [] : [{ name: 'agree', type: 'checkbox', label: consentText('kyc') }]),
       ],
       submit: 'Send code',
       onSubmit: async (v) => {
+        if (!state.consent?.optional?.kyc) {
+          await emit('consent:set', { id: 'kyc', granted: true });
+          state.consent = { ...state.consent, optional: { ...state.consent?.optional, kyc: true } };
+        }
         sent = await emit('kyc:start', { type: v.type, idNumber: v.idNumber });
       },
     });

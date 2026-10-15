@@ -1202,9 +1202,9 @@ a.info-value:hover { text-decoration: underline; }
 .biz-form textarea { resize: vertical; }
 .biz-form fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .biz-form legend { color: var(--primary-text); font-size: 14px; padding: 0 4px; }
-.biz-form label.checkline { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; color: var(--text); font-size: 13.5px; }
-.biz-form label.checkline input { flex: none; width: 18px; height: 18px; padding: 0; margin: 1px 0 0; accent-color: var(--primary); }
-.biz-form label.checkline span { flex: 1; min-width: 0; }
+.biz-form label.agreeline { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; color: var(--text); font-size: 13.5px; }
+.biz-form label.agreeline input { flex: none; width: 18px; height: 18px; padding: 0; margin: 1px 0 0; accent-color: var(--primary); }
+.biz-form label.agreeline span { flex: 1; min-width: 0; }
 .hours-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 8px; align-items: center; font-size: 13.5px; padding: 4px 0; }
 .hours-row + .hours-row { border-top: 1px solid var(--border); }
 .hours-row select { padding: 6px 8px; font-size: 13.5px; min-width: 0; }
@@ -1376,3 +1376,24 @@ html[data-avatar-shape="square"] .avatar { border-radius: 6px; }
 .load-earlier { display: block; margin: 8px auto 12px; }
 .cache-switch { display: inline-flex; align-items: center; }
 .cache-switch input { width: 20px; height: 20px; accent-color: var(--primary); }
+
+/* ---------- consent ---------- */
+.consent { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.consent-title { font-weight: 600; font-size: 14px; }
+.consent-facts { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+label.agree { display: flex; gap: 10px; align-items: flex-start; flex-direction: row; font-size: 14px; color: var(--text); cursor: pointer; }
+label.agree input[type=checkbox] { width: 20px; min-width: 20px; height: 20px; flex: 0 0 20px; margin: 2px 0 0; padding: 0; accent-color: var(--primary); }
+label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
+.consent-links, .legal-links { font-size: 13px; text-align: center; margin: 4px 0; }
+.legal-links { margin-top: 14px; color: var(--muted); }
+.gate-card { max-width: 480px; text-align: left; align-items: stretch; }
+.gate-alt { text-align: center; font-size: 13px; margin: 4px 0 0; }
+.card-lite { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--panel); }
+.card-lite p { margin: 6px 0; }
+.row-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.danger-btn { border: 1px solid var(--danger); color: var(--danger); background: transparent; border-radius: 8px; padding: 10px 14px; font: inherit; cursor: pointer; }
+.consent-toggle { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; }
+.consent-toggle { flex-direction: row; color: var(--text); }
+.consent-toggle input[type=checkbox] { width: 20px; min-width: 20px; height: 20px; flex: 0 0 20px; padding: 0; accent-color: var(--primary); margin-top: 2px; }
+.consent-toggle span { flex: 1; min-width: 0; font-size: 14px; }
+.consent-links a, .legal-links a, .card-lite a, .gate-card a { color: var(--primary-text); }

@@ -131,7 +131,7 @@
 
   async function overview() {
     const o = await api('GET', '/overview');
-    const { stats: s, config, integrations: ig, server } = o;
+    const { stats: s, config, integrations: ig, server, legal } = o;
     const tile = (label, n, warn) => h('div', { class: `tile${warn && n ? ' warn' : ''}` }, h('div', { class: 'n' }, typeof n === 'number' ? fmt.n(n) : n), h('div', { class: 'l' }, label));
     const off = Object.entries(config.features).filter(([, on]) => !on).map(([id]) => state.features.find((f) => f.id === id)?.label || id);
     setBanner(config);
@@ -139,6 +139,7 @@
     $('#nav-reports').classList.toggle('hidden', !s.content.openReports);
     return h('div', {},
       head('Overview', h('button', { class: 'btn small', onclick: route }, 'Refresh')),
+      !legal?.configured && h('div', { class: 'card warn-card' }, h('strong', {}, 'Legal details are missing. '), 'The Terms of Use and Privacy Notice still show placeholders such as [Company legal name]. Fill in the company details and Grievance Officer before launch. ', h('a', { href: '#settings' }, 'Open Settings → Legal')),
       h('div', { class: 'grid' },
         tile('Users', s.users.total), tile('Online now', s.users.online), tile('New today', s.users.newToday), tile('New in 7 days', s.users.new7d),
         tile('Premium', s.users.premium), tile('Verified', s.users.verified), tile('Business', s.users.business), tile('Suspended', s.users.suspended, true)),
@@ -206,7 +207,9 @@
     const dl = h('dl', {},
       ...[['Username', `@${u.username}`], ['Name', u.displayName], ['Phone', u.phone || '—'], ['Email', u.email || '—'], ['Joined', fmt.date(u.createdAt)], ['Last seen', fmt.ago(u.lastSeen)],
         ['Premium', u.premium ? `${u.plan || 'yes'} until ${fmt.date(u.premiumUntil)}` : 'No'], ['Verified', u.verified ? 'Yes' : 'No'], ['Business', u.business || 'No'],
-        ['Chats', u.chats], ['Channels owned', u.channelsOwned], ['API keys', u.apiKeys], ['Devices (encryption)', u.devices]]
+        ['Chats', u.chats], ['Channels owned', u.channelsOwned], ['API keys', u.apiKeys], ['Devices (encryption)', u.devices],
+        ['Terms and Privacy accepted', u.consent ? `version ${u.consent.version}, ${fmt.date(u.consent.at)}${Object.entries(u.consent.optional).map(([k, v]) => ` · ${k}: ${v ? 'yes' : 'no'}`).join('')}` : 'No record (account made before consent was added)'],
+        ...(u.deleted ? [['Account deleted', fmt.date(u.deleted)]] : [])]
         .flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, String(v))]),
       u.suspended ? [h('dt', {}, 'Suspended'), h('dd', {}, `${fmt.date(u.suspended.at)} by ${u.suspended.by}${u.suspended.reason ? `: ${u.suspended.reason}` : ''}`)] : []);
     const reason = h('input', { placeholder: 'Reason shown to the user (optional)', maxlength: 200 });
@@ -303,6 +306,34 @@
           toggle(s.features[f.id] !== false, async (on) => !!(await saveSettings({ features: { [f.id]: on } }, `${f.label}: ${on ? 'on' : 'off'}. Every app is updated.`)), f.label)))))));
   }
 
+  // --- settings: legal details printed in the Terms and Privacy Notice ---
+  function legalCard(s) {
+    const L = s.legal;
+    const text = (k, label, ph = '') => { const i = h('input', { value: L[k] || '', maxlength: 300, placeholder: ph, disabled: !isSuper(), 'aria-label': label }); i.dataset.k = k; return [label, i]; };
+    const fields = [
+      text('company', 'Company legal name', 'e.g. PrayukTech Private Limited'), text('address', 'Registered address'),
+      text('contactEmail', 'Contact email'), text('city', 'City for legal disputes (courts)'),
+      text('grievanceName', 'Grievance Officer name'), text('grievanceEmail', 'Grievance Officer email'),
+      text('grievancePhone', 'Grievance Officer phone (optional)'), text('hosting', 'Where the servers are', 'e.g. India (Mumbai)'),
+    ];
+    const days = (k, label) => { const i = h('input', { type: 'number', min: 1, max: 365, value: L[k], disabled: !isSuper(), 'aria-label': label }); i.dataset.k = k; return [label, i]; };
+    const nums = [days('backupDays', 'Days deleted data may stay in backups'), days('responseDays', 'Days to answer a rights request')];
+    const legacy = h('input', { type: 'checkbox', checked: !!L.requireForLegacy, disabled: !isSuper(), 'aria-label': 'Ask accounts made before consent existed to accept' });
+    const save = () => saveSettings({
+      legal: {
+        ...Object.fromEntries(fields.map(([, i]) => [i.dataset.k, i.value])),
+        ...Object.fromEntries(nums.map(([, i]) => [i.dataset.k, Number(i.value)])),
+        requireForLegacy: legacy.checked,
+      },
+    }, 'Legal details saved. The Terms and Privacy Notice pages are updated.');
+    return h('div', { class: 'card' }, h('h3', {}, 'Legal: Terms of Use and Privacy Notice'),
+      h('p', { class: 'muted' }, 'These details are printed in the Terms of Use and Privacy Notice that people accept when they sign up. Have your lawyer review those texts and these details before launch. ', h('a', { href: '/legal/privacy', target: '_blank', rel: 'noopener' }, 'Privacy Notice'), ' · ', h('a', { href: '/legal/terms', target: '_blank', rel: 'noopener' }, 'Terms of Use')),
+      ...[0, 2, 4, 6].map((n) => h('div', { class: 'row' }, ...fields.slice(n, n + 2).map(([label, i]) => h('label', {}, label, i)))),
+      h('div', { class: 'row' }, ...nums.map(([label, i]) => h('label', {}, label, i))),
+      h('div', { class: 'switch-row' }, h('div', { class: 't' }, h('strong', {}, 'Ask older accounts to accept too'), h('span', {}, 'Accounts created before consent was added are blocked until they accept. Off by default.')), h('span', { class: 'switch' }, legacy, h('span', { class: 'track' }))),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: save }, 'Save legal details')));
+  }
+
   // --- settings ---
   async function settings() {
     const { settings: s } = await loadSettings();
@@ -318,6 +349,7 @@
         h('div', { class: 'row' }, h('label', {}, 'Locked chats (free)', locks), h('label', {}, 'Hidden chats (free)', hidden)),
         h('div', { class: 'row' }, h('label', {}, 'Channels per owner', channelsMax), h('label', {}, 'Products per catalogue', products)),
         h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value) } }, 'Limits saved') }, 'Save limits'))),
+      legalCard(s),
       h('div', { class: 'card' }, h('h3', {}, 'Premium prices'),
         h('p', { class: 'muted' }, 'Leave a field empty to use the default price. Changes apply to new purchases.'),
         h('div', { class: 'row' }, h('label', {}, 'Daily', prices.daily), h('label', {}, 'Monthly', prices.monthly), h('label', {}, 'Yearly', prices.yearly)),

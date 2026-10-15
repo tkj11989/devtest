@@ -99,6 +99,12 @@ const SOCKET_ACTIONS = {
   'translate:languages': 'translateLanguages',
   'translate:set': 'setTranslation',
   'translate:text': 'translateTexts',
+  'consent:status': 'consentStatus',
+  'consent:accept': 'consentAccept',
+  'consent:set': 'consentSet',
+  'account:export': 'accountExport',
+  'account:delete-code': 'accountDeleteCode',
+  'account:delete': 'accountDelete',
   'appearance:get': 'appearance',
   'appearance:set': 'setAppearance',
   'subscription:status': 'subscriptionStatus',
@@ -218,6 +224,13 @@ function createApp({
     next();
   });
   app.use('/api/v1', createApiRouter({ store, service, accounts: auth, webhooks, rateLimit, corsOrigins }));
+  // Terms of Use and Privacy Notice: public pages (company details come from the dashboard's Legal settings).
+  const legal = require('./legal');
+  app.get('/legal/:doc', (req, res) => {
+    const html = legal.documentHtml(req.params.doc, legal.details(store.getSettings()));
+    if (!html) return res.status(404).send('Not found');
+    return res.type('html').send(html);
+  });
   app.get('/api/docs', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'api-docs.html')));
   // Swagger UI is served from node_modules so the docs work without internet access.
   app.use('/api/docs/assets', express.static(require('swagger-ui-dist').getAbsoluteFSPath(), { maxAge: '7d' }));
@@ -300,6 +313,15 @@ function createApp({
 
     // Anything sent while we were offline is now delivered.
     for (const c of store.conversationsFor(me)) service.notifyStatus(c.id, store.markDelivered(c.id, me));
+
+    // Until the current Terms and Privacy Notice are accepted, only the events needed to accept (or leave) get through.
+    const CONSENT_EVENTS = new Set(['me', 'consent:status', 'consent:accept', 'consent:set', 'account:export', 'account:delete-code', 'account:delete']);
+    socket.use(([event, ...args], next) => {
+      if (CONSENT_EVENTS.has(event) || store.consentUpToDate(me, legal.VERSION)) return next();
+      const ack = args[args.length - 1];
+      if (typeof ack === 'function') ack({ ok: false, code: 'consent_required', error: 'Please accept the current Terms of Use and Privacy Notice to continue' });
+      return undefined;
+    });
 
     calls.attach(socket);
     const ctx = { lockKey: socket.data.lockKey };

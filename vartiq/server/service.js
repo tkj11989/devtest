@@ -2,6 +2,7 @@
 
 const { Store } = require('./store');
 const { normalisePhone, normaliseEmail } = require('./otp');
+const legal = require('./legal');
 const { createWebAuthn } = require('./webauthn');
 const { FEATURES, versionLess } = require('./features');
 const appearance = require('./appearance');
@@ -31,6 +32,13 @@ const PAGE_MAX = 100;
  */
 function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator }) {
   const userRoom = (u) => `user:${u}`;
+
+  /** A feature that sends data to an outside service only works once the person has agreed to that (code `consent_<id>`). */
+  const needConsent = (me, id) => {
+    if (store.hasOptionalConsent(me, id)) return;
+    const item = legal.consentItem(id);
+    throw new ApiError(403, `consent_${id}`, `Your consent is needed first: ${legal.fill(item.text, legal.details(store.getSettings()))}`);
+  };
 
   // ---------- chat lock ----------
   //
@@ -399,6 +407,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
         business: store.getBusiness(me),
         contact: store.contactOf(me),
         privacy: { profileViews: store.profileViewsEnabled(me) },
+        consent: { version: legal.VERSION, upToDate: store.consentUpToDate(me, legal.VERSION), optional: Object.fromEntries(legal.CONSENTS.filter((x) => !x.required).map((x) => [x.id, store.hasOptionalConsent(me, x.id)])) },
         appearance: appearance.effective(store.prefsOf(me), store.isPremium(me)),
       };
     },
@@ -608,6 +617,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       lang = lang ? String(lang).toLowerCase() : null;
       if (lang && !translator?.isLanguage(lang)) throw new ApiError(400, 'invalid_request', 'Unknown language');
       if (lang && !translator.available) throw new ApiError(503, 'translation_unavailable', 'Translation is not available right now');
+      if (lang) needConsent(me, 'translation');
       store.setTranslateTo(me, convId, lang);
       io.to(userRoom(me)).emit('translate:update', { convId, lang });
       return { convId, lang };
@@ -622,6 +632,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       requireUnlocked(me, convId, ctx);
       const target = store.translateTo(me, convId);
       if (!target) throw new ApiError(400, 'translation_off', 'Turn on translation for this chat first');
+      needConsent(me, 'translation');
       if (!translator) throw new ApiError(503, 'translation_unavailable', 'Translation is not available right now');
       return { target, translations: await translator.translate(me, target, texts) };
     },
@@ -658,6 +669,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     /** Send the ID number to the verification gateway, which texts a code. The ID is not kept. */
     async kycStart(me, { type, idNumber }) {
       if (!kyc) throw new ApiError(503, 'kyc_unavailable', 'Identity verification is not available right now');
+      needConsent(me, 'kyc');
       return kyc.start(me, { type, idNumber });
     },
 
@@ -666,6 +678,73 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       if (!kyc) throw new ApiError(503, 'kyc_unavailable', 'Identity verification is not available right now');
       await kyc.verify(me, { requestId, otp: code });
       return { verified: true, user: announceProfile(me) };
+    },
+
+
+    // ----- consent, your data (download, delete) -----
+
+    /** What the person has agreed to, and the current texts (so a client can ask again when they change). */
+    consentStatus(me) {
+      const c = store.consentOf(me);
+      return {
+        version: legal.VERSION,
+        upToDate: store.consentUpToDate(me, legal.VERSION),
+        acceptedVersion: c?.version || null,
+        acceptedAt: c?.at || null,
+        optional: Object.fromEntries(legal.CONSENTS.filter((x) => !x.required).map((x) => [x.id, store.hasOptionalConsent(me, x.id)])),
+        summary: legal.summary(store.getSettings()),
+      };
+    },
+
+    /** Accept the current Terms of Use and Privacy Notice (and confirm 18+). Needed again whenever they change. */
+    consentAccept(me, { terms, age } = {}) {
+      if (terms !== true || age !== true) {
+        throw new ApiError(400, 'consent_required', 'Accept the Terms of Use and Privacy Notice and confirm you are 18 or older to continue');
+      }
+      store.recordConsent(me, { version: legal.VERSION, items: ['terms', 'age'], via: 'app' });
+      return actions.consentStatus(me);
+    },
+
+    /** Give or withdraw an optional consent (`translation`, `kyc`). Withdrawing is as easy as giving. */
+    consentSet(me, { id, granted } = {}) {
+      const item = legal.consentItem(id);
+      if (!item || item.required) throw new ApiError(400, 'invalid_request', `id must be one of: ${legal.CONSENTS.filter((x) => !x.required).map((x) => x.id).join(', ')}`);
+      if (typeof granted !== 'boolean') throw new ApiError(400, 'invalid_request', 'granted must be true or false');
+      store.setOptionalConsent(me, id, granted, { version: legal.VERSION });
+      // Withdrawing translation consent also switches translation off in every chat.
+      if (id === 'translation' && !granted) {
+        for (const convId of Object.keys(store.data.users[me]?.translate || {})) {
+          store.setTranslateTo(me, convId, null);
+          io.to(userRoom(me)).emit('translate:update', { convId, lang: null });
+        }
+      }
+      return actions.consentStatus(me);
+    },
+
+    /** Everything we hold about the person, to download. */
+    accountExport(me) {
+      return store.exportAccount(me);
+    },
+
+    /** Step 1 of deleting the account: a code is sent to the account's mobile number. */
+    accountDeleteCode(me) {
+      const { phone } = store.contactOf(me) || {};
+      if (!phone) throw new ApiError(400, 'verification_required', 'Add a verified mobile number to your account first, so we can confirm it is you');
+      return otp.request({ channel: 'sms', to: phone, purpose: 'delete' });
+    },
+
+    /** Step 2: erase the account (`{ requestId, code, confirm: "DELETE" }`). This cannot be undone. */
+    accountDelete(me, { requestId, code, confirm } = {}) {
+      if (confirm !== 'DELETE') throw new ApiError(400, 'invalid_request', 'Send confirm: "DELETE" to confirm');
+      const { phone } = store.contactOf(me) || {};
+      if (!phone) throw new ApiError(400, 'verification_required', 'Add a verified mobile number to your account first');
+      otp.verify({ requestId, code, channel: 'sms', to: phone, purpose: 'delete' });
+      const peers = store.peersOf(me);
+      store.deleteAccount(me);
+      // Close the person's connections after the answer has gone out (this call may have come over one of them).
+      setImmediate(() => io.in(userRoom(me)).disconnectSockets(true));
+      for (const p of peers) notify(p, 'peer:deleted', { username: me });
+      return { deleted: true };
     },
 
     // ----- verified mobile number and email -----
@@ -1216,6 +1295,20 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     actions[name] = function gated(me, payload, ctx) {
       const id = typeof gate === 'function' ? gate(payload) : gate;
       if (id) assertFeature(id);
+      return fn.call(actions, me, payload, ctx);
+    };
+  }
+
+  // Nobody uses the service until they have accepted the current Terms and Privacy Notice (people who signed up before
+  // they existed are held to it only when the administrator turns that on). These can always be reached, so a person can
+  // accept, download their data, or delete their account.
+  const CONSENT_EXEMPT = new Set(['me', 'consentStatus', 'consentAccept', 'consentSet', 'accountExport', 'accountDeleteCode', 'accountDelete']);
+  for (const [name, fn] of Object.entries(actions)) {
+    if (typeof fn !== 'function' || CONSENT_EXEMPT.has(name)) continue;
+    actions[name] = function consented(me, payload, ctx) {
+      if (me && !store.consentUpToDate(me, legal.VERSION)) {
+        throw new ApiError(403, 'consent_required', 'Please accept the current Terms of Use and Privacy Notice to continue');
+      }
       return fn.call(actions, me, payload, ctx);
     };
   }

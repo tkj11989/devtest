@@ -11,6 +11,7 @@ const next = (s, ev) => new Promise((r) => s.once(ev, r));
 
 async function setup(t, opts = {}) {
   const store = new Store({ file: null });
+  store.hasOptionalConsent = () => true; // these tests are not about consent (see consent.test.js)
   const app = createApp({ store, ...opts });
   await new Promise((r) => app.server.listen(0, r));
   const base = `http://localhost:${app.server.address().port}`;

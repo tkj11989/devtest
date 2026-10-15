@@ -222,6 +222,19 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       data: { type: 'object', description: 'Same payload as the Socket.IO event of that name' },
     }, ['id', 'event', 'createdAt', 'user', 'data']),
     Session: obj({ token: { type: 'string' }, user: ref('User') }, ['token', 'user']),
+    ConsentAccept: obj({
+      terms: { type: 'boolean', description: 'must be true: read and accepted the Terms of Use and Privacy Notice' },
+      age: { type: 'boolean', description: 'must be true: 18 or older' },
+      version: { type: 'string', description: 'the current `version` from `GET /legal` (sign-up only)' },
+    }, ['terms', 'age']),
+    ConsentStatus: obj({
+      version: { type: 'string' },
+      upToDate: { type: 'boolean', description: 'false: show the current texts and ask again (`POST /me/consent`); until then most calls answer `403 consent_required`' },
+      acceptedVersion: { type: ['string', 'null'] },
+      acceptedAt: { type: ['integer', 'null'] },
+      optional: { type: 'object', additionalProperties: { type: 'boolean' }, description: '`translation`, `kyc`: whether consent is given' },
+      summary: { type: 'object', description: 'same as `GET /legal`' },
+    }),
     AppearancePrefs: obj({
       mode: { type: 'string', enum: ['auto', 'light', 'dark'] },
       theme: { type: 'string', example: 'ocean' },
@@ -307,6 +320,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.auth, 'Create an account (verified by OTP)', {
         auth: false,
         description: [
+          '**Consent (required)**: `consent: { terms: true, age: true, version }`. The person must have read and accepted the Terms of Use and Privacy Notice (`GET /legal`) and confirmed they are 18 or older; `version` must be the current `version` from `GET /legal`. Without it the answer is `400 consent_required`; an old version is `409 consent_outdated`. The acceptance (what, which version, when) is recorded on the account.',
           '**Individual**: `displayName`, `phone` and `phoneOtp` (the `requestId` from `POST /auth/otp` and the code received by SMS).',
           '**Business**: `accountType: "business"`, the business name as `displayName`, `phone` + `phoneOtp`, `email` + `emailOtp` (both are required and verified) and `business` with at least a `category` (any other `Business` fields are optional).',
           'Every code is checked before any is used up, so a typo in one code does not cost the other. A username is made from the name unless you send `username`.',
@@ -320,7 +334,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: { type: 'string', format: 'email', description: 'business only (required)' },
           emailOtp: ref('OtpProof'),
           business: ref('Business'),
-        }, ['displayName', 'phone', 'phoneOtp']), {
+          consent: ref('ConsentAccept'),
+        }, ['displayName', 'phone', 'phoneOtp', 'consent']), {
           accountType: 'business',
           displayName: 'Pizza Palace',
           phone: '+919876543210',
@@ -328,6 +343,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
+          consent: { terms: true, age: true, version: '2026-10-15' },
         }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session'), ...errors(400, 409, 429) },
       }),
@@ -360,6 +376,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
             business: { oneOf: [ref('Business'), { type: 'null' }] },
             contact: ref('Contact'),
             privacy: obj({ profileViews: { type: 'boolean' } }),
+            consent: obj({ version: { type: 'string' }, upToDate: { type: 'boolean' }, optional: { type: 'object', additionalProperties: { type: 'boolean' } } }),
           })),
           ...errors(401),
         },
@@ -367,6 +384,11 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       patch: op(T.me, 'Update my profile', {
         body: jsonBody(obj({ displayName: { type: 'string' }, about: { type: 'string' } })),
         responses: { 200: ok(obj({ user: ref('User') })), ...errors(400, 401) },
+      }),
+      delete: op(T.me, 'Delete my account (step 2)', {
+        description: 'Erases the account for good: profile and contact details, keys, sessions, statuses, channels, products and developer access are removed; the content of your messages is erased; you leave your groups. A reserved empty username, chats other people still have, and a record that consent was given and when the account was deleted remain. Send the `requestId` and `code` from `POST /me/delete/code` and `confirm: "DELETE"`.',
+        body: jsonBody(obj({ requestId: { type: 'string' }, code: { type: 'string' }, confirm: { type: 'string', enum: ['DELETE'] } }, ['requestId', 'code', 'confirm']), { requestId: 'otp_6f1c…', code: '482913', confirm: 'DELETE' }),
+        responses: { 200: ok(obj({ deleted: { type: 'boolean' } })), ...errors(400, 401) },
       }),
     },
 
@@ -476,6 +498,51 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           icons: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' }, svg: { type: 'string', description: 'SVG; colours use `var(--primary)`, replace with the theme colour' } })),
           avatarShapes: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' } })),
         })) },
+      }),
+    },
+    '/legal': {
+      get: op(T.me, 'Terms, Privacy Notice and consent texts', {
+        auth: false,
+        description: 'Everything a sign-up screen needs: the current `version`, the documents (`url` is a readable page, `json` the same as data), the exact consent wording, and who is responsible (company, Grievance Officer). `configured: false` means the company details are still placeholders.',
+        responses: { 200: ok(obj({ version: { type: 'string' }, configured: { type: 'boolean' }, company: { type: 'object' }, documents: arrayOf({ type: 'object' }), consents: arrayOf({ type: 'object' }) })) },
+      }),
+    },
+    '/legal/{doc}': {
+      get: op(T.me, 'One legal document as data', {
+        auth: false,
+        description: '`privacy` or `terms`, as `{ id, title, version, sections: [{ title, paragraphs, bullets, table }] }`. The same text is a page at `/legal/privacy` and `/legal/terms`.',
+        params: [{ name: 'doc', in: 'path', required: true, schema: { type: 'string', enum: ['privacy', 'terms'] } }],
+        responses: { 200: ok({ type: 'object' }), ...errors(404) },
+      }),
+    },
+    '/me/consent': {
+      get: op(T.me, 'What I have agreed to', {
+        responses: { 200: ok(ref('ConsentStatus')), ...errors(401) },
+      }),
+      post: op(T.me, 'Accept the current Terms and Privacy Notice', {
+        description: 'Needed when `upToDate` is false (the texts changed). `terms` and `age` must both be true.',
+        body: jsonBody(ref('ConsentAccept'), { terms: true, age: true }),
+        responses: { 200: ok(ref('ConsentStatus')), ...errors(400, 401) },
+      }),
+    },
+    '/me/consent/{id}': {
+      put: op(T.me, 'Give or withdraw an optional consent', {
+        description: '`id` is `translation` (message text is sent to a translation service) or `kyc` (an ID number is sent to a verification service). The feature answers `403 consent_translation` / `consent_kyc` until given. Withdrawing translation also switches translation off in every chat.',
+        params: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', enum: ['translation', 'kyc'] } }],
+        body: jsonBody(obj({ granted: { type: 'boolean' } }, ['granted']), { granted: true }),
+        responses: { 200: ok(ref('ConsentStatus')), ...errors(400, 401) },
+      }),
+    },
+    '/me/export': {
+      get: op(T.me, 'Download my data', {
+        description: 'Everything held about the account as one JSON file (profile, settings, consent history, chats with their messages, statuses, channels, developer keys). End-to-end encrypted messages appear as encrypted envelopes.',
+        responses: { 200: ok({ type: 'object' }), ...errors(401) },
+      }),
+    },
+    '/me/delete/code': {
+      post: op(T.me, 'Delete my account: send the confirmation code', {
+        description: 'Step 1: a code is sent by SMS to the account\'s verified mobile number.',
+        responses: { 200: ok(ref('OtpSent')), ...errors(400, 401, 429) },
       }),
     },
     '/me/appearance': {
@@ -961,6 +1028,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /me/catalogue/products/{id}': 'deleteProduct',
     'put /me/catalogue/products/{id}/image': 'setProductImage',
     'delete /me/catalogue/products/{id}/image': 'removeProductImage',
+    'get /legal': 'getLegal',
+    'get /legal/{doc}': 'getLegalDocument',
+    'get /me/consent': 'getMyConsent',
+    'post /me/consent': 'acceptConsent',
+    'put /me/consent/{id}': 'setOptionalConsent',
+    'get /me/export': 'exportMyData',
+    'post /me/delete/code': 'requestAccountDeletionCode',
+    'delete /me': 'deleteMyAccount',
     'get /appearance': 'getAppearanceCatalogue',
     'get /me/appearance': 'getMyAppearance',
     'put /me/appearance': 'setMyAppearance',

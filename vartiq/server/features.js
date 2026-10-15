@@ -27,6 +27,7 @@ const FEATURES = [
   { id: 'developerApi', group: 'Developers', label: 'Developer API', description: 'API keys and webhooks. Restricted by default: off hides it in the web and mobile apps, blocks creating keys and webhooks, and stops API-key access.' },
 ];
 
+const { DEFAULT_LEGAL, FIELD_LIMITS } = require('./legal');
 const IDS = FEATURES.map((f) => f.id);
 /** Features an administrator has to switch on. */
 const OFF_BY_DEFAULT = ['developerApi'];
@@ -41,6 +42,7 @@ const DEFAULT_SETTINGS = {
   announcement: '',
   maintenance: { on: false, message: 'We are making improvements and will be back soon.' },
   minClientVersion: '',
+  legal: { ...DEFAULT_LEGAL }, // company details printed in the Terms and Privacy Notice (Admin → Settings → Legal)
 };
 
 const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000] };
@@ -105,6 +107,22 @@ function applySettings(current, patch) {
     const v = String(patch.minClientVersion || '').trim();
     if (v && !/^\d+(\.\d+){0,2}$/.test(v)) throw bad('minClientVersion must look like 1.2.0');
     set('minClientVersion', next, 'minClientVersion', v);
+  }
+  if (patch.legal !== undefined) {
+    const l = patch.legal || {};
+    next.legal = { ...DEFAULT_LEGAL, ...(next.legal || {}) };
+    for (const [k, v] of Object.entries(l)) {
+      if (!(k in DEFAULT_LEGAL)) throw bad(`Unknown legal setting "${k}"`);
+      if (k === 'backupDays' || k === 'responseDays') {
+        if (!Number.isInteger(v) || v < 1 || v > 365) throw bad(`legal.${k} must be a whole number of days from 1 to 365`);
+      } else if (k === 'requireForLegacy') {
+        if (typeof v !== 'boolean') throw bad('legal.requireForLegacy must be true or false');
+      } else {
+        if (typeof v !== 'string' || v.trim().length > FIELD_LIMITS[k]) throw bad(`legal.${k} must be text of up to ${FIELD_LIMITS[k]} characters`);
+        if ((k === 'contactEmail' || k === 'grievanceEmail') && v.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())) throw bad(`legal.${k} must be an email address`);
+      }
+      set(`legal ${k}`, next.legal, k, typeof v === 'string' ? v.trim() : v);
+    }
   }
   return { settings: next, changes };
 }

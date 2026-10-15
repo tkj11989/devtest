@@ -184,6 +184,28 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.get('/appearance', (req, res) => res.json(require('./appearance').catalogue()));
   router.get('/me/appearance', ...authed, run((req) => actions.appearance(req.user)));
   router.put('/me/appearance', ...authed, json, run((req) => actions.setAppearance(req.user, req.body)));
+  // Terms of Use, Privacy Notice and consent; download or delete your data.
+  const legal = require('./legal');
+  router.get('/legal', (req, res) => res.json(legal.summary(store.getSettings())));
+  router.get('/legal/:doc', (req, res) => {
+    const doc = legal.documentData(req.params.doc, legal.details(store.getSettings()));
+    if (!doc) return res.status(404).json({ error: { code: 'not_found', message: 'No such document' } });
+    return res.json(doc);
+  });
+  router.get('/me/consent', ...authed, run((req) => actions.consentStatus(req.user)));
+  router.post('/me/consent', ...authed, json, run((req) => actions.consentAccept(req.user, req.body || {})));
+  router.put('/me/consent/:id', ...authed, json, run((req) => actions.consentSet(req.user, { id: p(req, 'id'), granted: req.body?.granted })));
+  router.get('/me/export', ...authed, (req, res, next) => {
+    try {
+      const data = actions.accountExport(req.user);
+      res.set('Content-Disposition', `attachment; filename="vartiq-${req.user}-data.json"`);
+      res.json(data);
+    } catch (err) {
+      next(err);
+    }
+  });
+  router.post('/me/delete/code', ...authed, json, run((req) => actions.accountDeleteCode(req.user)));
+  router.delete('/me', ...authed, json, run((req) => actions.accountDelete(req.user, req.body || {})));
   router.get('/translate/languages', ...authed, run((req) => actions.translateLanguages(req.user)));
   router.put('/conversations/:id/translation', ...authed, json, run((req) => actions.setTranslation(req.user, { convId: p(req, 'id'), lang: req.body?.lang })));
   router.post('/conversations/:id/translate', ...authed, json, run((req) => actions.translateTexts(req.user, { convId: p(req, 'id'), texts: req.body?.texts }, req.ctx)));

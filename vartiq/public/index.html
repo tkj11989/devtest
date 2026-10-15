@@ -27,6 +27,18 @@
       <button class="primary hidden" type="button" id="maintenance-reload">Reload</button>
     </div>
   </div>
+  <div id="consent-gate" class="maintenance hidden" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+    <div class="maintenance-card gate-card">
+      <h2 id="gate-title">Please review our Terms and Privacy Notice</h2>
+      <p id="gate-text">We have updated our Terms of Use and Privacy Notice. To keep using VartiQ you need to accept them.</p>
+      <p class="consent-links"><a href="/legal/terms" target="_blank" rel="noopener">Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Notice</a></p>
+      <label class="agree"><input type="checkbox" id="gate-terms" /> <span id="gate-terms-text">I have read and agree to the Terms of Use and Privacy Notice.</span></label>
+      <label class="agree"><input type="checkbox" id="gate-age" /> <span>I am 18 years of age or older.</span></label>
+      <p id="gate-error" class="error" role="alert"></p>
+      <button class="primary wide" type="button" id="gate-accept">Accept and continue</button>
+      <p class="gate-alt"><button class="link" type="button" id="gate-export">Download my data</button> · <button class="link" type="button" id="gate-delete">Delete my account</button> · <button class="link" type="button" id="gate-logout">Log out</button></p>
+    </div>
+  </div>
   <!-- ========== Auth screen ========== -->
   <section id="auth" class="auth hidden">
     <div class="auth-card">
@@ -75,10 +87,23 @@
           </div>
         </div>
 
+        <div class="consent register-only hidden" id="consent-box" role="group" aria-labelledby="consent-title">
+          <strong id="consent-title" class="consent-title">Before you continue</strong>
+          <ul class="consent-facts">
+            <li>We keep your mobile number, name, chats and settings on our servers. Messages you type in the app are end-to-end encrypted.</li>
+            <li>We don't sell your data, show ads, or read your phone's contacts.</li>
+            <li>You can download or delete your data any time in Profile.</li>
+          </ul>
+          <label class="agree"><input type="checkbox" name="agreeTerms" /> <span id="consent-terms-text">I have read and agree to the Terms of Use and Privacy Notice.</span></label>
+          <label class="agree"><input type="checkbox" name="agreeAge" /> <span id="consent-age-text">I am 18 years of age or older.</span></label>
+          <p class="consent-links"><a href="/legal/terms" target="_blank" rel="noopener">Read the Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Read the Privacy Notice</a></p>
+        </div>
+
         <p id="auth-error" class="error" role="alert"></p>
         <button type="submit" class="primary" id="auth-submit">Send code</button>
         <button type="button" class="link login-only" id="auth-use-email">Business account? Log in with email</button>
       </form>
+      <p class="legal-links"><a href="/legal/terms" target="_blank" rel="noopener">Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Notice</a></p>
     </div>
   </section>
 
@@ -231,6 +256,32 @@
         </div>
       </div>
 
+      <!-- Privacy and consent -->
+      <div class="panel overlay hidden" id="panel-privacy">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Privacy and consent</h2></header>
+        <div class="pad stack" id="privacy-body">
+          <div class="card-lite">
+            <strong>Terms of Use and Privacy Notice</strong>
+            <p class="muted" id="privacy-accepted"></p>
+            <p><a href="/legal/terms" target="_blank" rel="noopener">Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Notice</a></p>
+          </div>
+          <div class="card-lite" id="privacy-optional"></div>
+          <div class="card-lite">
+            <strong>Your data</strong>
+            <p class="muted">You can see everything we hold about you, or erase it.</p>
+            <div class="row-actions">
+              <button class="primary" type="button" id="btn-export">Download my data</button>
+              <button class="danger-btn" type="button" id="btn-delete-account">Delete my account</button>
+            </div>
+            <p class="muted small-note">Deleting is permanent: your profile, contact details, keys, statuses, channels and the content of the messages you sent are erased, and you leave your groups. If you do not agree to the Terms or Privacy Notice, deleting your account is how you withdraw that consent.</p>
+          </div>
+          <div class="card-lite">
+            <strong>Questions or complaints</strong>
+            <p class="muted" id="privacy-contact"></p>
+          </div>
+        </div>
+      </div>
+
       <!-- Who viewed my profile -->
       <div class="panel overlay hidden" id="panel-views">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Who viewed my profile</h2></header>
@@ -349,6 +400,10 @@
             <label class="cache-switch"><input type="checkbox" id="cache-toggle" checked aria-label="Save chats on this device" /></label>
             <button class="link" type="button" id="btn-cache-clear">Clear</button>
           </div>
+          <button class="link-row" type="button" id="btn-privacy">
+            <svg viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4Zm-1 14-4-4 1.4-1.4L11 12.2l4.6-4.6L17 9l-6 6Z"/></svg>
+            <span><strong>Privacy and consent</strong><small>What you agreed to, download or delete your data</small></span>
+          </button>
           <button class="link-row" type="button" id="btn-appearance">
             <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.3-.5-.8-.5-1.2 0-1.1.9-2 2-2h2.4a4.1 4.1 0 0 0 4.1-4.1C21.5 6.4 17.2 3 12 3ZM6.5 12a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
             <span><strong>Appearance</strong><small id="appearance-summary">Light or dark. Colour themes, app icons and avatar shapes are Premium</small></span>

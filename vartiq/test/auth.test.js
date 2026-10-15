@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createApp } = require('../server');
 const { Store } = require('../server/store');
+const legal = require('../server/legal');
+const consent = { terms: true, age: true, version: legal.VERSION };
 const { createOtpService, normalisePhone, normaliseEmail } = require('../server/otp');
 
 async function setup(t) {
@@ -100,12 +102,12 @@ test('api: individual signs up and logs in with mobile number + OTP', async (t) 
   assert.deepStrictEqual([sent.channel, sent.sentTo, sent.expiresIn], ['sms', '+91•••••••210', 300]);
   assert.strictEqual(outbox[0].to, '+919876543210');
 
-  const wrong = await api('POST', '/auth/register', { displayName: 'Anita Rao', phone, phoneOtp: { requestId, code: code === '000000' ? '111111' : '000000' } });
+  const wrong = await api('POST', '/auth/register', { consent, displayName: 'Anita Rao', phone, phoneOtp: { requestId, code: code === '000000' ? '111111' : '000000' } });
   assert.deepStrictEqual([wrong.status, wrong.body.error.code], [400, 'otp_invalid']);
-  const noName = await api('POST', '/auth/register', { phone, phoneOtp: { requestId, code } });
+  const noName = await api('POST', '/auth/register', { consent, phone, phoneOtp: { requestId, code } });
   assert.strictEqual(noName.status, 400);
 
-  const reg = await api('POST', '/auth/register', { displayName: 'Anita Rao', phone, phoneOtp: { requestId, code } });
+  const reg = await api('POST', '/auth/register', { consent, displayName: 'Anita Rao', phone, phoneOtp: { requestId, code } });
   assert.strictEqual(reg.status, 201, JSON.stringify(reg.body));
   assert.strictEqual(reg.body.user.username, 'anitarao');
   assert.strictEqual(reg.body.user.phone, undefined, 'numbers are private');
@@ -114,13 +116,13 @@ test('api: individual signs up and logs in with mobile number + OTP', async (t) 
   assert.strictEqual(me.body.business, null);
 
   // The code was used up; the number is taken now.
-  const again = await api('POST', '/auth/register', { displayName: 'Copy', phone, phoneOtp: { requestId, code } });
+  const again = await api('POST', '/auth/register', { consent, displayName: 'Copy', phone, phoneOtp: { requestId, code } });
   assert.strictEqual(again.status, 409);
   assert.strictEqual((await api('POST', '/auth/otp', { purpose: 'register', phone })).body.error.code, 'phone_taken');
 
   // Same name again gets a different username.
   const other = await codeFor({ purpose: 'register', phone: '+14155550100' });
-  const twin = await api('POST', '/auth/register', { displayName: 'Anita Rao', phone: '+14155550100', phoneOtp: other });
+  const twin = await api('POST', '/auth/register', { consent, displayName: 'Anita Rao', phone: '+14155550100', phoneOtp: other });
   assert.match(twin.body.user.username, /^anitarao\d+$/);
 
   // Log in with a code by SMS. Wrong code, then right code.
@@ -147,22 +149,22 @@ test('api: business sign-up needs both mobile and email verified', async (t) => 
   const email = 'Hello@Pizza.Example';
 
   const sms = await codeFor({ purpose: 'register', phone });
-  const base = { accountType: 'business', displayName: 'Pizza Palace', phone, phoneOtp: sms, business: { category: 'Restaurant', timezone: 'Asia/Kolkata' } };
+  const base = { consent, accountType: 'business', displayName: 'Pizza Palace', phone, phoneOtp: sms, business: { category: 'Restaurant', timezone: 'Asia/Kolkata' } };
   const noEmail = await api('POST', '/auth/register', base);
   assert.deepStrictEqual([noEmail.status, noEmail.body.error.message], [400, 'Email is required for a business account']);
 
   const mail = await codeFor({ purpose: 'register', email });
   assert.strictEqual(mail.sent.channel, 'email');
   assert.strictEqual(mail.sent.sentTo, 'he•••@pizza.example');
-  const noCategory = await api('POST', '/auth/register', { ...base, email, emailOtp: mail, business: {} });
+  const noCategory = await api('POST', '/auth/register', { consent, ...base, email, emailOtp: mail, business: {} });
   assert.strictEqual(noCategory.status, 400);
 
   // A wrong email code fails the sign-up but doesn't use up the SMS code.
-  const typo = await api('POST', '/auth/register', { ...base, email, emailOtp: { ...mail, code: mail.code === '000000' ? '111111' : '000000' } });
+  const typo = await api('POST', '/auth/register', { consent, ...base, email, emailOtp: { ...mail, code: mail.code === '000000' ? '111111' : '000000' } });
   assert.deepStrictEqual([typo.status, typo.body.error.code], [400, 'otp_invalid']);
   assert.match(typo.body.error.message, /email code is wrong/);
 
-  const reg = await api('POST', '/auth/register', { ...base, email, emailOtp: mail });
+  const reg = await api('POST', '/auth/register', { consent, ...base, email, emailOtp: mail });
   assert.strictEqual(reg.status, 201, JSON.stringify(reg.body));
   assert.strictEqual(reg.body.user.business.category, 'Restaurant');
   assert.strictEqual(reg.body.user.business.email, 'hello@pizza.example');
@@ -179,7 +181,7 @@ test('api: business sign-up needs both mobile and email verified', async (t) => 
 test('api: change a verified number/email; reset the chat lock code by SMS', async (t) => {
   const { api, codeFor, store } = await setup(t);
   const sms = await codeFor({ purpose: 'register', phone: '+447700900123' });
-  const { body: { token } } = await api('POST', '/auth/register', { displayName: 'Sam', phone: '+447700900123', phoneOtp: sms });
+  const { body: { token } } = await api('POST', '/auth/register', { consent, displayName: 'Sam', phone: '+447700900123', phoneOtp: sms });
   store.register('legacy', 'pass');
   store.setContact('legacy', 'email', 'taken@example.com');
 

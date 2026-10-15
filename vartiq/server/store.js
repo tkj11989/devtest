@@ -85,6 +85,196 @@ class Store {
     else this.flush();
   }
 
+  // ---------- consent (Terms of Use, Privacy Notice and optional consents) ----------
+
+  consentOf(username) {
+    return this.data.users[username]?.consent || null;
+  }
+
+  /** Someone accepted the current Terms and Privacy Notice (`items` e.g. ['terms','age']) and maybe gave optional consents. */
+  recordConsent(username, { version, items = [], optional = {}, via = 'app' }) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const now = Date.now();
+    const c = u.consent || { version: null, at: null, accepted: [], optional: {}, history: [] };
+    c.version = version;
+    c.at = now;
+    c.accepted = [...new Set([...(c.accepted || []), ...items])];
+    for (const [id, granted] of Object.entries(optional)) c.optional[id] = { granted: !!granted, at: now, version };
+    c.history = [...(c.history || []), { at: now, action: 'accept', version, items: [...items, ...Object.keys(optional).map((k) => `${k}:${optional[k] ? 'granted' : 'withdrawn'}`)], via }].slice(-100);
+    u.consent = c;
+    this._save();
+    return c;
+  }
+
+  /** Give or withdraw one optional consent (translation, kyc). */
+  setOptionalConsent(username, id, granted, { version, via = 'app' } = {}) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const now = Date.now();
+    const c = u.consent || { version: null, at: null, accepted: [], optional: {}, history: [] };
+    c.optional[id] = { granted: !!granted, at: now, version: version || c.version };
+    c.history = [...(c.history || []), { at: now, action: granted ? 'grant' : 'withdraw', version: version || c.version, items: [id], via }].slice(-100);
+    u.consent = c;
+    this._save();
+    return c;
+  }
+
+  hasOptionalConsent(username, id) {
+    return !!this.data.users[username]?.consent?.optional?.[id]?.granted;
+  }
+
+  /**
+   * Has this person accepted the current texts? Accounts made before consent existed have no record; they are only
+   * held to it when the administrator turns `legal.requireForLegacy` on.
+   */
+  consentUpToDate(username, version) {
+    const u = this.data.users[username];
+    if (!u || u.deletedAt) return true;
+    const c = u.consent;
+    if (!c) return !this.getSettings().legal.requireForLegacy;
+    return c.version === version && c.accepted.includes('terms') && c.accepted.includes('age');
+  }
+
+  // ---------- your data: download and delete ----------
+
+  /** Everything we hold about `username`, as a plain object (for "Download my data"). */
+  exportAccount(username) {
+    const u = this.data.users[username];
+    if (!u || u.deletedAt) throw new Error('No such account');
+    const chats = this._convsOf(username).map((c) => ({
+      id: c.id,
+      type: c.type,
+      name: c.name || null,
+      members: c.members,
+      owner: c.owner || null,
+      createdAt: c.createdAt,
+      disappearAfter: c.disappearAfter || null,
+      messages: (this.data.messages[c.id] || []).filter((m) => Store.visibleTo(m, username)).map((m) => this.viewFor(m, username)),
+    }));
+    const own = (coll, key) => Object.values(this.data[coll]).filter((x) => x[key] === username);
+    return {
+      format: 'vartiq-export-1',
+      exportedAt: new Date().toISOString(),
+      notice: 'Messages typed in the web app are end-to-end encrypted: they appear here as encrypted envelopes (field "e2ee") because the server cannot read them. Your devices can.',
+      account: {
+        username,
+        displayName: u.displayName,
+        about: u.about,
+        mobile: u.phone || null,
+        email: u.email || null,
+        createdAt: u.createdAt,
+        lastSeen: u.lastSeen || null,
+        verified: !!u.verifiedAt,
+        verifiedAt: u.verifiedAt || null,
+        subscription: u.subscription || null,
+        business: u.business || null,
+        catalogue: u.catalogue || null,
+        preferences: u.prefs || {},
+        translationLanguagesByChat: u.translate || {},
+        defaultDisappearSeconds: u.defaultDisappear || null,
+        blockedPeople: u.blocked || [],
+        profileViewsEnabled: this.profileViewsEnabled(username),
+        lockedChats: u.lockedChats || [],
+        hiddenChats: u.hiddenChats || [],
+        chatLockSet: !!u.chatLock,
+        devices: (u.devices || []).map((d) => ({ id: d.id, name: d.name, publicKey: d.publicKey, createdAt: d.createdAt || null })),
+        passkeys: (u.passkeys || []).map((p) => ({ id: p.id, name: p.name || null, createdAt: p.createdAt || null })),
+        suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason } : null,
+      },
+      consent: u.consent || null,
+      chats,
+      statuses: own('statuses', 'owner').map((s) => ({ id: s.id, type: s.type, text: s.text || null, caption: s.caption || null, ts: s.ts, expiresAt: s.expiresAt })),
+      channels: {
+        owned: own('channels', 'owner').map((c) => ({ id: c.id, handle: c.handle, name: c.name, description: c.description, posts: (this.data.channelPosts[c.id] || []).map((p) => ({ id: p.id, text: p.text, ts: p.ts })) })),
+        following: Object.values(this.data.channels).filter((c) => c.followers[username] && c.owner !== username).map((c) => ({ id: c.id, handle: c.handle, name: c.name })),
+      },
+      profileViewers: Object.entries(u.profileViews || {}).map(([viewer, ts]) => ({ viewer, lastViewedAt: ts })),
+      reportsMade: this.data.reports.filter((r) => r.reporter === username).map((r) => ({ channelId: r.channelId, reason: r.reason, ts: r.ts })),
+      developer: {
+        apiKeys: own('apiKeys', 'owner').map((k) => ({ id: k.id, name: k.name, preview: k.preview, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt })),
+        webhooks: own('webhooks', 'owner').map((w) => ({ id: w.id, url: w.url, events: w.events, active: w.active, createdAt: w.createdAt })),
+      },
+    };
+  }
+
+  /**
+   * Erase an account. The profile, contact details, keys, sessions, statuses, channels, products and developer
+   * access are removed; the content of the person's messages is erased; they leave their groups. What stays: the
+   * username as a reserved empty record named "Deleted account", chats other people still have (without the erased
+   * content), and a record that consent was given and when the account was deleted.
+   */
+  deleteAccount(username) {
+    const u = this.data.users[username];
+    if (!u || u.deletedAt) throw new Error('No such account');
+    const now = Date.now();
+    for (const [token, name] of this.sessions) if (name === username) this.sessions.delete(token);
+    for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
+    for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
+
+    for (const s of Object.values(this.data.statuses)) {
+      if (s.owner === username) this._removeStatus(s);
+      else if (s.views?.[username]) delete s.views[username];
+    }
+
+    for (const [id, ch] of Object.entries(this.data.channels)) {
+      if (ch.owner === username) {
+        delete this.data.channels[id];
+        delete this.data.channelPosts[id];
+        this.data.reports = this.data.reports.filter((r) => r.channelId !== id);
+        continue;
+      }
+      delete ch.followers[username];
+      ch.admins = (ch.admins || []).filter((a) => a !== username);
+      const posts = this.data.channelPosts[id];
+      if (posts?.some((p) => p.by === username)) {
+        this.data.channelPosts[id] = posts.filter((p) => p.by !== username);
+      }
+    }
+    this.data.reports = this.data.reports.filter((r) => r.reporter !== username);
+
+    for (const conv of [...this._convsOf(username)]) {
+      const list = this.data.messages[conv.id] || [];
+      for (const m of list) {
+        if (m.from === username && m.type !== 'call' && m.type !== 'system') {
+          if (m.voice) this.deleteMedia(m.voice.mediaId);
+          m.text = '';
+          m.deleted = true;
+          delete m.voice;
+          delete m.e2ee;
+          delete m.masked;
+          delete m.starredBy;
+          this._touchMsg(conv.id, m);
+        }
+      }
+      if (conv.type === 'group') {
+        conv.members = conv.members.filter((m) => m !== username);
+        conv.admins = (conv.admins || []).filter((a) => a !== username);
+        if (conv.members.length < 2) {
+          for (const m of list) if (m.voice) this.deleteMedia(m.voice.mediaId);
+          delete this.data.conversations[conv.id];
+          delete this.data.messages[conv.id];
+        } else if (conv.owner === username) {
+          conv.owner = conv.admins[0] || conv.members[0];
+          if (!conv.admins.includes(conv.owner)) conv.admins.push(conv.owner);
+        }
+      }
+    }
+    this._convIdx = null;
+
+    for (const other of Object.values(this.data.users)) {
+      if (other.username === username) continue;
+      if (other.blocked?.includes(username)) other.blocked = other.blocked.filter((b) => b !== username);
+      if (other.profileViews?.[username]) delete other.profileViews[username];
+    }
+    for (const [id, meta] of Object.entries(this.data.media)) if (meta.publicBy === username) this.deleteMedia(id);
+
+    const consent = u.consent ? { ...u.consent, history: [...(u.consent.history || []), { at: now, action: 'account-deleted', via: 'app' }].slice(-100) } : null;
+    this.data.users[username] = { username, displayName: 'Deleted account', about: '', createdAt: u.createdAt, lastSeen: null, deletedAt: now, ...(consent ? { consent } : {}) };
+    this._contactIdx = null;
+    this._save();
+  }
+
   // ---------- platform settings, feature switches (administrators) ----------
 
   /** Current settings (defaults filled in). Treat as read-only. */
@@ -98,6 +288,7 @@ class Store {
         limits: { ...DEFAULT_SETTINGS.limits, ...(saved.limits || {}) },
         prices: { ...(saved.prices || {}) },
         maintenance: { ...DEFAULT_SETTINGS.maintenance, ...(saved.maintenance || {}) },
+        legal: { ...DEFAULT_SETTINGS.legal, ...(saved.legal || {}) },
       };
     }
     return this.settingsCache;
@@ -196,7 +387,7 @@ class Store {
   /** One page of users for the dashboard. */
   listUsers({ q = '', filter = '', page = 1, pageSize = 25 } = {}) {
     q = String(q).trim().toLowerCase();
-    let list = Object.values(this.data.users).filter((u) => !q
+    let list = Object.values(this.data.users).filter((u) => (filter === 'deleted' ? u.deletedAt : !u.deletedAt)).filter((u) => !q
       || u.username.includes(q) || u.displayName.toLowerCase().includes(q) || (u.phone || '').includes(q) || (u.email || '').includes(q));
     if (filter === 'premium') list = list.filter((u) => this.isPremium(u.username));
     else if (filter === 'verified') list = list.filter((u) => u.verifiedAt);
@@ -226,6 +417,8 @@ class Store {
       plan: u.subscription?.plan || null,
       business: u.business ? u.business.category : null,
       suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason, by: u.suspended.by } : null,
+      deleted: u.deletedAt || null,
+      consent: u.consent ? { version: u.consent.version, at: u.consent.at, optional: Object.fromEntries(Object.entries(u.consent.optional || {}).map(([k, v]) => [k, v.granted])) } : null,
       chats: this._convsOf(username).length,
       channelsOwned: Object.values(this.data.channels).filter((c) => c.owner === username).length,
       apiKeys: Object.values(this.data.apiKeys).filter((k) => k.owner === username).length,
@@ -237,7 +430,8 @@ class Store {
   stats(onlineCount = 0) {
     const day = 86400000;
     const now = Date.now();
-    const users = Object.values(this.data.users);
+    const everyone = Object.values(this.data.users);
+    const users = everyone.filter((u) => !u.deletedAt);
     const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
     const bucket = (ts, days) => Math.floor((startOfToday - new Date(new Date(ts).setHours(0, 0, 0, 0)).getTime()) / day) < days ? Math.floor((startOfToday - new Date(new Date(ts).setHours(0, 0, 0, 0)).getTime()) / day) : -1;
     const days = 14;
@@ -259,6 +453,7 @@ class Store {
     return {
       users: {
         total: users.length,
+        deleted: everyone.length - users.length,
         online: onlineCount,
         newToday: users.filter((u) => u.createdAt >= startOfToday).length,
         new7d: users.filter((u) => u.createdAt >= now - 7 * day).length,
@@ -1388,7 +1583,7 @@ class Store {
     const digits = q.replace(/[\s\-().]/g, '').replace(/^00/, '+');
     const phone = /^\+?\d{8,15}$/.test(digits) ? digits.replace(/^(?!\+)/, '+') : null;
     return Object.values(this.data.users)
-      .filter((u) => u.username !== exclude)
+      .filter((u) => u.username !== exclude && !u.deletedAt)
       .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q)
         || (u.business && u.business.category.toLowerCase().includes(q))
         || (phone && u.phone === phone))
@@ -1404,7 +1599,7 @@ class Store {
 
   getOrCreateDirect(a, b) {
     if (a === b) throw new Error('Cannot chat with yourself');
-    if (!this.data.users[b]) throw new Error('User not found');
+    if (!this.data.users[b] || this.data.users[b].deletedAt) throw new Error('User not found');
     const id = Store.directId(a, b);
     if (!this.data.conversations[id]) {
       this.data.conversations[id] = {
@@ -1676,6 +1871,7 @@ class Store {
     let hiddenFor = [];
     if (conv.type === 'direct') {
       const peer = conv.members.find((m) => m !== from);
+      if (this.data.users[peer]?.deletedAt) throw new Error('This account was deleted. You can no longer send messages to it.');
       if (this.hasBlocked(from, peer)) {
         throw new Error(`Unblock ${this.publicUser(peer)?.displayName || peer} to send a message`);
       }

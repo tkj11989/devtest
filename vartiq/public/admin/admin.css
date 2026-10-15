@@ -137,3 +137,5 @@ td.wrap { white-space: normal; min-width: 220px; }
 }
 
 .logo-img { width: 34px; height: 34px; object-fit: contain; }
+
+.warn-card { border-left: 4px solid var(--accent); margin-bottom: 12px; }

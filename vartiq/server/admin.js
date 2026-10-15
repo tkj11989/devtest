@@ -96,6 +96,7 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     stats: store.stats(onlineCount()),
     config: service.config(),
     integrations: integrations(),
+    legal: { configured: require('./legal').details(store.getSettings()).configured, version: require('./legal').VERSION },
     server: { uptimeSeconds: Math.round(process.uptime()), node: process.version, memoryMb: Math.round(process.memoryUsage().rss / 1048576) },
   })));
 
