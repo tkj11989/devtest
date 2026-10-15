@@ -139,6 +139,7 @@ const SOCKET_ACTIONS = {
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
  *   messageSweepMs   how often expired disappearing messages are removed
+ *   accountEraseDelayMs  how long after a deletion request the account's data is erased (default 1 hour; never more than 24 hours)
  *   kyc              { gateway, sandbox } for identity verification (see kyc.js; KYC_WEBHOOK_URL, KYC_SANDBOX=1)
  *   otp              { sender, exposeCodes, ttlMs, resendMs, … } for one-time login codes
  *                    (see otp.js; by default codes go to OTP_WEBHOOK_URL or the console)
@@ -154,6 +155,8 @@ function createApp({
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
   messageSweepMs = 5000,
   subscriptionSweepMs = 60 * 1000,
+  deletionSweepMs = 60 * 1000,
+  accountEraseDelayMs = Number(process.env.ACCOUNT_ERASE_DELAY_MS) || 60 * 60 * 1000,
   otp: otpOptions = {},
   kyc: kycOptions = {},
   payments: paymentOptions = {},
@@ -183,7 +186,7 @@ function createApp({
     ...paymentOptions,
   });
   const translator = createTranslator({ gateway: createTranslateGateway(), sandbox: process.env.TRANSLATE_SANDBOX === '1', ...translateOptions });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, accountEraseDelayMs });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -271,12 +274,16 @@ function createApp({
   const expiryTimer = setInterval(() => { service.pruneExpired(); }, messageSweepMs);
   // Premium that ran out: update badges for everyone.
   const subscriptionTimer = setInterval(() => service.expireSubscriptions(), subscriptionSweepMs);
+  // Accounts people asked to delete: their data is erased within 24 hours (by default about an hour after the request).
+  const deletionTimer = setInterval(() => { service.eraseDueAccounts(); }, deletionSweepMs);
   subscriptionTimer.unref();
+  deletionTimer.unref();
   expiryTimer.unref();
   server.on('close', () => {
     clearInterval(pruneTimer);
     clearInterval(expiryTimer);
     clearInterval(subscriptionTimer);
+    clearInterval(deletionTimer);
     webhooks.stop();
     otp.stop();
     kyc.stop();

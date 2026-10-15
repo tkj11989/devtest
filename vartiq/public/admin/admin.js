@@ -143,6 +143,7 @@
       h('div', { class: 'grid' },
         tile('Users', s.users.total), tile('Online now', s.users.online), tile('New today', s.users.newToday), tile('New in 7 days', s.users.new7d),
         tile('Premium', s.users.premium), tile('Verified', s.users.verified), tile('Business', s.users.business), tile('Suspended', s.users.suspended, true)),
+      s.users.deleting ? h('div', { class: 'grid' }, tile('Deletions waiting to be erased', s.users.deleting, true), tile('Overdue (over 24 hours)', s.users.deletionOverdue, true)) : null,
       h('p'),
       h('div', { class: 'grid' },
         tile('Chats', s.content.chats), tile('Groups', s.content.groups), tile('Messages', s.content.messages), tile('Status updates', s.content.statuses),
@@ -179,7 +180,7 @@
     let timer;
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { userFilter.q = search.value; userFilter.page = 1; route().then(() => $('#page input[type=search]')?.focus()); }, 350); });
     const filter = h('select', { 'aria-label': 'Filter', onchange: (e) => { userFilter.filter = e.target.value; userFilter.page = 1; route(); } },
-      [['', 'All users'], ['premium', 'Premium'], ['verified', 'Verified'], ['business', 'Business'], ['suspended', 'Suspended']].map(([v, l]) => h('option', { value: v, selected: v === userFilter.filter }, l)));
+      [['', 'All users'], ['premium', 'Premium'], ['verified', 'Verified'], ['business', 'Business'], ['suspended', 'Suspended'], ['deleted', 'Deleted or being deleted']].map(([v, l]) => h('option', { value: v, selected: v === userFilter.filter }, l)));
     return h('div', {},
       head(`Users (${fmt.n(res.total)})`),
       h('div', { class: 'toolbar' }, search, filter),
@@ -211,6 +212,7 @@
         ['Terms and Privacy accepted', u.consent ? `version ${u.consent.version}, ${fmt.date(u.consent.at)}${Object.entries(u.consent.optional).map(([k, v]) => ` · ${k}: ${v ? 'yes' : 'no'}`).join('')}` : 'No record (account made before consent was added)'],
         ...(u.deleted ? [['Account deleted', fmt.date(u.deleted)]] : [])]
         .flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, String(v))]),
+      u.deletion || u.deleted ? [h('dt', {}, 'Deletion'), h('dd', {}, u.deleted ? `Erased ${fmt.date(u.deleted)}` : `Requested ${fmt.date(u.deletion.requestedAt)}; login blocked; data is erased by ${fmt.date(u.deletion.eraseAt)} (always within 24 hours)`)] : [],
       u.suspended ? [h('dt', {}, 'Suspended'), h('dd', {}, `${fmt.date(u.suspended.at)} by ${u.suspended.by}${u.suspended.reason ? `: ${u.suspended.reason}` : ''}`)] : []);
     const reason = h('input', { placeholder: 'Reason shown to the user (optional)', maxlength: 200 });
     const days = h('input', { type: 'number', min: 1, max: 3650, value: 30, 'aria-label': 'Days of Premium' });

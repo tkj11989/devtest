@@ -38,6 +38,12 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
       if (purpose === 'register') assertSignupsOpen();
       const dest = destination(body);
       const existing = owner(dest);
+      if (existing && store.isClosed(existing)) {
+        throw new ApiError(purpose === 'login' ? 403 : 409, purpose === 'login' ? 'account_deletion_pending' : `${dest.channel === 'sms' ? 'phone' : 'email'}_taken`,
+          purpose === 'login'
+            ? 'This account is being deleted and can no longer be used. Its data is erased within 24 hours.'
+            : `This ${what(dest.channel)} belongs to an account that is being deleted. You can sign up again once its data has been erased (within 24 hours).`);
+      }
       if (purpose === 'register' && existing) {
         throw new ApiError(409, `${dest.channel === 'sms' ? 'phone' : 'email'}_taken`, `This ${what(dest.channel)} is already registered. Log in instead.`);
       }
@@ -53,11 +59,11 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
      */
     register(body = {}) {
       assertSignupsOpen();
-      // Nobody gets an account without agreeing to the Terms and Privacy Notice and confirming their age.
+      // Nobody gets an account without agreeing to the Terms and Privacy Notice.
       // Checked first, so a missing tick doesn't use up a login code.
       const consent = body.consent || {};
-      if (consent.terms !== true || consent.age !== true) {
-        throw new ApiError(400, 'consent_required', 'To create an account you must accept the Terms of Use and Privacy Notice and confirm you are 18 or older');
+      if (consent.terms !== true) {
+        throw new ApiError(400, 'consent_required', 'To create an account you must accept the Terms of Use and Privacy Notice');
       }
       if (consent.version !== legal.VERSION) {
         throw new ApiError(409, 'consent_outdated', 'The Terms of Use or Privacy Notice changed. Please read and accept the current version.');
@@ -96,7 +102,7 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
       }
       otp.consume(body.phoneOtp.requestId);
       if (email) otp.consume(body.emailOtp.requestId);
-      store.recordConsent(result.user.username, { version: legal.VERSION, items: ['terms', 'age'], via: 'registration' });
+      store.recordConsent(result.user.username, { version: legal.VERSION, items: ['terms'], via: 'registration' });
       return result;
     },
 

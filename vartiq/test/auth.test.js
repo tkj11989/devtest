@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const { createApp } = require('../server');
 const { Store } = require('../server/store');
 const legal = require('../server/legal');
-const consent = { terms: true, age: true, version: legal.VERSION };
+const consent = { terms: true, version: legal.VERSION };
 const { createOtpService, normalisePhone, normaliseEmail } = require('../server/otp');
 
 async function setup(t) {

@@ -62,12 +62,6 @@ const CONSENTS = [
     text: 'I have read and agree to the Terms of Use, and I have read the Privacy Notice. I agree that {brand} may collect and use my mobile number, name and the other information described in the Privacy Notice to create my account and run the service.',
   },
   {
-    id: 'age',
-    required: true,
-    title: 'Age',
-    text: 'I am 18 years of age or older.',
-  },
-  {
     id: 'translation',
     required: false,
     askAt: 'when you first turn on message translation',
@@ -95,7 +89,7 @@ function privacyNotice() {
       p: [
         '{company} ("we", "us") runs {brand}, a messaging and community app. We decide why and how your personal data is used (we are the "data fiduciary" under India\'s Digital Personal Data Protection Act, 2023, "DPDP Act").',
         'Registered address: {address}. Contact: {contactEmail}.',
-        'Grievance Officer: {grievanceName}, {grievanceEmail}{grievancePhone}. You can write to this person about anything in this notice (see section 10).',
+        'Grievance Officer: {grievanceName}, {grievanceEmail}{grievancePhone}. You can write to this person about anything in this notice (see section 9).',
       ],
     },
     {
@@ -125,8 +119,7 @@ function privacyNotice() {
       },
       ul: [
         'We do not read your phone\'s contact book and we do not upload it.',
-        'We do not use your data for advertising, we do not sell it, and we do not build profiles about you for third parties.',
-        'We do not use analytics or advertising trackers in the app.',
+        'We do not sell your personal data.',
       ],
     },
     {
@@ -170,15 +163,15 @@ function privacyNotice() {
       table: {
         head: ['Data', 'How long'],
         rows: [
-          ['Account data (profile, settings, contact details)', 'Until you delete your account'],
-          ['Messages and voice notes', 'Until you or the sender delete them, or the chat\'s disappearing-message timer removes them; deleted when you delete your account (see section 7)'],
+          ['Account data (profile, settings, contact details)', 'Until you delete your account; then erased within 24 hours'],
+          ['Messages and voice notes', 'Until you or the sender delete them, or the chat\'s disappearing-message timer removes them; the content of the messages you sent is erased within 24 hours of deleting your account (see section 7)'],
           ['Status updates', '24 hours'],
           ['Profile-view list', '90 days (only the last view date is kept), or until you switch the setting off'],
           ['Login codes (OTP)', 'A few minutes; kept only as a one-way hash'],
           ['Saved chats on your own device', 'Until you clear them or log out'],
           ['Payment confirmations', 'As long as the law requires us to keep accounting records'],
-          ['Record that you accepted the Terms and Privacy Notice (which version, when), and that you deleted your account', 'Kept after account deletion for as long as the law requires, to prove consent was given'],
-          ['Backups', 'Deleted data may remain in our backups for up to {backupDays} days, then it is overwritten'],
+          ['Record that you accepted the Terms and Privacy Notice (which version, when)', 'Until you delete your account; then erased with the rest of your data'],
+          ['Backups', 'Erased data may remain in our backups for up to {backupDays} days, then they are overwritten'],
           ['Security and audit logs', 'For as long as needed to keep the service secure, and as the law requires'],
         ],
       },
@@ -189,21 +182,15 @@ function privacyNotice() {
       ul: [
         'Access: see what data we hold about you and download a copy ("Download my data").',
         'Correction: change your name, "about" line and other profile details yourself at any time.',
-        'Erasure: delete your account ("Delete my account"). This removes your profile and contact details, ends your sessions and keys, deletes your statuses, channels and products, and erases the content of the messages you sent. Messages other people received remain on their devices only as far as they already saved them.',
-        'Withdraw consent: you can withdraw the optional consents (translation, identity verification) at any time. Withdrawing is as easy as giving it. Withdrawing your consent to this notice and the Terms means we can no longer provide the service, so your account is deleted.',
-        'Grievance redressal: contact our Grievance Officer (section 10). If you are not satisfied, you may complain to the Data Protection Board of India, once it is in place.',
+        'Erasure: delete your account ("Delete my account"). Your login stops working immediately and other people see "Deleted account". Within 24 hours we erase your profile, contact details, encryption keys and devices, statuses, channels, product catalogue, developer keys, settings and consent record, and the content of the messages you sent, and you leave your groups. All that remains is an empty placeholder that keeps your old username reserved, so other people\'s chats do not break and nobody can take your username over. Messages other people received remain on their own devices only as far as they already saved them.',
+        'Withdraw consent: you can withdraw the optional consents (translation, identity verification) at any time. Withdrawing is as easy as giving it. If you withdraw your consent to this notice and the Terms, we can no longer provide the service: delete your account.',
+        'Grievance redressal: contact our Grievance Officer (section 9). If you are not satisfied, you may complain to the Data Protection Board of India, once it is in place.',
         'Nomination: you may nominate another person to exercise these rights for you if you die or become unable to.',
       ],
       p2: ['We reply to rights requests within {responseDays} days, or sooner if the law requires.'],
     },
     {
-      title: '8. Children',
-      p: [
-        '{brand} is for people aged 18 or older. We do not knowingly collect personal data from anyone under 18. At sign-up you confirm that you are 18 or older. If we learn that an account belongs to someone under 18, we will delete it.',
-      ],
-    },
-    {
-      title: '9. Security, storage and transfers',
+      title: '8. Security, storage and transfers',
       ul: [
         'Connections to {brand} use HTTPS. Messages typed in the web app are end-to-end encrypted. Login codes and secret codes are stored only as one-way hashes.',
         'Access to administration tools is limited to authorised staff, protected by separate sign-in, and every administrator action is recorded in an audit log. Administrators can see account details (name, username, mobile number, email, account status, and counts such as the number of chats) to run and secure the service, and they can suspend accounts or remove reported channels. They cannot read end-to-end encrypted messages.',
@@ -212,20 +199,20 @@ function privacyNotice() {
       ],
     },
     {
-      title: '10. Contact and complaints',
+      title: '9. Contact and complaints',
       p: [
         'Grievance Officer: {grievanceName}\nEmail: {grievanceEmail}{grievancePhone}\n{company}, {address}',
         'You can also write to {contactEmail}.',
       ],
     },
     {
-      title: '11. Cookies and storage on your device',
+      title: '10. Cookies and storage on your device',
       p: [
-        'The {brand} web app does not use advertising or tracking cookies. It uses your browser\'s storage only for things the app needs: to keep you logged in, to keep your device\'s encryption key, to remember settings such as your theme, and (if you leave it on) to keep a copy of your chats so they open faster. You can clear this in Profile → Chats on this device, and it is removed when you log out.',
+        'The {brand} web app uses your browser\'s storage only for things the app needs: to keep you logged in, to keep your device\'s encryption key, to remember settings such as your theme, and (if you leave it on) to keep a copy of your chats so they open faster. You can clear this in Profile → Chats on this device, and it is removed when you log out.',
       ],
     },
     {
-      title: '12. Changes to this notice',
+      title: '11. Changes to this notice',
       p: [
         'We will update this notice when our practices change. The version date is at the top. If a change is important, we will tell you in the app and ask you to accept again before you keep using it.',
       ],
@@ -244,7 +231,6 @@ function termsOfUse() {
     {
       title: '2. Who can use {brand}',
       ul: [
-        'You must be 18 years of age or older.',
         'You must give a mobile number that you own and can receive codes on. A business account also needs a working email address and a correct business category.',
         'One person, one account per mobile number. You are responsible for what happens under your account, so keep your login codes, secret codes and devices safe, and tell us if you think someone else has access.',
       ],
@@ -300,7 +286,7 @@ function termsOfUse() {
     {
       title: '9. Suspending or ending accounts',
       p: [
-        'You may delete your account at any time in the app. We may suspend or end an account, with or without notice, if you break these Terms or the law, if we are required to, or to protect people or the service. We will tell you why where we can.',
+        'You may delete your account at any time in the app (Profile \u2192 Privacy and consent). Your login stops working at once and your data is erased within 24 hours. We may suspend or end an account, with or without notice, if you break these Terms or the law, if we are required to, or to protect people or the service. We will tell you why where we can.',
       ],
     },
     {

@@ -433,9 +433,9 @@
       return authForm.category.focus();
     }
     // Agreement comes first: nothing is sent to anyone's phone before the person has agreed.
-    if (register && !(authForm.agreeTerms.checked && authForm.agreeAge.checked)) {
-      authError('Please accept the Terms of Use and Privacy Notice, and confirm you are 18 or older, to create an account');
-      return (authForm.agreeTerms.checked ? authForm.agreeAge : authForm.agreeTerms).focus();
+    if (register && !authForm.agreeTerms.checked) {
+      authError('Please accept the Terms of Use and Privacy Notice to create an account');
+      return authForm.agreeTerms.focus();
     }
     if (register && !state.legal) {
       authError('Could not load the Terms of Use and Privacy Notice. Check your connection and try again.');
@@ -466,7 +466,7 @@
           displayName: authForm.displayName.value.trim(),
           phone: fullPhone(authForm),
           phoneOtp: phoneField.proof(),
-          consent: { terms: true, age: true, version: state.legal.version },
+          consent: { terms: true, version: state.legal.version },
           ...(business ? {
             email: authForm.email.value.trim(),
             emailOtp: emailField.proof(),
@@ -601,7 +601,6 @@
   function paintConsentTexts() {
     if (!state.legal) return;
     $('#consent-terms-text').textContent = consentText('terms');
-    $('#consent-age-text').textContent = consentText('age');
     $('#gate-terms-text').textContent = consentText('terms');
   }
   function loadLegal() {
@@ -628,38 +627,52 @@
     }
   }
 
-  /** Two steps, both confirmed: a code sent to the account's mobile number, then typing DELETE. */
+  /**
+   * Deleting the account: a confirmation popup with a tick box, then a code sent to the account's mobile number.
+   * Login stops at once; the server erases all the data within 24 hours.
+   */
   async function deleteAccountFlow() {
-    if (!confirm('Delete your account for good? Your profile, contact details, keys, statuses, channels and the content of the messages you sent will be erased. This cannot be undone.')) return;
     let sent;
-    try {
-      sent = await emit('account:delete-code');
-    } catch (err) {
-      return toast(err.message);
-    }
-    const done = await dialog({
-      title: 'Confirm: delete my account',
-      text: `Enter the code we sent to ${sent.sentTo || 'your mobile number'} and type DELETE. Your account is erased at once.${sent.devCode ? ` (Sandbox code: ${sent.devCode})` : ''}`,
-      fields: [
-        { name: 'code', label: 'Code from SMS', type: 'text', maxLength: 8, autocomplete: 'one-time-code' },
-        { name: 'confirm', label: 'Type DELETE', type: 'text', maxLength: 10, autocomplete: 'off' },
-      ],
-      submit: 'Delete my account',
+    const agreed = await dialog({
+      title: 'Delete your account?',
+      text: [
+        'If you continue:',
+        '\u2022 You are logged out and can no longer log in, straight away.',
+        '\u2022 Your profile, the messages you sent, statuses, channels, keys and all other data about you are permanently erased within 24 hours.',
+        '\u2022 This cannot be undone.',
+        '',
+        'Download your data first if you want a copy (Profile \u2192 Privacy and consent).',
+      ].join('\n'),
+      fields: [{ name: 'understand', type: 'checkbox', label: 'I understand that my account and all my data will be permanently deleted, and that this cannot be undone.' }],
+      submit: 'Continue',
       onSubmit: async (v) => {
-        await emit('account:delete', { requestId: sent.requestId, code: v.code.trim(), confirm: v.confirm.trim() });
+        if (!v.understand) throw new Error('Tick the box to continue');
+        sent = await emit('account:delete-code');
       },
     });
-    if (done) {
-      storage.del('chat.token');
-      alert('Your account was deleted.');
-      location.reload();
-    }
+    if (!agreed || !sent) return;
+    const result = await dialog({
+      title: 'Enter the code to delete your account',
+      text: `Enter the code we sent by SMS to ${sent.sentTo || 'your mobile number'}.${sent.devCode ? ` (Sandbox code: ${sent.devCode})` : ''}`,
+      fields: [{ name: 'code', label: 'Code from SMS', type: 'text', maxLength: 8, autocomplete: 'one-time-code' }],
+      submit: 'Delete my account',
+      onSubmit: async (v) => emit('account:delete', { requestId: sent.requestId, code: v.code.trim(), confirmed: true }),
+    });
+    if (!result) return;
+    storage.del('chat.token');
+    await dialog({
+      title: 'Your account is closed',
+      text: `You are logged out and can no longer log in. All your data will be erased within 24 hours (by ${new Date(result.dataErasedBy).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} at the latest).`,
+      fields: [],
+      submit: 'OK',
+      onSubmit: async () => {},
+    });
+    location.reload();
   }
 
   function showConsentGate() {
     paintConsentTexts();
     $('#gate-terms').checked = false;
-    $('#gate-age').checked = false;
     $('#gate-error').textContent = '';
     $('#consent-gate').classList.remove('hidden');
     $('#auth').classList.add('hidden');
@@ -668,12 +681,12 @@
     $('#consent-gate').classList.add('hidden');
   }
   $('#gate-accept').addEventListener('click', async () => {
-    if (!$('#gate-terms').checked || !$('#gate-age').checked) {
-      $('#gate-error').textContent = 'Please tick both boxes to continue';
+    if (!$('#gate-terms').checked) {
+      $('#gate-error').textContent = 'Please tick the box to continue';
       return;
     }
     try {
-      await emit('consent:accept', { terms: true, age: true });
+      await emit('consent:accept', { terms: true });
       location.reload();
     } catch (err) {
       $('#gate-error').textContent = err.message;

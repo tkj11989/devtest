@@ -3,6 +3,9 @@
 const { Store } = require('./store');
 const { normalisePhone, normaliseEmail } = require('./otp');
 const legal = require('./legal');
+
+/** A deleted account's data is always erased within this long of the request. */
+const ERASE_DEADLINE_MS = 24 * 60 * 60 * 1000;
 const { createWebAuthn } = require('./webauthn');
 const { FEATURES, versionLess } = require('./features');
 const appearance = require('./appearance');
@@ -30,7 +33,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator }) {
+function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, accountEraseDelayMs = 60 * 60 * 1000 }) {
   const userRoom = (u) => `user:${u}`;
 
   /** A feature that sends data to an outside service only works once the person has agreed to that (code `consent_<id>`). */
@@ -229,6 +232,20 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
 
   /** Tell people their Premium ended (called every minute): their badge goes away. */
   let lastSweep = Date.now();
+  /** Erase the data of every account whose deletion was requested and is due (run regularly). Returns who was erased. */
+  const eraseDueAccounts = () => {
+    const done = [];
+    for (const username of store.deletionsDue()) {
+      try {
+        store.eraseAccount(username);
+        done.push(username);
+      } catch (err) {
+        console.error(`Could not erase account ${username}:`, err.message);
+      }
+    }
+    return done;
+  };
+
   const expireSubscriptions = () => {
     const now = Date.now();
     for (const u of store.expiredBetween(lastSweep, now)) {
@@ -696,12 +713,12 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       };
     },
 
-    /** Accept the current Terms of Use and Privacy Notice (and confirm 18+). Needed again whenever they change. */
-    consentAccept(me, { terms, age } = {}) {
-      if (terms !== true || age !== true) {
-        throw new ApiError(400, 'consent_required', 'Accept the Terms of Use and Privacy Notice and confirm you are 18 or older to continue');
+    /** Accept the current Terms of Use and Privacy Notice. Needed again whenever they change. */
+    consentAccept(me, { terms } = {}) {
+      if (terms !== true) {
+        throw new ApiError(400, 'consent_required', 'Accept the Terms of Use and Privacy Notice to continue');
       }
-      store.recordConsent(me, { version: legal.VERSION, items: ['terms', 'age'], via: 'app' });
+      store.recordConsent(me, { version: legal.VERSION, items: ['terms'], via: 'app' });
       return actions.consentStatus(me);
     },
 
@@ -733,18 +750,21 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       return otp.request({ channel: 'sms', to: phone, purpose: 'delete' });
     },
 
-    /** Step 2: erase the account (`{ requestId, code, confirm: "DELETE" }`). This cannot be undone. */
-    accountDelete(me, { requestId, code, confirm } = {}) {
-      if (confirm !== 'DELETE') throw new ApiError(400, 'invalid_request', 'Send confirm: "DELETE" to confirm');
+    /**
+     * Step 2: delete the account (`{ requestId, code, confirmed: true }`; `confirmed` is the tick in the confirmation
+     * popup). Login stops working at once; all the person's data is erased within 24 hours. This cannot be undone.
+     */
+    accountDelete(me, { requestId, code, confirmed } = {}) {
+      if (confirmed !== true) throw new ApiError(400, 'invalid_request', 'Confirm that you understand your account and all your data will be permanently deleted (send confirmed: true)');
       const { phone } = store.contactOf(me) || {};
       if (!phone) throw new ApiError(400, 'verification_required', 'Add a verified mobile number to your account first');
       otp.verify({ requestId, code, channel: 'sms', to: phone, purpose: 'delete' });
       const peers = store.peersOf(me);
-      store.deleteAccount(me);
+      const { requestedAt } = store.requestAccountDeletion(me, { delayMs: Math.min(accountEraseDelayMs, ERASE_DEADLINE_MS - 60 * 1000) });
       // Close the person's connections after the answer has gone out (this call may have come over one of them).
       setImmediate(() => io.in(userRoom(me)).disconnectSockets(true));
       for (const p of peers) notify(p, 'peer:deleted', { username: me });
-      return { deleted: true };
+      return { deleted: true, loginBlocked: true, dataErasedBy: new Date(requestedAt + ERASE_DEADLINE_MS).toISOString() };
     },
 
     // ----- verified mobile number and email -----
@@ -1352,6 +1372,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     mediaAllowed,
     pruneExpired,
     expireSubscriptions,
+    eraseDueAccounts,
     forgetUnlocks,
     userRoom,
     userView,

@@ -133,7 +133,7 @@ class Store {
     if (!u || u.deletedAt) return true;
     const c = u.consent;
     if (!c) return !this.getSettings().legal.requireForLegacy;
-    return c.version === version && c.accepted.includes('terms') && c.accepted.includes('age');
+    return c.version === version && c.accepted.includes('terms');
   }
 
   // ---------- your data: download and delete ----------
@@ -199,12 +199,40 @@ class Store {
   }
 
   /**
-   * Erase an account. The profile, contact details, keys, sessions, statuses, channels, products and developer
-   * access are removed; the content of the person's messages is erased; they leave their groups. What stays: the
-   * username as a reserved empty record named "Deleted account", chats other people still have (without the erased
-   * content), and a record that consent was given and when the account was deleted.
+   * Step 1 of deleting an account, effective at once: login is refused, every session, API key and webhook is
+   * revoked, and other people see "Deleted account". The data itself is erased by `eraseAccount` within 24 hours.
    */
-  deleteAccount(username) {
+  requestAccountDeletion(username, { delayMs = 0 } = {}) {
+    const u = this.data.users[username];
+    if (!u || u.deletedAt) throw new Error('No such account');
+    if (u.deletion) return u.deletion;
+    const now = Date.now();
+    u.deletion = { requestedAt: now, eraseAt: now + delayMs };
+    for (const [token, name] of this.sessions) if (name === username) this.sessions.delete(token);
+    for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
+    for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
+    this._save();
+    return u.deletion;
+  }
+
+  /** Is this account closed (deletion requested, or already erased)? */
+  isClosed(username) {
+    const u = this.data.users[username];
+    return !!(u && (u.deletion || u.deletedAt));
+  }
+
+  /** Accounts whose deletion was requested and whose data is due to be erased now. */
+  deletionsDue(now = Date.now()) {
+    return Object.values(this.data.users).filter((u) => u.deletion && !u.deletedAt && u.deletion.eraseAt <= now).map((u) => u.username);
+  }
+
+  /**
+   * Step 2: erase everything about an account. The profile, contact details, keys, sessions, statuses, channels,
+   * products, developer access, settings and consent record are removed; the content of the person's messages is
+   * erased; they leave their groups. All that stays is an empty placeholder named "Deleted account" that keeps the
+   * old username reserved (so other people's chats stay intact and nobody can take the username over).
+   */
+  eraseAccount(username) {
     const u = this.data.users[username];
     if (!u || u.deletedAt) throw new Error('No such account');
     const now = Date.now();
@@ -269,8 +297,7 @@ class Store {
     }
     for (const [id, meta] of Object.entries(this.data.media)) if (meta.publicBy === username) this.deleteMedia(id);
 
-    const consent = u.consent ? { ...u.consent, history: [...(u.consent.history || []), { at: now, action: 'account-deleted', via: 'app' }].slice(-100) } : null;
-    this.data.users[username] = { username, displayName: 'Deleted account', about: '', createdAt: u.createdAt, lastSeen: null, deletedAt: now, ...(consent ? { consent } : {}) };
+    this.data.users[username] = { username, displayName: 'Deleted account', about: '', lastSeen: null, deletedAt: now };
     this._contactIdx = null;
     this._save();
   }
@@ -387,13 +414,13 @@ class Store {
   /** One page of users for the dashboard. */
   listUsers({ q = '', filter = '', page = 1, pageSize = 25 } = {}) {
     q = String(q).trim().toLowerCase();
-    let list = Object.values(this.data.users).filter((u) => (filter === 'deleted' ? u.deletedAt : !u.deletedAt)).filter((u) => !q
+    let list = Object.values(this.data.users).filter((u) => (filter === 'deleted' ? (u.deletedAt || u.deletion) : !(u.deletedAt || u.deletion))).filter((u) => !q
       || u.username.includes(q) || u.displayName.toLowerCase().includes(q) || (u.phone || '').includes(q) || (u.email || '').includes(q));
     if (filter === 'premium') list = list.filter((u) => this.isPremium(u.username));
     else if (filter === 'verified') list = list.filter((u) => u.verifiedAt);
     else if (filter === 'business') list = list.filter((u) => u.business);
     else if (filter === 'suspended') list = list.filter((u) => u.suspended);
-    list.sort((a, b) => b.createdAt - a.createdAt);
+    list.sort((a, b) => (b.createdAt || b.deletedAt || 0) - (a.createdAt || a.deletedAt || 0));
     const total = list.length;
     pageSize = Math.max(1, Math.min(100, Number(pageSize) || 25));
     page = Math.max(1, Number(page) || 1);
@@ -418,6 +445,7 @@ class Store {
       business: u.business ? u.business.category : null,
       suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason, by: u.suspended.by } : null,
       deleted: u.deletedAt || null,
+      deletion: u.deletion ? { requestedAt: u.deletion.requestedAt, eraseAt: u.deletion.eraseAt } : null,
       consent: u.consent ? { version: u.consent.version, at: u.consent.at, optional: Object.fromEntries(Object.entries(u.consent.optional || {}).map(([k, v]) => [k, v.granted])) } : null,
       chats: this._convsOf(username).length,
       channelsOwned: Object.values(this.data.channels).filter((c) => c.owner === username).length,
@@ -431,7 +459,7 @@ class Store {
     const day = 86400000;
     const now = Date.now();
     const everyone = Object.values(this.data.users);
-    const users = everyone.filter((u) => !u.deletedAt);
+    const users = everyone.filter((u) => !u.deletedAt && !u.deletion);
     const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
     const bucket = (ts, days) => Math.floor((startOfToday - new Date(new Date(ts).setHours(0, 0, 0, 0)).getTime()) / day) < days ? Math.floor((startOfToday - new Date(new Date(ts).setHours(0, 0, 0, 0)).getTime()) / day) : -1;
     const days = 14;
@@ -453,7 +481,9 @@ class Store {
     return {
       users: {
         total: users.length,
-        deleted: everyone.length - users.length,
+        deleted: everyone.filter((u) => u.deletedAt).length,
+        deleting: everyone.filter((u) => u.deletion && !u.deletedAt).length,
+        deletionOverdue: everyone.filter((u) => u.deletion && !u.deletedAt && Date.now() - u.deletion.requestedAt > 24 * 3600 * 1000).length,
         online: onlineCount,
         newToday: users.filter((u) => u.createdAt >= startOfToday).length,
         new7d: users.filter((u) => u.createdAt >= now - 7 * day).length,
@@ -616,6 +646,7 @@ class Store {
   }
 
   createSession(username) {
+    if (this.isClosed(username)) throw Object.assign(new Error('This account is being deleted and can no longer be used. Its data is erased within 24 hours.'), { status: 403, code: 'account_deletion_pending' });
     const sus = this.data.users[username]?.suspended;
     if (sus) throw Object.assign(new Error(`This account is suspended${sus.reason ? `: ${sus.reason}` : ''}`), { status: 403, code: 'account_suspended' });
     const token = crypto.randomBytes(24).toString('hex');
@@ -783,6 +814,7 @@ class Store {
   publicUser(username) {
     const u = this.data.users[username];
     if (!u) return null;
+    if (u.deletion || u.deletedAt) return { username: u.username, displayName: 'Deleted account', about: '', lastSeen: null, deleted: true };
     const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
     if (u.business) out.business = { ...Store._publicBusiness(u.business), productCount: (u.catalogue?.products || []).length };
     if (u.verifiedAt) out.verified = true;
@@ -1583,7 +1615,7 @@ class Store {
     const digits = q.replace(/[\s\-().]/g, '').replace(/^00/, '+');
     const phone = /^\+?\d{8,15}$/.test(digits) ? digits.replace(/^(?!\+)/, '+') : null;
     return Object.values(this.data.users)
-      .filter((u) => u.username !== exclude && !u.deletedAt)
+      .filter((u) => u.username !== exclude && !u.deletedAt && !u.deletion)
       .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q)
         || (u.business && u.business.category.toLowerCase().includes(q))
         || (phone && u.phone === phone))
@@ -1599,7 +1631,7 @@ class Store {
 
   getOrCreateDirect(a, b) {
     if (a === b) throw new Error('Cannot chat with yourself');
-    if (!this.data.users[b] || this.data.users[b].deletedAt) throw new Error('User not found');
+    if (!this.data.users[b] || this.isClosed(b)) throw new Error('User not found');
     const id = Store.directId(a, b);
     if (!this.data.conversations[id]) {
       this.data.conversations[id] = {
@@ -1871,7 +1903,7 @@ class Store {
     let hiddenFor = [];
     if (conv.type === 'direct') {
       const peer = conv.members.find((m) => m !== from);
-      if (this.data.users[peer]?.deletedAt) throw new Error('This account was deleted. You can no longer send messages to it.');
+      if (this.isClosed(peer)) throw new Error('This account was deleted. You can no longer send messages to it.');
       if (this.hasBlocked(from, peer)) {
         throw new Error(`Unblock ${this.publicUser(peer)?.displayName || peer} to send a message`);
       }

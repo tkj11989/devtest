@@ -224,9 +224,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     Session: obj({ token: { type: 'string' }, user: ref('User') }, ['token', 'user']),
     ConsentAccept: obj({
       terms: { type: 'boolean', description: 'must be true: read and accepted the Terms of Use and Privacy Notice' },
-      age: { type: 'boolean', description: 'must be true: 18 or older' },
       version: { type: 'string', description: 'the current `version` from `GET /legal` (sign-up only)' },
-    }, ['terms', 'age']),
+    }, ['terms']),
     ConsentStatus: obj({
       version: { type: 'string' },
       upToDate: { type: 'boolean', description: 'false: show the current texts and ask again (`POST /me/consent`); until then most calls answer `403 consent_required`' },
@@ -320,7 +319,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.auth, 'Create an account (verified by OTP)', {
         auth: false,
         description: [
-          '**Consent (required)**: `consent: { terms: true, age: true, version }`. The person must have read and accepted the Terms of Use and Privacy Notice (`GET /legal`) and confirmed they are 18 or older; `version` must be the current `version` from `GET /legal`. Without it the answer is `400 consent_required`; an old version is `409 consent_outdated`. The acceptance (what, which version, when) is recorded on the account.',
+          '**Consent (required)**: `consent: { terms: true, version }`. The person must have read and accepted the Terms of Use and Privacy Notice (`GET /legal`); `version` must be the current `version` from `GET /legal`. Without it the answer is `400 consent_required`; an old version is `409 consent_outdated`. The acceptance (what, which version, when) is recorded on the account.',
           '**Individual**: `displayName`, `phone` and `phoneOtp` (the `requestId` from `POST /auth/otp` and the code received by SMS).',
           '**Business**: `accountType: "business"`, the business name as `displayName`, `phone` + `phoneOtp`, `email` + `emailOtp` (both are required and verified) and `business` with at least a `category` (any other `Business` fields are optional).',
           'Every code is checked before any is used up, so a typo in one code does not cost the other. A username is made from the name unless you send `username`.',
@@ -343,7 +342,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
-          consent: { terms: true, age: true, version: '2026-10-15' },
+          consent: { terms: true, version: '2026-10-15' },
         }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session'), ...errors(400, 409, 429) },
       }),
@@ -386,9 +385,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ user: ref('User') })), ...errors(400, 401) },
       }),
       delete: op(T.me, 'Delete my account (step 2)', {
-        description: 'Erases the account for good: profile and contact details, keys, sessions, statuses, channels, products and developer access are removed; the content of your messages is erased; you leave your groups. A reserved empty username, chats other people still have, and a record that consent was given and when the account was deleted remain. Send the `requestId` and `code` from `POST /me/delete/code` and `confirm: "DELETE"`.',
-        body: jsonBody(obj({ requestId: { type: 'string' }, code: { type: 'string' }, confirm: { type: 'string', enum: ['DELETE'] } }, ['requestId', 'code', 'confirm']), { requestId: 'otp_6f1c…', code: '482913', confirm: 'DELETE' }),
-        responses: { 200: ok(obj({ deleted: { type: 'boolean' } })), ...errors(400, 401) },
+        description: 'Closes the account at once and erases everything within 24 hours. **Login stops working immediately**: every session, API key and webhook is revoked, connections are closed, and other people see "Deleted account". Within 24 hours (by default about an hour) the profile, contact details, keys, statuses, channels, products, settings and consent record are erased, the content of your messages is erased, and you leave your groups; an empty placeholder keeps the old username reserved. Send the `requestId` and `code` from `POST /me/delete/code` and `confirmed: true` (the tick in the confirmation popup). This cannot be undone.',
+        body: jsonBody(obj({ requestId: { type: 'string' }, code: { type: 'string' }, confirmed: { type: 'boolean', description: 'must be true' } }, ['requestId', 'code', 'confirmed']), { requestId: 'otp_6f1c…', code: '482913', confirmed: true }),
+        responses: { 200: ok(obj({ deleted: { type: 'boolean' }, loginBlocked: { type: 'boolean' }, dataErasedBy: { type: 'string', format: 'date-time', description: 'the latest time the data will be erased' } })), ...errors(400, 401) },
       }),
     },
 
@@ -520,8 +519,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(ref('ConsentStatus')), ...errors(401) },
       }),
       post: op(T.me, 'Accept the current Terms and Privacy Notice', {
-        description: 'Needed when `upToDate` is false (the texts changed). `terms` and `age` must both be true.',
-        body: jsonBody(ref('ConsentAccept'), { terms: true, age: true }),
+        description: 'Needed when `upToDate` is false (the texts changed). `terms` must be true.',
+        body: jsonBody(ref('ConsentAccept'), { terms: true }),
         responses: { 200: ok(ref('ConsentStatus')), ...errors(400, 401) },
       }),
     },
