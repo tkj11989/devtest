@@ -1363,6 +1363,12 @@ html[data-avatar-shape="square"] .avatar { border-radius: 6px; }
 #appearance-panel h3 { margin: 16px 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
 
 .brand-full { justify-content: center; }
-.brand-full-img { display: block; width: min(260px, 80%); height: auto; border-radius: 12px; background: #fff; }
-.brand-logo image { clip-path: inset(0 round 4px); }
+.brand-full-img { display: block; width: min(280px, 85%); height: auto; }
+.brand-full-img.on-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode="light"]) .brand-full-img.on-light { display: none; }
+  :root:not([data-mode="light"]) .brand-full-img.on-dark { display: block; }
+}
+:root[data-mode="dark"] .brand-full-img.on-light { display: none; }
+:root[data-mode="dark"] .brand-full-img.on-dark { display: block; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

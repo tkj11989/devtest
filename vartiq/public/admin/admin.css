@@ -136,4 +136,4 @@ td.wrap { white-space: normal; min-width: 220px; }
   .main { padding: 16px 14px 60px; }
 }
 
-.logo-img { width: 34px; height: 34px; border-radius: 8px; background: #fff; }
+.logo-img { width: 34px; height: 34px; object-fit: contain; }
