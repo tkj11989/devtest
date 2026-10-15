@@ -337,6 +337,36 @@ Fingerprint / face uses WebAuthn platform authenticators (Touch ID, Face ID, Win
 
 REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
 
+## PostgreSQL storage (for production)
+
+By default VartiQ keeps its data in `data/db.json`. For real use set `DATABASE_URL` and the data lives in PostgreSQL instead:
+
+```bash
+createdb vartiq
+export DATABASE_URL=postgres://user:password@localhost/vartiq
+export MEDIA_DIR=/var/lib/vartiq/media        # voice notes and product pictures stay as files here (back this folder up too)
+node server/index.js                           # prints "Data: PostgreSQL"
+```
+
+The tables (`docs`, `lists`) are created automatically. To switch an existing install, stop the app and run
+`DATABASE_URL=... node tools/migrate-json-to-pg.js data/db.json` once (it refuses to write into a database that already has users; keep `db.json` as a backup).
+
+How it works: the app still works on its in-memory data (fast), and saves **only what changed** to PostgreSQL about 150 ms after each change, instead of rewriting a whole file. A message is one row, so the database can grow to many millions of messages without slowing the app down. On a clean shutdown (`SIGTERM`/`SIGINT`) everything is flushed first; after a crash at most the last ~150 ms of changes are lost. If the database is unreachable the changes stay in memory and are retried.
+
+Measured on a 4 CPU / 16 GB machine (the same size as a Hostinger KVM 4), 10,000 users connected at once with 300,000 messages already stored, each user sending a message every 25 s (`tools/load-test/`):
+
+| | JSON file | PostgreSQL |
+| --- | --- | --- |
+| Users connected | 10,000 | 10,000 |
+| Messages delivered | 40,000 of 40,000 | 40,000 of 40,000 |
+| Message round trip, typical / 95% / 99% | 1 / 3 / 14 ms | 1 / 5 / 40 ms |
+| Server memory | about 720 MB | about 970 MB |
+| Data file rewrite per change | the whole file (50 MB and growing) | only the changed rows |
+
+What this does **not** change yet: all data is still held in memory (about 0.3 KB per message), so memory grows with history; login sessions are held in memory (everyone signs in again after a restart); and it is still one Node.js process. Moving past roughly 10,000 to 20,000 people online at once needs more than one process (Redis for Socket.IO and sessions), and a very large history needs old messages loaded from the database on demand.
+
+Tests: `npm test` runs everything against memory only. `npm run test:pg-shadow` re-runs the whole suite and checks after every store call that PostgreSQL saving noticed each change (no database needed). `TEST_DATABASE_URL=postgres://user:pass@localhost/vartiq_test npm run test:pg` also runs the PostgreSQL tests and checks that what is saved is read back identical.
+
 ## API for other platforms
 
 Everything the app does (except placing calls, which needs WebRTC in a client) is available over a REST API, so CRMs, help desks, bots, mobile apps or back-office systems can integrate with VartiQ.

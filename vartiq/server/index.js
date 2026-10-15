@@ -161,6 +161,7 @@ function createApp({
 
   // username -> number of connected sockets
   const online = new Map();
+  const openByLock = new Map(); // lockKey -> how many sockets are open (so a disconnect doesn't scan every socket)
   const isOnline = (u) => (online.get(u) || 0) > 0;
 
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
@@ -294,6 +295,7 @@ function createApp({
     const me = socket.data.username;
     socket.join(service.userRoom(me));
     online.set(me, (online.get(me) || 0) + 1);
+    openByLock.set(socket.data.lockKey, (openByLock.get(socket.data.lockKey) || 0) + 1);
     if (online.get(me) === 1) service.broadcastPresence(me);
 
     // Anything sent while we were offline is now delivered.
@@ -310,7 +312,10 @@ function createApp({
 
     socket.on('disconnect', () => {
       // Closing the last tab of an app session locks its chats again.
-      const stillOpen = [...io.sockets.sockets.values()].some((s) => s.data.lockKey === ctx.lockKey);
+      const open = (openByLock.get(ctx.lockKey) || 1) - 1;
+      if (open > 0) openByLock.set(ctx.lockKey, open);
+      else openByLock.delete(ctx.lockKey);
+      const stillOpen = open > 0;
       if (!stillOpen && socket.handshake.auth.appSession) service.forgetUnlocks({ lockKey: ctx.lockKey });
       const n = (online.get(me) || 1) - 1;
       if (n <= 0) {
@@ -327,24 +332,41 @@ function createApp({
 }
 
 if (require.main === module) {
-  const port = Number(process.env.PORT) || 3000;
-  // Browsers only allow camera/microphone on https:// or localhost, so serve
-  // HTTPS when a certificate is provided (needed to call from other devices).
-  const tls = process.env.SSL_KEY && process.env.SSL_CERT
-    ? { key: fs.readFileSync(process.env.SSL_KEY), cert: fs.readFileSync(process.env.SSL_CERT) }
-    : null;
-  const { server, store } = createApp({ tls });
-  server.listen(port, () => {
-    console.log(`VartiQ running at ${tls ? 'https' : 'http'}://localhost:${port}`);
-    if (!process.env.OTP_WEBHOOK_URL) console.log('Login codes are printed here (set OTP_WEBHOOK_URL to send real SMS/email).');
-    if (process.env.OTP_DEV_CODES === '1') console.warn('OTP_DEV_CODES=1: login codes are also shown in the app. Never use this in production.');
+  (async () => {
+    const port = Number(process.env.PORT) || 3000;
+    // Browsers only allow camera/microphone on https:// or localhost, so serve
+    // HTTPS when a certificate is provided (needed to call from other devices).
+    const tls = process.env.SSL_KEY && process.env.SSL_CERT
+      ? { key: fs.readFileSync(process.env.SSL_KEY), cert: fs.readFileSync(process.env.SSL_CERT) }
+      : null;
+    // DATABASE_URL set: keep the data in PostgreSQL. Otherwise it lives in data/db.json.
+    const store = process.env.DATABASE_URL
+      ? await Store.open({ databaseUrl: process.env.DATABASE_URL, mediaDir: process.env.MEDIA_DIR })
+      : new Store();
+    const { server } = createApp({ tls, store });
+    server.listen(port, () => {
+      console.log(`VartiQ running at ${tls ? 'https' : 'http'}://localhost:${port}`);
+      console.log(process.env.DATABASE_URL ? 'Data: PostgreSQL' : 'Data: data/db.json (set DATABASE_URL to use PostgreSQL)');
+      if (!process.env.OTP_WEBHOOK_URL) console.log('Login codes are printed here (set OTP_WEBHOOK_URL to send real SMS/email).');
+      if (process.env.OTP_DEV_CODES === '1') console.warn('OTP_DEV_CODES=1: login codes are also shown in the app. Never use this in production.');
+    });
+    let stopping = false;
+    const shutdown = async () => {
+      if (stopping) return;
+      stopping = true;
+      try {
+        await store.close();
+      } catch (err) {
+        console.error('Could not save on shutdown:', err.message);
+      }
+      process.exit(0);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  })().catch((err) => {
+    console.error('Could not start:', err.message);
+    process.exit(1);
   });
-  const shutdown = () => {
-    store.flush();
-    process.exit(0);
-  };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
 }
 
 module.exports = { createApp };

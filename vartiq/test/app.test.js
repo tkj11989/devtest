@@ -102,7 +102,7 @@ test('store: masked messages and duplicate-safe retries via clientId', () => {
   assert.strictEqual(m1.masked, true);
   assert.strictEqual(m1.clientId, 'c-1');
   // Same clientId again (a retry): no duplicate, same message back.
-  assert.strictEqual(store.addMessage(dm.id, 'alice', 'secret', { masked: true, clientId: 'c-1' }), m1);
+  assert.strictEqual(store.addMessage(dm.id, 'alice', 'secret', { masked: true, clientId: 'c-1' }).id, m1.id);
   // Another sender may coincidentally use the same clientId.
   assert.notStrictEqual(store.addMessage(dm.id, 'bob', 'hi', { clientId: 'c-1' }).id, m1.id);
   assert.strictEqual(store.data.messages[dm.id].length, 2);

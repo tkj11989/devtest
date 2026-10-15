@@ -280,7 +280,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
   const postMessage = (conv, msg) => {
     const recipients = conv.members.filter((m) => Store.visibleTo(msg, m));
     for (const m of recipients) {
-      if (m !== msg.from && isOnline(m)) msg.deliveredTo.push(m);
+      if (m !== msg.from && isOnline(m)) store.addDelivered(msg, m);
     }
     store._save();
     for (const m of recipients) notify(m, 'message:new', { message: store.viewFor(msg, m) });
@@ -349,11 +349,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     if (conv) notifyMembers(conv, 'message:status', { convId, messages });
   };
 
-  const peersOf = (u) => {
-    const peers = new Set();
-    for (const c of store.conversationsFor(u)) c.members.forEach((m) => m !== u && peers.add(m));
-    return peers;
-  };
+  const peersOf = (u) => store.peersOf(u);
 
   const broadcastPresence = (u) => {
     for (const p of peersOf(u)) {

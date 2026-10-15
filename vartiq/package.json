@@ -7,11 +7,14 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "test": "node --test --test-timeout=20000 test/*.test.js",
-    "example:echo-bot": "node examples/echo-bot.js"
+    "example:echo-bot": "node examples/echo-bot.js",
+    "test:pg-shadow": "node --test --test-timeout=30000 --require ./test/support/pg-shadow.js test/*.test.js",
+    "test:pg": "node --test --test-timeout=30000 --require ./test/support/pg-preload.js test/*.test.js"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "express": "^4.22.3",
+    "pg": "^8.23.1",
     "socket.io": "^4.8.4",
     "swagger-ui-dist": "^5.17.14"
   },

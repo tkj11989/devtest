@@ -15,12 +15,13 @@ const start = Date.now();
     if (i % 10 === 0) await new Promise((r) => setTimeout(r, 50));
   }
   await new Promise((r) => setTimeout(r, 8000)); console.log(tag, 'ramped', Date.now() - start, 'ms, connected', connected, 'failed', failed);
-  const timers = sockets.map((s) => setInterval(() => {
+  const timers = sockets.map((s) => { let iv; const first = setTimeout(() => { iv = setInterval(send, Number(perMsgSec) * 1000); send(); }, Math.random() * Number(perMsgSec) * 1000); const send = () => {
     if (!s.connected) return; const conv = convs[Math.floor(s.i / 2)]; const t0 = process.hrtime.bigint(); sent++;
     s.timeout(20000).emit('message:send', { convId: conv, text: `hello ${sent}`, clientId: `${s.i}-${sent}` }, (err, res) => { if (err || !res?.ok) errs++; else { acked++; lat.push(Number(process.hrtime.bigint() - t0) / 1e6); } });
-  }, Number(perMsgSec) * 1000 + Math.random() * 2000));
+  }; return { clear() { clearTimeout(first); clearInterval(iv); } }; }); // each user starts at a random moment, so messages are spread out
+
   await new Promise((r) => setTimeout(r, Number(runSec) * 1000));
-  timers.forEach(clearInterval);
+  timers.forEach((t) => t.clear());
   lat.sort((a, b) => a - b); const q = (p) => lat[Math.min(lat.length - 1, Math.floor(lat.length * p))]?.toFixed(0);
   console.log(JSON.stringify({ tag, connected, failed, sent, acked, errs, p50: q(0.5), p95: q(0.95), p99: q(0.99), max: lat[lat.length - 1]?.toFixed(0) }));
   sockets.forEach((s) => s.close()); process.exit(0);

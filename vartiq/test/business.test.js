@@ -104,7 +104,7 @@ test('auto replies: greeting for new conversations, away outside hours (rate-lim
 
   // Open hours: no away message. Two quiet weeks later: greeted again.
   await call(shopApp, 'business:set', { ...store.getBusiness('shop'), hours: ALWAYS_OPEN });
-  store.data.messages[dm.id].forEach((m) => { m.ts -= 15 * 24 * 3600 * 1000; });
+  store.data.messages[dm.id].forEach((m) => { m.ts -= 15 * 24 * 3600 * 1000; store._touchMsg(dm.id, m); });
   await call(custApp, 'message:send', { convId: dm.id, text: 'Back again' });
   msgs = (await call(custApp, 'messages:get', { convId: dm.id })).messages;
   assert.deepStrictEqual(msgs.slice(-2).map((m) => m.auto || m.text), ['Back again', 'greeting']);
@@ -114,7 +114,7 @@ test('auto replies: greeting for new conversations, away outside hours (rate-lim
   await call(shopApp, 'message:send', { convId: dm.id, text: 'Here you go' });
   assert.strictEqual(store.data.messages[dm.id].length, before + 1);
   store.setBlocked('shop', 'cust', true);
-  store.data.messages[dm.id].forEach((m) => { m.ts -= 15 * 24 * 3600 * 1000; });
+  store.data.messages[dm.id].forEach((m) => { m.ts -= 15 * 24 * 3600 * 1000; store._touchMsg(dm.id, m); });
   await call(custApp, 'message:send', { convId: dm.id, text: 'hello??' });
   assert.ok(!store.data.messages[dm.id].slice(-1)[0].auto);
 

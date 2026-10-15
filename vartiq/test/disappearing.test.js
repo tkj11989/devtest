@@ -67,6 +67,8 @@ test('store: timer limits, default timer for new chats, expiry hides and prunes'
   const voice = store.addMessage(started.id, 'bob', '', { voice: { mediaId: media, duration: 1, mime: 'audio/ogg' } });
   store.setStarred(m.id, 'alice', true);
   m.expiresAt = voice.expiresAt = Date.now() - 1;
+  store._touchMsg(started.id, m);
+  store._touchMsg(started.id, voice);
   assert.deepStrictEqual(store.getMessages(started.id, 'alice').map((x) => x.text), ['stays'], 'hidden as soon as it expires');
   assert.deepStrictEqual(store.starredFor('alice'), [], 'starred copies disappear too');
   assert.strictEqual(store.summarize(started, 'alice').lastMessage.text, 'stays');
@@ -99,7 +101,9 @@ test('realtime: setting a timer notifies everyone, and messages vanish for all d
   assert.ok(sent.message.expiresAt - sent.message.ts === 60000);
   const expiredForAlice = next(a, 'message:expired');
   const expiredForBob = next(b, 'message:expired');
-  store.data.messages[dm.id].find((m) => m.id === sent.message.id).expiresAt = Date.now() - 1;
+  const soon = store.data.messages[dm.id].find((m) => m.id === sent.message.id);
+  soon.expiresAt = Date.now() - 1;
+  store._touchMsg(dm.id, soon);
   const [ea, eb] = await Promise.all([expiredForAlice, expiredForBob]);
   assert.deepStrictEqual(ea, { convId: dm.id, ids: [sent.message.id] });
   assert.deepStrictEqual(eb.ids, [sent.message.id]);

@@ -13,18 +13,29 @@ const { DEFAULT_SETTINGS, applySettings } = require('./features');
  */
 class Store {
   /** `statusTtlMs`: how long a status update stays up (24 hours, shorter in tests). */
-  constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000 } = {}) {
+  constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000, persistence = null, initialData = null, mediaDir } = {}) {
     this.statusTtlMs = statusTtlMs;
-    this.file = file === undefined ? path.join(__dirname, '..', 'data', 'db.json') : file;
-    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null };
+    this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
+    this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     this.sessions = new Map(); // token -> username
-    // Voice-message audio lives next to the data file (or in memory without one).
-    this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
+    // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
+    this.mediaDir = mediaDir || (this.file ? path.join(path.dirname(this.file), 'media') : null);
     this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
     this._saveTimer = null;
     this._convIdx = null; // username -> [conversations], built on first use
     this._contactIdx = null; // { phone: Map, email: Map }, built on first use
     this._load();
+    // Optional hook (tests): lets a test run give every new store a PostgreSQL backing.
+    this.pg = persistence || (!this.file && Store.defaultPersistence ? Store.defaultPersistence(this) : null);
+    if (this.pg) this.data = this.pg.attach(this.data);
+  }
+
+  /** Open a store backed by PostgreSQL: creates the tables if needed and loads what is saved. */
+  static async open({ databaseUrl, schema, mediaDir, ...options } = {}) {
+    const { PgPersistence } = require('./pg');
+    const persistence = new PgPersistence({ url: databaseUrl, schema });
+    const initialData = await persistence.load();
+    return new Store({ ...options, persistence, initialData, mediaDir: mediaDir || path.join(__dirname, '..', 'data', 'media'), file: null });
   }
 
   _load() {
@@ -40,18 +51,38 @@ class Store {
   }
 
   _save() {
+    if (this.pg) return this.pg.schedule();
     if (!this.file) return;
     clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => this.flush(), 200);
   }
 
+  /** Save now. With PostgreSQL this returns a promise that resolves when the database has the changes. */
   flush() {
-    if (!this.file) return;
+    if (this.pg) return this.pg.flush();
+    if (!this.file) return undefined;
     clearTimeout(this._saveTimer);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.data));
     fs.renameSync(tmp, this.file);
+    return undefined;
+  }
+
+  /** Records were added to or removed from a message list or a channel's posts. */
+  _touchList(coll, key) {
+    if (this.pg) this.pg.tracker.markList(coll, key);
+  }
+
+  /** A message was changed in place (status, deletion, star): make sure PostgreSQL gets the new version. */
+  _touchMsg(convId, msg) {
+    if (this.pg) this.pg.tracker.markElem('messages', convId, msg);
+  }
+
+  /** Save what is left and release the database connections (shutdown). */
+  async close() {
+    if (this.pg) await this.pg.close();
+    else this.flush();
   }
 
   // ---------- platform settings, feature switches (administrators) ----------
@@ -898,6 +929,7 @@ class Store {
     const post = { id: crypto.randomBytes(6).toString('hex'), channelId: id, text, by, ts: Date.now() };
     posts.push(post);
     if (posts.length > Store.CHANNEL_POSTS_MAX) posts.splice(0, posts.length - Store.CHANNEL_POSTS_MAX);
+    this._touchList('channelPosts', id);
     if (ch.followers[by]) ch.followers[by].lastRead = post.ts;
     this._save();
     return post;
@@ -911,6 +943,7 @@ class Store {
     const i = posts.findIndex((p) => p.id === postId);
     if (i < 0) throw new Error('Post not found');
     posts.splice(i, 1);
+    this._touchList('channelPosts', id);
     this._save();
   }
 
@@ -1122,9 +1155,11 @@ class Store {
       deliveredTo: [],
       readBy: conv.members.filter((m) => m !== by),
     };
-    this.data.messages[convId].push(msg);
+    const list = this.data.messages[convId];
+    list.push(msg);
+    this._touchList('messages', convId);
     this._save();
-    return msg;
+    return list[list.length - 1]; // the tracked copy (the same object when nothing is tracked)
   }
 
   /** Remove messages whose timer ran out. Returns [{ convId, ids }]. */
@@ -1436,6 +1471,13 @@ class Store {
     }
   }
 
+  /** Everyone `username` shares a chat with. */
+  peersOf(username) {
+    const peers = new Set();
+    for (const c of this._convsOf(username)) for (const m of c.members) if (m !== username) peers.add(m);
+    return peers;
+  }
+
   conversationsFor(username) {
     return this._convsOf(username)
       .map((c) => this.summarize(c, username))
@@ -1664,9 +1706,11 @@ class Store {
     if (conv.disappearAfter) msg.expiresAt = msg.ts + conv.disappearAfter * 1000;
     if (clientId) msg.clientId = String(clientId).slice(0, 64);
     if (hiddenFor.length) msg.hiddenFor = hiddenFor;
-    this.data.messages[convId].push(msg);
+    const list = this.data.messages[convId];
+    list.push(msg);
+    this._touchList('messages', convId);
     this._save();
-    return msg;
+    return list[list.length - 1]; // the tracked copy (the same object when nothing is tracked)
   }
 
   /**
@@ -1689,9 +1733,11 @@ class Store {
       // Only calls someone missed should show up as unread for them.
       readBy: conv.members.filter((m) => m !== from && (joined.includes(m) || (!group && status === 'completed'))),
     };
-    this.data.messages[convId].push(msg);
+    const list = this.data.messages[convId];
+    list.push(msg);
+    this._touchList('messages', convId);
     this._save();
-    return msg;
+    return list[list.length - 1]; // the tracked copy (the same object when nothing is tracked)
   }
 
   getMessages(convId, username, { before, limit = 50 } = {}) {
@@ -1715,6 +1761,7 @@ class Store {
     else set.delete(username);
     if (set.size) m.starredBy = [...set];
     else delete m.starredBy;
+    this._touchMsg(found.convId, m);
     this._save();
     return { convId: found.convId, message: this.viewFor(m, username) };
   }
@@ -1724,8 +1771,8 @@ class Store {
   /** Everyone `username` has a one-to-one chat with: the audience for their status updates. */
   directPeers(username) {
     const peers = new Set();
-    for (const c of Object.values(this.data.conversations)) {
-      if (c.type === 'direct' && c.members.includes(username)) c.members.forEach((m) => m !== username && peers.add(m));
+    for (const c of this._convsOf(username)) {
+      if (c.type === 'direct') c.members.forEach((m) => m !== username && peers.add(m));
     }
     return peers;
   }
@@ -1827,12 +1874,21 @@ class Store {
     return out.sort((a, b) => b.ts - a.ts);
   }
 
+  /** One message was delivered to `username` (it was online when the message arrived). */
+  addDelivered(msg, username) {
+    if (msg.deliveredTo.includes(username)) return;
+    msg.deliveredTo.push(username);
+    this._touchMsg(msg.convId, msg);
+    this._save();
+  }
+
   /** Mark messages delivered to `username`. Returns messages whose status changed. */
   markDelivered(convId, username) {
     const changed = [];
     for (const m of this.data.messages[convId] || []) {
       if (m.from !== username && !m.deliveredTo.includes(username) && Store.visibleTo(m, username)) {
         m.deliveredTo.push(username);
+        this._touchMsg(convId, m);
         changed.push(m);
       }
     }
@@ -1855,7 +1911,10 @@ class Store {
         m.readBy.push(username);
         touched = true;
       }
-      if (touched) changed.push(m);
+      if (touched) {
+        this._touchMsg(convId, m);
+        changed.push(m);
+      }
     }
     if (changed.length) this._save();
     return changed;
@@ -1874,6 +1933,7 @@ class Store {
       delete m.e2ee;
       delete m.masked;
       delete m.starredBy;
+      this._touchMsg(convId, m);
       this._save();
       return { convId, message: m };
     }
