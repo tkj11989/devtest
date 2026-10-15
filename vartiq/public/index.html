@@ -30,13 +30,9 @@
   <!-- ========== Auth screen ========== -->
   <section id="auth" class="auth hidden">
     <div class="auth-card">
-      <div class="brand">
-        <svg viewBox="0 0 32 32" class="brand-logo" aria-hidden="true">
-          <defs><linearGradient id="logo-grad-auth" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0090F0"/><stop offset="1" stop-color="#003D82"/></linearGradient></defs>
-          <path fill="url(#logo-grad-auth)" d="M15 4a12 12 0 0 0-10.3 18.1L3 28l6.1-1.6A12 12 0 1 0 15 4Z"/>
-          <rect x="25" y="1" width="4" height="4" rx=".8" fill="#FE730F"/><rect x="21" y="5" width="3" height="3" rx=".7" fill="#0475EB"/><rect x="28" y="7" width="3" height="3" rx=".7" fill="#FF9A15"/>
-        </svg>
-        <h1>Varti<span>Q</span></h1>
+      <div class="brand brand-full">
+        <img class="brand-full-img" src="brand/vartiq-logo.png" width="429" height="156" alt="VartiQ, a PrayukTech product" />
+        <h1 class="sr-only">VartiQ</h1>
       </div>
       <div class="tabs" role="tablist">
         <button class="tab active" data-mode="login" role="tab">Log in</button>
@@ -447,11 +443,7 @@
 
     <section class="chat" id="chat">
       <div class="empty-state" id="empty-state">
-        <svg viewBox="0 0 32 32" class="brand-logo big" aria-hidden="true">
-          <defs><linearGradient id="logo-grad-empty" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0090F0"/><stop offset="1" stop-color="#003D82"/></linearGradient></defs>
-          <path fill="url(#logo-grad-empty)" d="M15 4a12 12 0 0 0-10.3 18.1L3 28l6.1-1.6A12 12 0 1 0 15 4Z"/>
-          <rect x="25" y="1" width="4" height="4" rx=".8" fill="#FE730F"/><rect x="21" y="5" width="3" height="3" rx=".7" fill="#0475EB"/><rect x="28" y="7" width="3" height="3" rx=".7" fill="#FF9A15"/>
-        </svg>
+        <svg viewBox="0 0 32 32" class="brand-logo big" aria-hidden="true"><image href="brand/vartiq-mark.png" width="32" height="32"/></svg>
         <h2>VartiQ</h2>
         <p class="muted">Send and receive messages in real time.<br />Select a chat or start a new one.</p>
       </div>

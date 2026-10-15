@@ -85,7 +85,7 @@ const THEMES = [
 ];
 
 const ICON_DEFS = {
-  classic: { label: 'Classic', premium: false, body: '<path d="M15 4a12 12 0 0 0-10.3 18.1L3 28l6.1-1.6A12 12 0 1 0 15 4Z" fill="var(--primary)"/><rect x="25" y="1" width="4" height="4" rx=".8" fill="#FE730F"/><rect x="21" y="5" width="3" height="3" rx=".7" fill="var(--primary-text)"/><rect x="28" y="7" width="3" height="3" rx=".7" fill="#FF9A15"/>' },
+  classic: { label: 'Classic', premium: false, body: '<image href="/brand/vartiq-mark.png" width="32" height="32"/>' },
   spark: { label: 'Spark', premium: true, body: '<path d="M15 4a12 12 0 0 0-10.3 18.1L3 28l6.1-1.6A12 12 0 1 0 15 4Z" fill="var(--primary)"/><path d="m16 9 1.8 4.6 4.7 1.7-4.7 1.7L16 21.6l-1.8-4.6-4.7-1.7 4.7-1.7L16 9Z" fill="#fff"/><circle cx="26" cy="5" r="2.2" fill="#FF9A15"/>' },
   heart: { label: 'Heart', premium: true, body: '<path d="M15 4a12 12 0 0 0-10.3 18.1L3 28l6.1-1.6A12 12 0 1 0 15 4Z" fill="var(--primary)"/><path d="M15 20.5s-5.5-3.4-5.5-7.1a3.1 3.1 0 0 1 5.5-1.9 3.1 3.1 0 0 1 5.5 1.9c0 3.7-5.5 7.1-5.5 7.1Z" fill="#fff"/>' },
   bolt: { label: 'Bolt', premium: true, body: '<circle cx="16" cy="16" r="13" fill="var(--primary)"/><path d="M17.5 6 9 17.5h5.5L13.5 26 23 13.5h-5.8L17.5 6Z" fill="#FFD23F"/>' },

@@ -13,6 +13,7 @@
   const DEFAULTS = { mode: 'auto', theme: 'ocean', appIcon: 'classic', avatarShape: 'circle' };
   const originalIcon = document.querySelector('link[rel="icon"]')?.getAttribute('href');
 
+  const originals = new WeakMap(); // each logo's own markup, so Classic can put it back
   let catalogue = null;
   let prefs = { ...DEFAULTS };
   let applied = [];
@@ -35,10 +36,13 @@
   function paintIcon(tokens) {
     const icon = catalogue?.icons.find((i) => i.id === prefs.appIcon);
     const body = icon ? icon.svg.replace(/^<svg[^>]*>|<\/svg>$/g, '') : null;
-    if (body) document.querySelectorAll('.brand-logo').forEach((svg) => { svg.innerHTML = body; });
+    document.querySelectorAll('.brand-logo').forEach((svg) => {
+      if (!originals.has(svg)) originals.set(svg, svg.innerHTML);
+      svg.innerHTML = prefs.appIcon === 'classic' || !body ? originals.get(svg) : body;
+    });
     const link = document.querySelector('link[rel="icon"]');
     if (!link) return;
-    if (prefs.appIcon === 'classic' && prefs.theme === 'ocean') {
+    if (prefs.appIcon === 'classic') {
       if (originalIcon) { link.setAttribute('href', originalIcon); link.setAttribute('type', 'image/png'); }
       return;
     }

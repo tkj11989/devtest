@@ -1361,3 +1361,8 @@ html[data-avatar-shape="square"] .avatar { border-radius: 6px; }
 .shape-opt[data-shape="square"] i { border-radius: 4px; }
 .locked::after { content: "\2605"; position: absolute; top: 2px; right: 5px; font-size: 11px; color: var(--accent-text); }
 #appearance-panel h3 { margin: 16px 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
+
+.brand-full { justify-content: center; }
+.brand-full-img { display: block; width: min(260px, 80%); height: auto; border-radius: 12px; background: #fff; }
+.brand-logo image { clip-path: inset(0 round 4px); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
