@@ -54,89 +54,30 @@
     link.setAttribute('href', `data:image/svg+xml,${encodeURIComponent(svg)}`);
   }
 
-  // ---------- the logo follows the theme ----------
+  // ---------- the logo keeps its own colours; only its background follows the theme ----------
 
-  const logoCache = new Map(); // `${src}|${theme}` -> data URL
-  let logoRun = 0;
+  const OCEAN_LOGO_BG = '#E7F0FD';
+  const logoBgOf = (id) => catalogue?.themes.find((t) => t.id === id)?.logoBg || read()?.logoBg || OCEAN_LOGO_BG;
 
-  function rgbToHsl(r, g, b) {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b); const min = Math.min(r, g, b); const l = (max + min) / 2;
-    if (max === min) return [0, 0, l];
-    const d = max - min;
-    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    const h = max === r ? ((g - b) / d + (g < b ? 6 : 0)) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-    return [h * 60, s, l];
-  }
-  function hslToRgb(h, s, l) {
-    const k = (n) => (n + h / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    return [f(0) * 255, f(8) * 255, f(4) * 255];
-  }
-
-  /** The blue parts of the VartiQ logo take the theme's hue; the orange stays. Returns a PNG data URL. */
-  async function recolour(src, theme) {
-    const key = `${src}|${theme.id}`;
-    if (logoCache.has(key)) return logoCache.get(key);
-    const img = new Image();
-    img.src = src;
-    await img.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(img, 0, 0);
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const px = data.data;
-    const satScale = Math.min(1, theme.sat / 80);
-    for (let i = 0; i < px.length; i += 4) {
-      if (px[i + 3] === 0) continue;
-      const [h, s, l] = rgbToHsl(px[i], px[i + 1], px[i + 2]);
-      if (h < 180 || h > 260 || s < 0.12) continue; // not one of the logo's blues
-      const [r, g, b] = hslToRgb(theme.hue, Math.min(1, s * satScale), l);
-      px[i] = r; px[i + 1] = g; px[i + 2] = b;
-    }
-    ctx.putImageData(data, 0, 0);
-    const url = canvas.toDataURL('image/png');
-    logoCache.set(key, url);
-    return url;
-  }
-
-  /** Logo images in the page (login screen, empty screen) and the browser tab icon. */
-  async function paintLogo() {
-    const run = ++logoRun;
-    const theme = catalogue?.themes.find((t) => t.id === prefs.theme);
-    const targets = [
-      ...[...document.querySelectorAll('img.brand-full-img')].map((n) => ({ n, attr: 'src' })),
-      ...[...document.querySelectorAll('.brand-logo image')].filter((n) => (n.getAttribute('data-orig') || n.getAttribute('href') || '').includes('vartiq-mark')).map((n) => ({ n, attr: 'href' })),
-    ];
-    for (const { n, attr } of targets) {
-      if (!n.dataset.orig) n.dataset.orig = n.getAttribute(attr);
-      let url = n.dataset.orig;
-      if (theme?.hue != null) {
-        try { url = await recolour(n.dataset.orig, theme); } catch { /* keep the original */ }
-      }
-      if (run !== logoRun) return;
-      n.setAttribute(attr, url);
-    }
+  /** Browser tab icon for the Classic icon: the logo on the theme's logo background. */
+  let tabRun = 0;
+  async function paintTab(bgColour) {
+    const run = ++tabRun;
     const link = document.querySelector('link[rel="icon"]');
-    if (link && prefs.appIcon === 'classic' && theme?.hue != null) {
-      try {
-        const mark = await recolour('/brand/vartiq-mark.png', theme);
-        const c = document.createElement('canvas');
-        c.width = c.height = 64;
-        const ctx = c.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, 64, 64);
-        const m = new Image();
-        m.src = mark;
-        await m.decode();
-        const w = 58; const h = (m.naturalHeight / m.naturalWidth) * w;
-        ctx.drawImage(m, 3, (64 - h) / 2, w, h);
-        if (run === logoRun) { link.setAttribute('type', 'image/png'); link.setAttribute('href', c.toDataURL('image/png')); }
-      } catch { /* keep the file icon */ }
-    }
+    if (!link || prefs.appIcon !== 'classic') return;
+    try {
+      const m = new Image();
+      m.src = '/brand/vartiq-mark.png';
+      await m.decode();
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = bgColour;
+      ctx.fillRect(0, 0, 64, 64);
+      const w = 58; const h = (m.naturalHeight / m.naturalWidth) * w;
+      ctx.drawImage(m, 3, (64 - h) / 2, w, h);
+      if (run === tabRun) { link.setAttribute('type', 'image/png'); link.setAttribute('href', c.toDataURL('image/png')); }
+    } catch { /* keep the file icon */ }
   }
 
   function apply(next, { save = true } = {}) {
@@ -151,11 +92,13 @@
     for (const [name, value] of Object.entries(tokens || {})) root.style.setProperty(name, value);
 
     paintIcon(tokens);
-    paintLogo();
+    const logoBg = logoBgOf(prefs.theme);
+    root.style.setProperty('--logo-bg', logoBg);
+    paintTab(logoBg);
 
     if (save && catalogue) {
       const t = catalogue.themes.find((x) => x.id === prefs.theme);
-      write({ prefs, theme: prefs.theme, tokens: t?.tokens || null });
+      write({ prefs, theme: prefs.theme, tokens: t?.tokens || null, logoBg: t?.logoBg || OCEAN_LOGO_BG });
     }
   }
 

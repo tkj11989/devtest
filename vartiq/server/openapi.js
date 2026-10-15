@@ -472,7 +472,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({
           defaults: ref('AppearancePrefs'),
           modes: arrayOf({ type: 'string' }),
-          themes: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' }, swatch: { type: 'string' }, hue: { type: 'integer', description: 'Hue (0-360) the logo is recoloured to; absent for the default theme' }, sat: { type: 'integer' }, tokens: { type: ['object', 'null'], description: '`{ light: {...}, dark: {...} }`; null = the default brand colours' } })),
+          themes: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' }, swatch: { type: 'string' }, logoBg: { type: 'string', description: 'Background colour for the logo. The logo itself never changes colour.' }, tokens: { type: ['object', 'null'], description: '`{ light: {...}, dark: {...} }`; null = the default brand colours' } })),
           icons: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' }, svg: { type: 'string', description: 'SVG; colours use `var(--primary)`, replace with the theme colour' } })),
           avatarShapes: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, premium: { type: 'boolean' } })),
         })) },

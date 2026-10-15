@@ -1363,12 +1363,5 @@ html[data-avatar-shape="square"] .avatar { border-radius: 6px; }
 #appearance-panel h3 { margin: 16px 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
 
 .brand-full { justify-content: center; }
-.brand-full-img { display: block; width: min(280px, 85%); height: auto; }
-.brand-full-img.on-dark { display: none; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-mode="light"]) .brand-full-img.on-light { display: none; }
-  :root:not([data-mode="light"]) .brand-full-img.on-dark { display: block; }
-}
-:root[data-mode="dark"] .brand-full-img.on-light { display: none; }
-:root[data-mode="dark"] .brand-full-img.on-dark { display: block; }
+.brand-full-img { display: block; width: min(300px, 90%); height: auto; box-sizing: border-box; padding: 10px 16px; border-radius: 16px; background: var(--logo-bg, #E7F0FD); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

@@ -74,7 +74,7 @@ function makeTokens(h, sat = 80) {
 
 /** `default` = the app's own brand colours (no overrides). */
 const THEMES = [
-  { id: 'ocean', label: 'Ocean', premium: false, swatch: '#0670DE', tokens: null },
+  { id: 'ocean', label: 'Ocean', premium: false, swatch: '#0670DE', logoBg: '#E7F0FD', tokens: null },
   ...[
     ['emerald', 'Emerald', 158, 85], ['teal', 'Teal', 186, 85], ['sky', 'Sky', 200, 90], ['indigo', 'Indigo', 236, 78],
     ['midnight', 'Midnight', 224, 55], ['violet', 'Violet', 268, 75], ['magenta', 'Magenta', 310, 72], ['rose', 'Rose', 338, 78],
@@ -82,8 +82,8 @@ const THEMES = [
     ['graphite', 'Graphite', 215, 14],
   ].map(([id, label, h, s]) => {
     const tokens = makeTokens(h, s);
-    // hue/sat: clients use them to recolour the logo to match.
-    return { id, label, premium: true, swatch: tokens.light['--primary'], hue: h, sat: s, tokens };
+    // logoBg: the pale background the (unchanged) logo sits on, tinted to the theme.
+    return { id, label, premium: true, swatch: tokens.light['--primary'], logoBg: hsl(h, Math.min(s, 70), 94), tokens };
   }),
 ];
 

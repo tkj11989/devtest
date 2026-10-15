@@ -270,7 +270,7 @@ API: `GET /me/subscription`, `POST /me/subscription/checkout`, `POST /me/subscri
 
 Premium accounts also get:
 
-- **Colour themes**: 13 Premium themes (Emerald, Teal, Sky, Indigo, Midnight, Violet, Magenta, Rose, Crimson, Sunset, Amber, Coffee, Graphite); Ocean, the PrayukTech blue, is free. The VartiQ logo, the browser tab icon and the Classic app icon are recoloured to match the chosen theme (the blue parts take the theme's hue; the orange stays). Every theme is generated so text and backgrounds meet WCAG AA contrast in both light and dark (checked by the tests).
+- **Colour themes**: 13 Premium themes (Emerald, Teal, Sky, Indigo, Midnight, Violet, Magenta, Rose, Crimson, Sunset, Amber, Coffee, Graphite); Ocean, the PrayukTech blue, is free. The VartiQ logo always keeps its own design and colours; only the pale background it sits on follows the chosen theme. Every theme is generated so text and backgrounds meet WCAG AA contrast in both light and dark (checked by the tests).
 - **App icons**: Spark, Heart, Bolt, Leaf, Star, Plane and Smile replace the logo in the app and the browser tab icon (Classic is free).
 - **Picture shapes**: rounded or square avatars (circle is free).
 - **Call recording** (see "Recording a call"): asking to record needs Premium; everyone else on the call only has to agree.
