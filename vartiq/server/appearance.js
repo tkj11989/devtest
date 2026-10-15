@@ -76,11 +76,14 @@ function makeTokens(h, sat = 80) {
 const THEMES = [
   { id: 'ocean', label: 'Ocean', premium: false, swatch: '#0670DE', tokens: null },
   ...[
-    ['emerald', 'Emerald', 158, 85], ['teal', 'Teal', 186, 85], ['indigo', 'Indigo', 236, 78], ['violet', 'Violet', 268, 75],
-    ['rose', 'Rose', 338, 78], ['crimson', 'Crimson', 355, 76], ['graphite', 'Graphite', 215, 14],
+    ['emerald', 'Emerald', 158, 85], ['teal', 'Teal', 186, 85], ['sky', 'Sky', 200, 90], ['indigo', 'Indigo', 236, 78],
+    ['midnight', 'Midnight', 224, 55], ['violet', 'Violet', 268, 75], ['magenta', 'Magenta', 310, 72], ['rose', 'Rose', 338, 78],
+    ['crimson', 'Crimson', 355, 76], ['sunset', 'Sunset', 24, 95], ['amber', 'Amber', 42, 95], ['coffee', 'Coffee', 25, 38],
+    ['graphite', 'Graphite', 215, 14],
   ].map(([id, label, h, s]) => {
     const tokens = makeTokens(h, s);
-    return { id, label, premium: true, swatch: tokens.light['--primary'], tokens };
+    // hue/sat: clients use them to recolour the logo to match.
+    return { id, label, premium: true, swatch: tokens.light['--primary'], hue: h, sat: s, tokens };
   }),
 ];
 
