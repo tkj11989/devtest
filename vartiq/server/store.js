@@ -22,6 +22,8 @@ class Store {
     this.mediaDir = this.file ? path.join(path.dirname(this.file), 'media') : null;
     this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
     this._saveTimer = null;
+    this._convIdx = null; // username -> [conversations], built on first use
+    this._contactIdx = null; // { phone: Map, email: Map }, built on first use
     this._load();
   }
 
@@ -30,6 +32,8 @@ class Store {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       this.data = { users: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
+      this._convIdx = null;
+      this._contactIdx = null;
     } catch (err) {
       console.error('Could not read data file, starting fresh:', err.message);
     }
@@ -191,7 +195,7 @@ class Store {
       plan: u.subscription?.plan || null,
       business: u.business ? u.business.category : null,
       suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason, by: u.suspended.by } : null,
-      chats: Object.values(this.data.conversations).filter((c) => c.members.includes(username)).length,
+      chats: this._convsOf(username).length,
       channelsOwned: Object.values(this.data.channels).filter((c) => c.owner === username).length,
       apiKeys: Object.values(this.data.apiKeys).filter((k) => k.owner === username).length,
       devices: (u.devices || []).length,
@@ -308,11 +312,13 @@ class Store {
       lastSeen: now,
       createdAt: now,
     };
+    this._contactIdx = null;
     if (business) {
       try {
         this.setBusiness(username, business);
       } catch (err) {
         delete this.data.users[username];
+        this._contactIdx = null;
         throw err;
       }
     }
@@ -331,12 +337,25 @@ class Store {
     }
   }
 
+  /** Lookup tables for phone and email, so signing in doesn't scan every user. Dropped whenever a user or contact changes. */
+  _contacts() {
+    if (!this._contactIdx) {
+      const idx = { phone: new Map(), email: new Map() };
+      for (const u of Object.values(this.data.users)) {
+        if (u.phone && !idx.phone.has(u.phone)) idx.phone.set(u.phone, u.username);
+        if (u.email && !idx.email.has(u.email)) idx.email.set(u.email, u.username);
+      }
+      this._contactIdx = idx;
+    }
+    return this._contactIdx;
+  }
+
   findByPhone(phone) {
-    return Object.values(this.data.users).find((u) => u.phone === phone)?.username || null;
+    return this._contacts().phone.get(phone) || null;
   }
 
   findByEmail(email) {
-    return Object.values(this.data.users).find((u) => u.email === email)?.username || null;
+    return this._contacts().email.get(email) || null;
   }
 
   /** Set a verified mobile number (`channel` "sms") or email ("email"). A business's contact email follows it. */
@@ -347,6 +366,7 @@ class Store {
     const owner = field === 'phone' ? this.findByPhone(value) : this.findByEmail(value);
     if (owner && owner !== username) throw new Error(`This ${field === 'phone' ? 'mobile number' : 'email'} is already registered`);
     u[field] = value;
+    this._contactIdx = null;
     if (field === 'email' && u.business) u.business.email = value;
     this._save();
   }
@@ -1361,6 +1381,7 @@ class Store {
       // The person starting the chat may have a default message timer.
       if (this.defaultDisappear(a)) Object.assign(this.data.conversations[id], { disappearAfter: this.defaultDisappear(a), disappearSetBy: a });
       this.data.messages[id] = [];
+      this._indexConv(this.data.conversations[id]);
       this._save();
     }
     return this.data.conversations[id];
@@ -1384,6 +1405,7 @@ class Store {
       createdAt: Date.now(),
     };
     this.data.messages[id] = [];
+    this._indexConv(this.data.conversations[id]);
     this._save();
     return this.data.conversations[id];
   }
@@ -1397,9 +1419,25 @@ class Store {
     return !!c && c.members.includes(username);
   }
 
+  /** Every conversation `username` is in. Members never change after a chat is made, so the table is only added to. */
+  _convsOf(username) {
+    if (!this._convIdx) {
+      this._convIdx = new Map();
+      for (const c of Object.values(this.data.conversations)) this._indexConv(c);
+    }
+    return this._convIdx.get(username) || [];
+  }
+
+  _indexConv(conv) {
+    if (!this._convIdx) return;
+    for (const m of conv.members) {
+      if (!this._convIdx.has(m)) this._convIdx.set(m, []);
+      this._convIdx.get(m).push(conv);
+    }
+  }
+
   conversationsFor(username) {
-    return Object.values(this.data.conversations)
-      .filter((c) => c.members.includes(username))
+    return this._convsOf(username)
       .map((c) => this.summarize(c, username))
       .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
   }
