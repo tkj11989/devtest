@@ -24,9 +24,9 @@ Assumptions (check them in Phase 0): Hostinger KVM 4 (about 4 vCPU, 16 GB RAM, 2
 ```
  People ──► Cloudflare (HTTPS, DDoS protection, WebSockets)
                 │
-                ▼  chat.example.com (proxied)
+                ▼  vartiq.prayuktech.com (proxied)
           nginx on the server  ── ExamSuit's own site files stay as they are
-                │  127.0.0.1:3000
+                │  127.0.0.1:3100
                 ▼
           VartiQ (Node.js, systemd service, limited to ~4 GB RAM / 1.5 CPU)
                 │
@@ -34,7 +34,7 @@ Assumptions (check them in Phase 0): Hostinger KVM 4 (about 4 vCPU, 16 GB RAM, 2
                 └──► /var/lib/vartiq/media (voice notes, status photos, product pictures)
 
  Calls, when phones cannot connect directly:
- People ──► turn.example.com (NOT proxied by Cloudflare) ──► coturn on UDP/TCP 3478
+ People ──► turn.prayuktech.com (NOT proxied by Cloudflare) ──► coturn on UDP/TCP 3478
 ```
 
 Sizes to plan with (my estimates, not measurements on your server): VartiQ about 1 GB of RAM and one CPU core at 10,000 connected people; coturn a few hundred MB plus network bandwidth; PostgreSQL a few hundred MB. Together roughly 2.5 to 4 GB of the 16 GB, **if ExamSuit leaves that room**. Phase 0 tells you whether it does.
@@ -73,6 +73,21 @@ Fill in this table:
 
 **Stop here if** RAM or CPU is already tight, or if something already uses 3478. Fix that first.
 
+### Your server, as checked on 2026-10-15
+
+| Item | Result | Decision |
+| --- | --- | --- |
+| System | Ubuntu 24.04.5, 4 cores, 15 GB RAM (14 GB available), 172 GB free, load about 0.05 | Room for VartiQ. No stop condition. |
+| ExamSuit | Next.js 14.2.5 under PM2 as root, `127.0.0.1`/`*:3000`, system Node 20.20.2 | VartiQ uses **`PORT=3100`** (not 3000) and its own Node 22 in `/opt/node22`. |
+| Free ports | 3100, 5433, 3478 (TCP and UDP) free | As planned. |
+| nginx 1.24 | One site `sites-enabled/examsuit` (Certbot certificate), `conf.d/` empty, no `default_server` | VartiQ goes in **`sites-enabled/vartiq`**, so ExamSuit's file is read first and stays the default site (6.2). |
+| PostgreSQL 16 | One cluster on 5432, `max_connections=100`, 11 in use. ExamSuit's log shows a past PostgreSQL restart cut its connections | **Option B** (own cluster on 5433): a restart or tuning of VartiQ's database can never touch ExamSuit's. |
+| Traefik container | Restarts every minute: it cannot bind port 80 because nginx holds it | Leave it alone, but **never `systemctl stop nginx`**: Traefik would take ports 80/443. Only `nginx -t && systemctl reload nginx`. |
+| Cloudflare | `examsuit.com` is served directly (no `cf-ray` header) | Cloudflare is used only for `prayuktech.com`, if that domain is on it. |
+| Firewall | ufw: 22, 80, 443 only; Docker present | Phase 8 adds only what calls need (3478 and a relay range). |
+| Backups | No cron backup of ExamSuit's database or files exists on this server | Not VartiQ's job, but take the Phase 1 snapshot, and consider a nightly `pg_dump examsuit` of your own. |
+| ExamSuit warnings (not ours) | PM2 shows 18 restarts, 0 unstable; log has a Next.js "Failed to find Server Action" (stale browser tabs after a deploy) and an unknown `outputFileTracingRoot` option in `next.config.js` | Harmless today; mention to the ExamSuit team. |
+
 ---
 
 ## Phase 1. Safety net
@@ -90,25 +105,25 @@ Fill in this table:
 
 ## Phase 2. Domain and Cloudflare
 
-You need two names under your domain (replace `example.com`):
+You need two names under `prayuktech.com`. Check first that `prayuktech.com` is a zone in your Cloudflare account (ExamSuit's `examsuit.com` is *not* behind Cloudflare, which is fine: Cloudflare works per domain, so nothing changes for ExamSuit). If `prayuktech.com` is not on Cloudflare, either move its DNS there, or skip the orange cloud: use a Let's Encrypt certificate instead (see 6.2) and skip steps 1 to 8 below.
 
 | Name | Purpose | Cloudflare proxy |
 | --- | --- | --- |
-| `chat.example.com` | the VartiQ web app, API and admin | **Proxied (orange cloud)** |
-| `turn.example.com` | the call relay | **DNS only (grey cloud)**: Cloudflare's proxy cannot carry call traffic |
+| `vartiq.prayuktech.com` | the VartiQ web app, API and admin | **Proxied (orange cloud)** |
+| `turn.prayuktech.com` | the call relay | **DNS only (grey cloud)**: Cloudflare's proxy cannot carry call traffic |
 
 Both point to the server's public IP (`A` record; add `AAAA` only if the server has IPv6 and you open it in the firewall).
 
-Cloudflare settings for `chat.example.com`:
+Cloudflare settings for `vartiq.prayuktech.com`:
 
 1. **SSL/TLS → Overview:** mode **Full (strict)**.
-2. **SSL/TLS → Origin Server → Create Certificate** for `chat.example.com` (15 years). Save the two files on the server (Phase 5):
+2. **SSL/TLS → Origin Server → Create Certificate** for `vartiq.prayuktech.com` (15 years). Save the two files on the server (Phase 5):
    `/etc/ssl/vartiq/origin.pem` and `/etc/ssl/vartiq/origin.key` (mode `600`).
 3. **Network:** WebSockets **On** (it is by default).
-4. **Caching → Configuration:** make sure `chat.example.com/api/*`, `/socket.io/*` and `/admin/*` are **not cached** (add a Cache Rule "Bypass cache" for those paths).
+4. **Caching → Configuration:** make sure `vartiq.prayuktech.com/api/*`, `/socket.io/*` and `/admin/*` are **not cached** (add a Cache Rule "Bypass cache" for those paths).
 5. **Speed → Optimization:** turn **off** Rocket Loader and Auto Minify for this hostname (they can break the app's scripts).
 6. **SSL/TLS → Edge Certificates:** Always Use HTTPS **On**; Minimum TLS **1.2**.
-7. **Security → WAF:** keep the managed rules on. Add a rule that **challenges or blocks** `chat.example.com/admin*` for everyone except your office IPs (or put `/admin` behind Cloudflare Access). The admin dashboard should never be open to the whole internet.
+7. **Security → WAF:** keep the managed rules on. Add a rule that **challenges or blocks** `vartiq.prayuktech.com/admin*` for everyone except your office IPs (or put `/admin` behind Cloudflare Access). The admin dashboard should never be open to the whole internet.
 8. If you use "Bot Fight Mode" or "Super Bot Fight", test the app with your phone before launch; if sign-in OTP calls get blocked, add a skip rule for `/api/v1/*`.
 
 ---
@@ -156,7 +171,7 @@ SQL
 
 The connection string is `postgres://vartiq:PASSWORD@127.0.0.1:5432/vartiq`. Confirm that `pg_hba.conf` has a rule for local TCP connections with a password (`host all all 127.0.0.1/32 scram-sha-256`); on a standard install it does. Do not change ExamSuit's lines.
 
-### Option B: a separate PostgreSQL cluster on its own port (safest for ExamSuit)
+### Option B: a separate PostgreSQL cluster on its own port (safest for ExamSuit; **use this on your server**)
 
 Ubuntu and Debian can run several clusters side by side:
 
@@ -216,7 +231,7 @@ PREV=$(readlink -f /opt/vartiq/current || true)
 sudo -u vartiq ln -sfn "$REL" /opt/vartiq/current
 sudo systemctl restart vartiq
 sleep 3
-if curl -fsS http://127.0.0.1:3000/api/v1/config >/dev/null; then
+if curl -fsS http://127.0.0.1:3100/api/v1/config >/dev/null; then
   echo "OK: running $REL"
   ls -dt /opt/vartiq/releases/* | tail -n +6 | xargs -r sudo rm -rf   # keep the last 5
 else
@@ -226,7 +241,7 @@ else
 fi
 ```
 
-(If you chose `PORT=3100`, change it in the `curl` line.) You can run the app's tests on your own computer or CI before you deploy: `npm test`. There is no need to install dev packages on the server.
+You can run the app's tests on your own computer or CI before you deploy: `npm test`. There is no need to install dev packages on the server.
 
 ### 5.3 Configuration file
 
@@ -235,13 +250,13 @@ Create `/etc/vartiq/vartiq.env` (owner root, group vartiq, mode `640`). **Every 
 ```bash
 # ---- where it listens (only nginx on this machine may reach it)
 HOST=127.0.0.1
-PORT=3000
+PORT=3100                 # 3000 is ExamSuit
 TRUST_PROXY=loopback            # the real visitor address comes from nginx; without this every visitor shares one rate limit
 
 # ---- data
-DATABASE_URL=postgres://vartiq:PASSWORD@127.0.0.1:5432/vartiq     # 5433 for Option B
+DATABASE_URL=postgres://vartiq:PASSWORD@127.0.0.1:5433/vartiq     # Option B (5432 only for Option A or C)
 MEDIA_DIR=/var/lib/vartiq/media
-CORS_ORIGINS=https://chat.example.com
+CORS_ORIGINS=https://vartiq.prayuktech.com
 
 # ---- administrator (created or updated at every start; use 16+ random characters)
 ADMIN_USERNAME=admin
@@ -250,14 +265,14 @@ ADMIN_PASSWORD=CHANGE-ME-LONG-RANDOM
 # ---- who is responsible (printed in the Terms and Privacy Notice; also editable in Admin -> Settings -> Legal)
 LEGAL_COMPANY=Your Company Legal Name
 LEGAL_ADDRESS=Registered address
-LEGAL_CONTACT_EMAIL=hello@example.com
+LEGAL_CONTACT_EMAIL=hello@prayuktech.com
 LEGAL_GRIEVANCE_NAME=Grievance Officer name
-LEGAL_GRIEVANCE_EMAIL=grievance@example.com
+LEGAL_GRIEVANCE_EMAIL=grievance@prayuktech.com
 LEGAL_CITY=City for courts
 LEGAL_HOSTING=India (your data centre location)
 
 # ---- calls (Phase 7): short-lived credentials for your own TURN server
-TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp
+TURN_URLS=turn:turn.prayuktech.com:3478?transport=udp,turn:turn.prayuktech.com:3478?transport=tcp
 TURN_SECRET=THE-SAME-SECRET-AS-IN-coturn
 TURN_TTL_SECONDS=86400
 
@@ -329,8 +344,8 @@ sudo systemctl daemon-reload
 sudo vartiq-deploy                       # first release; builds /opt/vartiq/current
 sudo systemctl enable vartiq
 sudo journalctl -u vartiq -n 30 --no-pager
-# expect: "VartiQ running at http://127.0.0.1:3000" and "Data: PostgreSQL"
-curl -s http://127.0.0.1:3000/api/v1/config | head -c 200
+# expect: "VartiQ running at http://127.0.0.1:3100" and "Data: PostgreSQL"
+curl -s http://127.0.0.1:3100/api/v1/config | head -c 200
 ```
 
 (The first `vartiq-deploy` run restarts the service before it exists as enabled; that is fine. If it reports failure, read the journal.)
@@ -369,7 +384,9 @@ sudo mkdir -p /etc/nginx/snippets && sudo /usr/local/bin/vartiq-update-cf-ips
 
 ### 6.2 The site
 
-`/etc/nginx/conf.d/vartiq.conf`:
+Create it as `/etc/nginx/sites-available/vartiq` and enable it with a link (done in 6.3). nginx reads `conf.d/` *before* `sites-enabled/`, and the first server block for a port answers requests for unknown names. A file in `conf.d/` would therefore become the default site and take over ExamSuit's role; `sites-enabled/vartiq` sorts after `examsuit`, so ExamSuit stays the default.
+
+If `prayuktech.com` is **not** on Cloudflare: remove the `include .../vartiq-cloudflare-realip.conf;` line, do not use `TRUST_PROXY=1` blindly (keep it, nginx is still one proxy), and get a certificate without touching ExamSuit's: add a port-80 `location /.well-known/acme-challenge/ { root /var/www/html; }` to the first server block, then `sudo certbot certonly --webroot -w /var/www/html -d vartiq.prayuktech.com` and point `ssl_certificate` at `/etc/letsencrypt/live/vartiq.prayuktech.com/fullchain.pem` and `privkey.pem`. Do **not** use `certbot --nginx`: it rewrites nginx files.
 
 ```nginx
 # WebSocket upgrade (names are unique to VartiQ)
@@ -380,13 +397,13 @@ limit_req_zone $binary_remote_addr zone=vq_auth:10m rate=10r/s;
 
 server {
     listen 80;
-    server_name chat.example.com;
+    server_name vartiq.prayuktech.com;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name chat.example.com;
+    server_name vartiq.prayuktech.com;
     # nginx 1.25.1 or newer: add the line  http2 on;  (older versions: write  listen 443 ssl http2;  above instead)
 
     ssl_certificate     /etc/ssl/vartiq/origin.pem;
@@ -402,12 +419,12 @@ server {
 
     location /api/v1/auth/ {
         limit_req zone=vq_auth burst=30 nodelay;
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3100;
         include /etc/nginx/snippets/vartiq-proxy.conf;
     }
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3100;
         include /etc/nginx/snippets/vartiq-proxy.conf;
     }
 }
@@ -438,15 +455,16 @@ sudo chmod 600 /etc/ssl/vartiq/origin.key
 ### 6.3 Test, then load. Never restart.
 
 ```bash
+sudo ln -s /etc/nginx/sites-available/vartiq /etc/nginx/sites-enabled/vartiq
 sudo nginx -t          # must say "syntax is ok" and "test is successful"
 sudo systemctl reload nginx
 ```
 
-If `nginx -t` fails, **do not reload**. Read the message (usually a duplicate name or a missing certificate), fix `vartiq.conf`, and test again. `reload` swaps the configuration without dropping ExamSuit's connections. If you cannot fix it quickly: `sudo rm /etc/nginx/conf.d/vartiq.conf` and ExamSuit is exactly as before.
+If `nginx -t` fails, **do not reload**. Read the message (usually a duplicate name or a missing certificate), fix `sites-available/vartiq`, and test again. `reload` swaps the configuration without dropping ExamSuit's connections. If you cannot fix it quickly: `sudo rm /etc/nginx/sites-enabled/vartiq` and ExamSuit is exactly as before. (A failed test with the link in place only blocks *later* reloads, so remove the link first if you must leave it for a while.)
 
-Run the **ExamSuit check**, then open `https://chat.example.com`. You should see the VartiQ sign-in page.
+Run the **ExamSuit check**, then open `https://vartiq.prayuktech.com`. You should see the VartiQ sign-in page.
 
-*If ExamSuit is not behind nginx:* Apache needs `mod_proxy`, `mod_proxy_wstunnel` and `ProxyPass "/socket.io/" "ws://127.0.0.1:3000/socket.io/"` plus `ProxyPass "/" "http://127.0.0.1:3000/"` and `ProxyPreserveHost On` in a new `VirtualHost` file; Docker/Traefik/Caddy users add a router for `chat.example.com` to `127.0.0.1:3000` with WebSocket support. The rules are the same: separate file, test first, reload not restart, and pass the real visitor address (`TRUST_PROXY`).
+*If ExamSuit is not behind nginx:* Apache needs `mod_proxy`, `mod_proxy_wstunnel` and `ProxyPass "/socket.io/" "ws://127.0.0.1:3100/socket.io/"` plus `ProxyPass "/" "http://127.0.0.1:3100/"` and `ProxyPreserveHost On` in a new `VirtualHost` file; Docker/Traefik/Caddy users add a router for `vartiq.prayuktech.com` to `127.0.0.1:3100` with WebSocket support. The rules are the same: separate file, test first, reload not restart, and pass the real visitor address (`TRUST_PROXY`).
 
 ---
 
@@ -465,7 +483,7 @@ sudo sed -i 's/^#\?TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/cot
 listening-port=3478
 # On a VPS with a public IP on the network card no external-ip line is needed. If calls connect but have no sound, add:
 # external-ip=YOUR.PUBLIC.IP
-realm=turn.example.com
+realm=turn.prayuktech.com
 fingerprint
 use-auth-secret
 static-auth-secret=THE-SAME-SECRET-AS-TURN_SECRET
@@ -502,7 +520,7 @@ sudo systemctl enable --now coturn
 sudo ss -ulnp | grep 3478; sudo ss -tlnp | grep 3478
 ```
 
-Put the same secret in `/etc/vartiq/vartiq.env` (`TURN_SECRET`, `TURN_URLS`) and `sudo systemctl restart vartiq`. Each person's app then gets credentials that expire after `TURN_TTL_SECONDS`, so strangers cannot use your relay. (TURN over TLS on port 5349 helps people on networks that block UDP; add it later with a certificate for `turn.example.com`, for example from `certbot certonly --dns-cloudflare`.)
+Put the same secret in `/etc/vartiq/vartiq.env` (`TURN_SECRET`, `TURN_URLS`) and `sudo systemctl restart vartiq`. Each person's app then gets credentials that expire after `TURN_TTL_SECONDS`, so strangers cannot use your relay. (TURN over TLS on port 5349 helps people on networks that block UDP; add it later with a certificate for `turn.prayuktech.com`, for example from `certbot certonly --dns-cloudflare`.)
 
 **Bandwidth reality check:** one relayed 720p video call is about 3 Mbit/s in total. 100 such calls is about 300 Mbit/s. Ask Hostinger what network speed and monthly transfer your plan includes and keep `total-quota` below what it can carry. Most calls connect directly and never touch the relay.
 
@@ -517,7 +535,7 @@ Open **only** what is new. Do not remove or reorder existing rules. In whichever
 | 80, 443 | TCP | anywhere (already open for ExamSuit) | the web app |
 | 3478 | UDP and TCP | anywhere | TURN |
 | 50000-50499 | UDP | anywhere | TURN relay range |
-| 3000 | TCP | **nobody** | VartiQ listens on 127.0.0.1 only |
+| 3100 | TCP | **nobody** | VartiQ listens on 127.0.0.1 only |
 | 5432 / 5433 | TCP | **nobody** | PostgreSQL |
 
 ```bash
@@ -528,7 +546,7 @@ sudo ufw allow 50000:50499/udp
 sudo ufw status numbered
 ```
 
-Confirm from your own computer that the app and database are **not** reachable: `nc -vz YOUR.IP 3000` and `nc -vz YOUR.IP 5432` must fail or time out.
+Confirm from your own computer that the app and database are **not** reachable: `nc -vz YOUR.IP 3100` and `nc -vz YOUR.IP 5433` must fail or time out.
 
 ---
 
@@ -544,8 +562,8 @@ set -euo pipefail
 DEST=/var/backups/vartiq
 STAMP=$(date +%F-%H%M)
 mkdir -p "$DEST/db" "$DEST/media"
-# database (change -p 5433 for Option B)
-sudo -u postgres pg_dump -p 5432 -Fc vartiq > "$DEST/db/vartiq-$STAMP.dump"
+# database (port 5433 = Option B; use 5432 for Option A or C)
+sudo -u postgres pg_dump -p 5433 -Fc vartiq > "$DEST/db/vartiq-$STAMP.dump"
 # media: a hard-linked snapshot per day, only changed files take space
 rsync -a --delete --link-dest="$DEST/media/latest" /var/lib/vartiq/media/ "$DEST/media/$STAMP/"
 ln -sfn "$DEST/media/$STAMP" "$DEST/media/latest"
@@ -581,9 +599,9 @@ Backups contain personal data and encrypted chats: keep them off public storage,
 
 Use a staff phone on mobile data, and a laptop on Wi-Fi.
 
-1. `https://chat.example.com` loads with a valid lock icon; `http://` redirects to `https://`.
-2. `https://chat.example.com/legal/privacy` and `/legal/terms` show **your company details, no `[square brackets]`**.
-3. `https://chat.example.com/admin` is blocked for the public (Cloudflare rule) and works for you. Sign in; the Overview shows no "Legal details are missing" warning.
+1. `https://vartiq.prayuktech.com` loads with a valid lock icon; `http://` redirects to `https://`.
+2. `https://vartiq.prayuktech.com/legal/privacy` and `/legal/terms` show **your company details, no `[square brackets]`**.
+3. `https://vartiq.prayuktech.com/admin` is blocked for the public (Cloudflare rule) and works for you. Sign in; the Overview shows no "Legal details are missing" warning.
 4. Sign up with a real mobile number: the SMS arrives, you must tick the consent box, the account is created.
 5. Open two accounts on two devices, send text and a voice note, see delivery ticks. Reload: the chat history is still there (PostgreSQL works).
 6. **Restart test:** `sudo systemctl restart vartiq`; the app reconnects by itself and **nobody is logged out** (sessions are saved in the database).
@@ -608,7 +626,7 @@ Use a staff phone on mobile data, and a laptop on Wi-Fi.
 
 | Task | Command |
 | --- | --- |
-| Is it healthy? | `curl -s https://chat.example.com/api/v1/config \| head -c 100`; set an external uptime monitor on that address |
+| Is it healthy? | `curl -s https://vartiq.prayuktech.com/api/v1/config \| head -c 100`; set an external uptime monitor on that address |
 | Logs | `sudo journalctl -u vartiq -f` (and `-u coturn`, `-u nginx`) |
 | Restart | `sudo systemctl restart vartiq` (a few seconds; people reconnect and stay logged in) |
 | Update | `sudo vartiq-deploy` (rolls back by itself if the new version does not start) |
@@ -629,7 +647,7 @@ Keep in mind: a restart briefly disconnects everyone (they come back in seconds)
 
 ```bash
 sudo systemctl stop vartiq coturn            # VartiQ and calls stop; ExamSuit is untouched
-sudo mv /etc/nginx/conf.d/vartiq.conf /root/vartiq.conf.disabled
+sudo rm /etc/nginx/sites-enabled/vartiq
 sudo nginx -t && sudo systemctl reload nginx # the chat hostname no longer reaches this server's app
 ```
 
