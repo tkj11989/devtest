@@ -170,7 +170,7 @@ function privacyNotice() {
           ['Login codes (OTP)', 'A few minutes; kept only as a one-way hash'],
           ['Saved chats on your own device', 'Until you clear them or log out'],
           ['Payment confirmations', 'As long as the law requires us to keep accounting records'],
-          ['Record that you accepted the Terms and Privacy Notice (which version, when)', 'Until you delete your account; then erased with the rest of your data'],
+          ['Basic record of a deleted account: username, registration date, when it was permanently disabled, what you accepted (which version, when), any subscription and verification record. No chats, media or personal data', 'Kept after you delete your account, for as long as needed to prove consent, prevent misuse (for example someone taking over a username) and meet legal and accounting duties'],
           ['Backups', 'Erased data may remain in our backups for up to {backupDays} days, then they are overwritten'],
           ['Security and audit logs', 'For as long as needed to keep the service secure, and as the law requires'],
         ],
@@ -182,7 +182,7 @@ function privacyNotice() {
       ul: [
         'Access: see what data we hold about you and download a copy ("Download my data").',
         'Correction: change your name, "about" line and other profile details yourself at any time.',
-        'Erasure: delete your account ("Delete my account"). Your login stops working immediately and other people see "Deleted account". Within 24 hours we erase your profile, contact details, encryption keys and devices, statuses, channels, product catalogue, developer keys, settings and consent record, and the content of the messages you sent, and you leave your groups. All that remains is an empty placeholder that keeps your old username reserved, so other people\'s chats do not break and nobody can take your username over. Messages other people received remain on their own devices only as far as they already saved them.',
+        'Deleting your account: choose "Delete my account". Your account is permanently disabled and your login stops working immediately. Within 24 hours we erase your chats and messages you sent (including voice notes), photos and other media, and your personal data: profile, mobile number, email, encryption keys and devices, statuses, channels, product catalogue, developer keys and settings. You leave your groups. We keep only a basic inactive record that the account existed (see section 6). Messages other people received remain on their own devices only as far as they already saved them. You can sign up again at any time; that creates a brand-new account with a new registration date and none of the old data.',
         'Withdraw consent: you can withdraw the optional consents (translation, identity verification) at any time. Withdrawing is as easy as giving it. If you withdraw your consent to this notice and the Terms, we can no longer provide the service: delete your account.',
         'Grievance redressal: contact our Grievance Officer (section 9). If you are not satisfied, you may complain to the Data Protection Board of India, once it is in place.',
         'Nomination: you may nominate another person to exercise these rights for you if you die or become unable to.',
@@ -286,7 +286,7 @@ function termsOfUse() {
     {
       title: '9. Suspending or ending accounts',
       p: [
-        'You may delete your account at any time in the app (Profile \u2192 Privacy and consent). Your login stops working at once and your data is erased within 24 hours. We may suspend or end an account, with or without notice, if you break these Terms or the law, if we are required to, or to protect people or the service. We will tell you why where we can.',
+        'You may delete your account at any time in the app (Profile \u2192 Privacy and consent). Your account is then permanently disabled: your login stops working at once, and your chats, media and personal data are erased within 24 hours (a basic record that the account existed is kept; see the Privacy Notice). You can sign up again as a new account. We may suspend or end an account, with or without notice, if you break these Terms or the law, if we are required to, or to protect people or the service. We will tell you why where we can.',
       ],
     },
     {

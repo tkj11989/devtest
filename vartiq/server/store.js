@@ -199,8 +199,10 @@ class Store {
   }
 
   /**
-   * Step 1 of deleting an account, effective at once: login is refused, every session, API key and webhook is
-   * revoked, and other people see "Deleted account". The data itself is erased by `eraseAccount` within 24 hours.
+   * Step 1 of deleting an account, effective at once: the account is marked permanently disabled, login is refused, every
+   * session, API key and webhook is revoked, and other people see "Deleted account". The mobile number and email are
+   * released straight away so the person can register again (a brand-new account). The chats, media and personal data
+   * are erased by `eraseAccount` within 24 hours.
    */
   requestAccountDeletion(username, { delayMs = 0 } = {}) {
     const u = this.data.users[username];
@@ -208,6 +210,10 @@ class Store {
     if (u.deletion) return u.deletion;
     const now = Date.now();
     u.deletion = { requestedAt: now, eraseAt: now + delayMs };
+    u.status = 'permanently_disabled';
+    delete u.phone;
+    delete u.email;
+    this._contactIdx = null;
     for (const [token, name] of this.sessions) if (name === username) this.sessions.delete(token);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
     for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
@@ -227,10 +233,11 @@ class Store {
   }
 
   /**
-   * Step 2: erase everything about an account. The profile, contact details, keys, sessions, statuses, channels,
-   * products, developer access, settings and consent record are removed; the content of the person's messages is
-   * erased; they leave their groups. All that stays is an empty placeholder named "Deleted account" that keeps the
-   * old username reserved (so other people's chats stay intact and nobody can take the username over).
+   * Step 2: erase the chats, media and personal data of a disabled account. The profile, contact details, keys, sessions,
+   * statuses (and their photos), channels, products (and their pictures), developer access and settings are removed; the
+   * content of the person's messages (text and voice notes) is erased; they leave their groups. What stays is a basic
+   * record marked permanently disabled: username (so other people's chats stay intact and nobody can take it over),
+   * registration date, when it was disabled, the record of what they accepted, and any subscription record.
    */
   eraseAccount(username) {
     const u = this.data.users[username];
@@ -297,7 +304,20 @@ class Store {
     }
     for (const [id, meta] of Object.entries(this.data.media)) if (meta.publicBy === username) this.deleteMedia(id);
 
-    this.data.users[username] = { username, displayName: 'Deleted account', about: '', lastSeen: null, deletedAt: now };
+    // What stays is a basic record that the account existed, marked permanently disabled: no chats, media or personal data.
+    this.data.users[username] = {
+      username,
+      displayName: 'Deleted account',
+      about: '',
+      lastSeen: null,
+      createdAt: u.createdAt,
+      status: 'permanently_disabled',
+      disabledAt: u.deletion?.requestedAt || now,
+      deletedAt: now,
+      ...(u.consent ? { consent: u.consent } : {}),
+      ...(u.subscription ? { subscription: u.subscription } : {}),
+      ...(u.verifiedAt ? { verifiedAt: u.verifiedAt } : {}),
+    };
     this._contactIdx = null;
     this._save();
   }
@@ -444,6 +464,8 @@ class Store {
       plan: u.subscription?.plan || null,
       business: u.business ? u.business.category : null,
       suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason, by: u.suspended.by } : null,
+      status: u.status || (u.suspended ? 'suspended' : 'active'),
+      disabledAt: u.disabledAt || u.deletion?.requestedAt || null,
       deleted: u.deletedAt || null,
       deletion: u.deletion ? { requestedAt: u.deletion.requestedAt, eraseAt: u.deletion.eraseAt } : null,
       consent: u.consent ? { version: u.consent.version, at: u.consent.at, optional: Object.fromEntries(Object.entries(u.consent.optional || {}).map(([k, v]) => [k, v.granted])) } : null,

@@ -637,13 +637,14 @@
       title: 'Delete your account?',
       text: [
         'If you continue:',
-        '\u2022 You are logged out and can no longer log in, straight away.',
-        '\u2022 Your profile, the messages you sent, statuses, channels, keys and all other data about you are permanently erased within 24 hours.',
-        '\u2022 This cannot be undone.',
+        '\u2022 Your account is permanently disabled. You are logged out and can never log in to it again, starting now.',
+        '\u2022 Your chats and messages you sent, photos, voice notes and personal data are erased within 24 hours.',
+        '\u2022 A basic record that the account existed (username, registration date, what you agreed to) is kept.',
+        '\u2022 You can sign up again any time as a new account.',
         '',
-        'Download your data first if you want a copy (Profile \u2192 Privacy and consent).',
+        'This cannot be undone. Download your data first if you want a copy (Profile \u2192 Privacy and consent).',
       ].join('\n'),
-      fields: [{ name: 'understand', type: 'checkbox', label: 'I understand that my account and all my data will be permanently deleted, and that this cannot be undone.' }],
+      fields: [{ name: 'understand', type: 'checkbox', label: 'I understand that my account will be permanently disabled and my chats, media and personal data deleted, and that this cannot be undone.' }],
       submit: 'Continue',
       onSubmit: async (v) => {
         if (!v.understand) throw new Error('Tick the box to continue');
@@ -661,8 +662,8 @@
     if (!result) return;
     storage.del('chat.token');
     await dialog({
-      title: 'Your account is closed',
-      text: `You are logged out and can no longer log in. All your data will be erased within 24 hours (by ${new Date(result.dataErasedBy).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} at the latest).`,
+      title: 'Your account is permanently disabled',
+      text: `You are logged out and can no longer log in to it. Your chats, media and personal data will be erased within 24 hours (by ${new Date(result.dataErasedBy).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} at the latest). You can sign up again at any time as a new account.`,
       fields: [],
       submit: 'OK',
       onSubmit: async () => {},

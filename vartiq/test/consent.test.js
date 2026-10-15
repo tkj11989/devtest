@@ -202,7 +202,7 @@ const deleteWith = async (api, codeFor, token, phone, extra = {}) => {
   return api('DELETE', '/me', { token, body: { ...proof, confirmed: true, ...extra } });
 };
 
-test('deleting an account: login stops at once, the data is erased within 24 hours, then nothing is left', async (t) => {
+test('deleting an account: permanently disabled at once, chats and personal data erased within 24 hours, a basic record stays', async (t) => {
   const { api, client, signup, store, codeFor, app } = await setup(t);
   const a = (await signup('Asha Rao', '+919811100041')).body;
   const b = (await signup('Bilal Khan', '+919811100042')).body;
@@ -238,10 +238,10 @@ test('deleting an account: login stops at once, the data is erased within 24 hou
   assert.deepStrictEqual((await peerDeleted).username, ua);
   await disconnected;
 
-  // Immediately: no login, no session, nothing of them is shown, nobody can write to them, the number is held.
+  // Immediately: permanently disabled. No login, no session, nothing of them is shown, nobody can write to them.
   assert.strictEqual((await api('GET', '/me', { token: a.token })).status, 401);
-  assert.strictEqual((await api('POST', '/auth/otp', { body: { purpose: 'login', phone: '+919811100041' } })).body.error.code, 'account_deletion_pending');
-  assert.strictEqual((await api('POST', '/auth/otp', { body: { purpose: 'register', phone: '+919811100041' } })).body.error.code, 'phone_taken');
+  assert.strictEqual(store.data.users[ua].status, 'permanently_disabled');
+  assert.strictEqual((await api('POST', '/auth/otp', { body: { purpose: 'login', phone: '+919811100041' } })).body.error.code, 'not_registered', 'the number no longer belongs to that account');
   assert.throws(() => store.createSession(ua), /being deleted/);
   assert.deepStrictEqual([store.publicUser(ua).displayName, store.publicUser(ua).about, store.publicUser(ua).deleted], ['Deleted account', '', true]);
   assert.deepStrictEqual(store.searchUsers('asha', ub), []);
@@ -249,16 +249,25 @@ test('deleting an account: login stops at once, the data is erased within 24 hou
   assert.throws(() => store.getOrCreateDirect(ub, ua), /not found/i);
   assert.strictEqual(Object.values(store.data.apiKeys).length, 0, 'keys revoked at once');
   assert.strictEqual(app.service.eraseDueAccounts().length, 0, 'not erased before its time');
-  assert.ok(store.data.users[ua].phone, 'the data itself is still there until the erase step');
+  assert.strictEqual(store.data.users[ua].phone, undefined, 'the number is released at once');
+  assert.strictEqual(store.data.users[ua].displayName, 'Asha Rao', 'the rest of the personal data is erased by the next step');
+
+  // Registering again is allowed straight away: a brand-new account with a new registration date.
+  const again = await signup('Asha Again', '+919811100041');
+  assert.strictEqual(again.status, 201, again.text);
+  assert.notStrictEqual(again.body.user.username, ua);
+  assert.ok(store.data.users[again.body.user.username].createdAt >= t0 && store.data.users[again.body.user.username].createdAt > store.data.users[ua].createdAt);
+  assert.strictEqual((await api('GET', '/me/export', { token: again.body.token })).body.chats.length, 0, 'none of the old chats');
+
   const waiting = store.stats().users;
-  assert.deepStrictEqual([waiting.deleting, waiting.deletionOverdue, waiting.total], [1, 0, 2]);
+  assert.deepStrictEqual([waiting.deleting, waiting.deletionOverdue, waiting.total], [1, 0, 3]);
 
   // The erase step (the server runs it by itself within the deadline).
   store.data.users[ua].deletion.eraseAt = Date.now() - 1;
   assert.deepStrictEqual(app.service.eraseDueAccounts(), [ua]);
   const tomb = store.data.users[ua];
-  assert.deepStrictEqual(Object.keys(tomb).sort(), ['about', 'deletedAt', 'displayName', 'lastSeen', 'username'], 'only an empty placeholder is left: no phone, email, consent record, settings...');
-  assert.strictEqual(store.findByPhone('+919811100041'), null);
+  assert.deepStrictEqual(Object.keys(tomb).sort(), ['about', 'consent', 'createdAt', 'deletedAt', 'disabledAt', 'displayName', 'lastSeen', 'status', 'username'], 'a basic record: no phone, email, name, settings, keys, chats or media');
+  assert.deepStrictEqual([tomb.status, tomb.displayName, tomb.consent.accepted], ['permanently_disabled', 'Deleted account', ['terms']], 'the record of consent is kept');
   assert.strictEqual(store.findByEmail('asha@example.com'), null);
   const left = store.getMessages(dm.id, ub);
   assert.deepStrictEqual(left.map((m) => [m.deleted === true, m.text]), [[true, ''], [false, 'a reply from bilal']]);
@@ -267,11 +276,6 @@ test('deleting an account: login stops at once, the data is erased within 24 hou
   assert.deepStrictEqual([store.data.channels[channel.id], Object.values(store.data.statuses).length, Object.values(store.data.apiKeys).length], [undefined, 0, 0]);
   assert.strictEqual(store.stats().users.deleting, 0);
 
-  // The number can be used again, for a brand-new account.
-  const again = await signup('Asha Again', '+919811100041');
-  assert.strictEqual(again.status, 201);
-  assert.notStrictEqual(again.body.user.username, ua);
-  assert.strictEqual((await api('GET', '/me/export', { token: again.body.token })).body.chats.length, 0);
 });
 
 test('the server erases a closed account by itself, within the deadline', async (t) => {
