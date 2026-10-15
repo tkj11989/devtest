@@ -115,7 +115,7 @@ Use a short TTL (300) until everything works. Check from your own computer: `dig
 
 Without Cloudflare, nothing sits in front of the server, so these protections matter more:
 - nginx rate limits (Phase 6) and the app's own limits are the first line of defence against abuse. A large flood attack would take the whole server, ExamSuit included, so decide early whether to add Cloudflare (free plan) for `vartiq.prayuktech.com` later: the app needs no change, only DNS, the real-IP snippet in 6.4, and `TRUST_PROXY=1` stays.
-- The admin dashboard is limited to your office IPs in nginx (6.2), so it is not open to the internet.
+- The admin dashboard is not published on the internet at all: nginx answers 404 for `/admin`, and you reach it through an SSH tunnel (6.2). No fixed IP address is needed.
 - Hostinger's own network-level DDoS filtering applies to the server anyway; ask them what it covers.
 
 ---
@@ -407,14 +407,9 @@ server {
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
-    # Admin dashboard and its API: only from your office/home addresses (replace the examples)
-    location /admin {
-        allow 203.0.113.10;       # example: your office IP
-        allow 198.51.100.20;      # example: your home IP
-        deny all;
-        proxy_pass http://127.0.0.1:3100;
-        include /etc/nginx/snippets/vartiq-proxy.conf;
-    }
+    # Admin dashboard and its API: NOT reachable from the internet at all.
+    # You open it through an SSH tunnel (see "Opening the admin dashboard" below).
+    location /admin { return 404; }
 
     location /api/v1/auth/ {
         limit_req zone=vq_auth burst=30 nodelay;
@@ -442,6 +437,14 @@ proxy_read_timeout 3600s;                            # long-lived WebSocket conn
 proxy_send_timeout 3600s;
 proxy_buffering off;
 ```
+
+**Opening the admin dashboard (no fixed IP needed).** On your own computer run:
+
+```bash
+ssh -N -L 3100:127.0.0.1:3100 YOUR-USER@SERVER-IP
+```
+
+Leave it running and open `http://localhost:3100/admin` in your browser. The connection is encrypted by SSH, works from any network, and nobody else can even see the sign-in page. Use SSH keys (not passwords) for this, and keep `PasswordAuthentication no` in `sshd_config` once your key works. (If you prefer a plain URL, the alternative is nginx basic auth in front of `/admin`: `sudo apt-get install -y apache2-utils`, `sudo htpasswd -c /etc/nginx/vartiq.htpasswd YOURNAME`, then in the `location /admin` block use `auth_basic "VartiQ admin"; auth_basic_user_file /etc/nginx/vartiq.htpasswd;` plus the same `proxy_pass` lines as `location /`. It works from anywhere but the sign-in page is then visible to the internet behind a password, which is weaker than the tunnel.)
 
 ### 6.3 Test, then load. Never restart.
 
@@ -649,7 +652,7 @@ Use a staff phone on mobile data, and a laptop on Wi-Fi.
 
 1. `https://vartiq.prayuktech.com` loads with a valid lock icon; `http://` redirects to `https://`.
 2. `https://vartiq.prayuktech.com/legal/privacy` and `/legal/terms` show **your company details, no `[square brackets]`**.
-3. `https://vartiq.prayuktech.com/admin` is blocked for the public (your office IPs only, in nginx) and works for you. Sign in; the Overview shows no "Legal details are missing" warning.
+3. `https://vartiq.prayuktech.com/admin` returns 404 from the internet, and `http://localhost:3100/admin` works for you through the tunnel. Sign in; the Overview shows no "Legal details are missing" warning.
 4. Sign up with a real mobile number: the SMS arrives, you must tick the consent box, the account is created.
 5. Open two accounts on two devices, send text and a voice note, see delivery ticks. Reload: the chat history is still there (PostgreSQL works).
 6. **Restart test:** `sudo systemctl restart vartiq`; the app reconnects by itself and **nobody is logged out** (sessions are saved in the database).
