@@ -1599,7 +1599,7 @@ class Store {
       if (this.hasBlocked(from, peer)) {
         throw new Error(`Unblock ${this.publicUser(peer)?.displayName || peer} to send a message`);
       }
-      // Like WhatsApp: the sender isn't told; the message just never gets delivered.
+      // The sender isn't told; the message just never gets delivered.
       if (this.hasBlocked(peer, from)) hiddenFor = [peer];
     }
 

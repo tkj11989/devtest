@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-clone",
+  "name": "chatapp",
   "version": "1.0.0",
-  "description": "A WhatsApp-like real-time chat application (Node.js, Express, Socket.IO)",
+  "description": "A real-time chat application (Node.js, Express, Socket.IO)",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",

@@ -1,6 +1,6 @@
-# ChatApp — a WhatsApp-like messenger
+# ChatApp — a real-time messenger
 
-A real-time chat application inspired by WhatsApp, built with **Node.js**, **Express** and **Socket.IO**, with a dependency-free vanilla JS frontend.
+A real-time chat application built with **Node.js**, **Express** and **Socket.IO**, with a dependency-free vanilla JS frontend.
 
 ## Features
 
@@ -43,7 +43,7 @@ All colours are CSS variables at the top of `public/styles.css`; text and backgr
 ## Getting started
 
 ```bash
-cd whatsapp-clone
+cd chatapp
 npm install
 npm start          # http://localhost:3000  (set PORT to change)
 ```
@@ -487,7 +487,7 @@ npm test           # unit + realtime integration tests
 ## Project structure
 
 ```
-whatsapp-clone/
+chatapp/
 ├── server/
 │   ├── index.js     # Express app and Socket.IO wiring
 │   ├── service.js   # Every user action, shared by Socket.IO and the REST API
@@ -507,7 +507,7 @@ whatsapp-clone/
 ├── public/
 │   ├── icons/       # Message status icons
 │   ├── index.html   # UI markup
-│   ├── styles.css   # WhatsApp-style theme (light/dark)
+│   ├── styles.css   # PrayukTech theme (light/dark)
 │   ├── app.js       # Client logic
 │   ├── call.js      # WebRTC call controller and call screen
 │   ├── e2ee.js      # End-to-end encryption (Web Crypto; also used by the tests)
