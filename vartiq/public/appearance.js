@@ -54,32 +54,6 @@
     link.setAttribute('href', `data:image/svg+xml,${encodeURIComponent(svg)}`);
   }
 
-  // ---------- the logo keeps its own colours; only its background follows the theme ----------
-
-  const OCEAN_LOGO_BG = '#E7F0FD';
-  const logoBgOf = (id) => catalogue?.themes.find((t) => t.id === id)?.logoBg || read()?.logoBg || OCEAN_LOGO_BG;
-
-  /** Browser tab icon for the Classic icon: the logo on the theme's logo background. */
-  let tabRun = 0;
-  async function paintTab(bgColour) {
-    const run = ++tabRun;
-    const link = document.querySelector('link[rel="icon"]');
-    if (!link || prefs.appIcon !== 'classic') return;
-    try {
-      const m = new Image();
-      m.src = '/brand/vartiq-mark.png';
-      await m.decode();
-      const c = document.createElement('canvas');
-      c.width = c.height = 64;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = bgColour;
-      ctx.fillRect(0, 0, 64, 64);
-      const w = 58; const h = (m.naturalHeight / m.naturalWidth) * w;
-      ctx.drawImage(m, 3, (64 - h) / 2, w, h);
-      if (run === tabRun) { link.setAttribute('type', 'image/png'); link.setAttribute('href', c.toDataURL('image/png')); }
-    } catch { /* keep the file icon */ }
-  }
-
   function apply(next, { save = true } = {}) {
     prefs = { ...DEFAULTS, ...next };
     if (prefs.mode === 'auto') root.removeAttribute('data-mode');
@@ -92,13 +66,10 @@
     for (const [name, value] of Object.entries(tokens || {})) root.style.setProperty(name, value);
 
     paintIcon(tokens);
-    const logoBg = logoBgOf(prefs.theme);
-    root.style.setProperty('--logo-bg', logoBg);
-    paintTab(logoBg);
 
     if (save && catalogue) {
       const t = catalogue.themes.find((x) => x.id === prefs.theme);
-      write({ prefs, theme: prefs.theme, tokens: t?.tokens || null, logoBg: t?.logoBg || OCEAN_LOGO_BG });
+      write({ prefs, theme: prefs.theme, tokens: t?.tokens || null });
     }
   }
 
@@ -109,9 +80,6 @@
     prefs = { ...DEFAULTS, ...cached.prefs };
     apply(prefs, { save: false });
   }
-
-  // Get the catalogue now so even the sign-in screen shows the saved theme and its matching logo.
-  document.addEventListener('DOMContentLoaded', () => { window.Appearance.load().catch(() => {}); });
 
   window.Appearance = {
     DEFAULTS,
