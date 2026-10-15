@@ -514,7 +514,7 @@ max-port=50499
 total-quota=300          # simultaneous relayed calls
 user-quota=6             # per person
 max-bps=250000           # about 2 Mbit/s for each relayed stream
-bps-capacity=12500000    # about 100 Mbit/s for the whole relay; lower it if your plan's network is slower
+bps-capacity=37500000    # about 300 Mbit/s for the whole relay (your port is 1 Gbit/s; the rest stays for ExamSuit and the web app)
 
 # never relay into private or internal networks (stops people using your TURN server to reach internal services)
 no-multicast-peers
@@ -558,7 +558,17 @@ sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/coturn.sh && sudo /etc/letse
 
 Add to `/etc/turnserver.conf`: `tls-listening-port=5349`, `cert=/etc/coturn/certs/fullchain.pem`, `pkey=/etc/coturn/certs/privkey.pem`, `no-tlsv1`, `no-tlsv1_1`; then `sudo systemctl restart coturn`. In `/etc/vartiq/vartiq.env` extend `TURN_URLS` with `,turns:turn.prayuktech.com:5349?transport=tcp` and restart VartiQ. (Certbot's renewal timer already exists on this server; it will renew this certificate too and run the hook. Restarting coturn only drops calls that were using the relay at that moment, about every 60 days.)
 
-**Bandwidth reality check:** one relayed 720p video call is about 3 Mbit/s in total. 100 such calls is about 300 Mbit/s. Ask Hostinger what network speed and monthly transfer your plan includes and keep `total-quota` below what it can carry. Most calls connect directly and never touch the relay.
+**Bandwidth (your plan: 1 Gbit/s port, 16 TB per month).** A relayed call passes through the server both ways, so only the *outgoing* half is counted below (if Hostinger counts incoming traffic too, halve the numbers).
+
+| Call type | Outgoing traffic of the relay | Per 100 minutes |
+| --- | --- | --- |
+| Voice (1:1) | about 0.1 Mbit/s | about 75 MB |
+| Video 720p (1:1) | about 4 to 5 Mbit/s | about 3.5 GB |
+
+- **Capacity at one moment:** the 300 Mbit/s cap in the config allows roughly 60 relayed 1:1 video calls or several thousand relayed voice calls at the same time. More calls than that get worse quality instead of slowing ExamSuit. The 1 Gbit/s port is never the limit; the monthly allowance is.
+- **Monthly allowance:** 16 TB is about 49 Mbit/s of traffic around the clock. Most calls connect directly and never touch the relay (often 70 to 80 percent). As an example, 2,000 people making 10 minutes of calls a day, a quarter of them relayed and 30 percent of those video, is about 60 GB a day, or 1.8 TB a month, about 11 percent of the allowance. The worst case, if every call were relayed video, would use the whole 16 TB at about 7,000 hours of calls a month.
+- **Watch it:** `sudo apt-get install -y vnstat` then `vnstat -m` shows the month so far. Set a reminder at 10 TB. If you approach it, lower `max-bps` (for example to `125000`, about 1 Mbit/s a stream) before anything else.
+- Web, chat, voice notes and photos are small by comparison (about a few GB a month per 10,000 active people), so they do not change this picture.
 
 ---
 
