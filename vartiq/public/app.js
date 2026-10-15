@@ -490,6 +490,12 @@
   async function logout() {
     if (state.token) fetch('/api/v1/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${state.token}` } }).catch(() => {});
     storage.del('chat.token');
+    cacheTimers.forEach(clearTimeout);
+    cacheTimers.clear();
+    purged.clear();
+    moreEarlier.clear();
+    state.cache?.clear(); // the saved chats stay on this device only while you are logged in
+    state.cache = null;
     state.calls?.dispose();
     statusUpdates.reset();
     channelsUI.reset();
@@ -627,6 +633,7 @@
         state.myBusiness = business || null;
         setLockSettings(lockSettings);
         state.me = me;
+        state.cache ||= window.ChatCache.create(me.username);
         window.Appearance.load().then(() => window.Appearance.apply(appearance)).catch(() => {});
         // This device's encryption key (made once, kept in the browser) must be ready before any message is read.
         if (!state.e2ee) state.e2ee = window.E2EE.createClient({ emit, username: me.username, deviceName: deviceName() });
@@ -902,6 +909,78 @@
 
   // ---------- chat view ----------
 
+
+  // ---------- chats saved on this device ----------
+
+  const cacheEnabled = () => storage.get('chat.cache') !== 'off';
+  /** Chats that are locked, hidden or set to disappear are never saved on the device. */
+  const cacheable = (conv) => !!(state.cache?.available && cacheEnabled() && conv && !conv.locked && !conv.hidden && !conv.disappearAfter);
+  const purged = new Set();
+  const purgeOnce = (convId) => {
+    if (!state.cache || purged.has(convId)) return;
+    purged.add(convId);
+    state.cache.purge(convId);
+  };
+  const cacheTimers = new Map();
+  /** Save the open chat's messages shortly after they change. */
+  function scheduleCacheSave(convId) {
+    if (!state.cache) return;
+    clearTimeout(cacheTimers.get(convId));
+    cacheTimers.set(convId, setTimeout(() => {
+      cacheTimers.delete(convId);
+      const conv = state.conversations.get(convId);
+      if (!conv) return;
+      if (!cacheable(conv)) { if (conv.locked || conv.hidden || conv.disappearAfter) purgeOnce(convId); return; }
+      purged.delete(convId);
+      state.cache.save(convId, state.messages.get(convId) || []);
+    }, 800));
+  }
+
+  /**
+   * What to show for a chat opened with a saved copy: the saved messages older than the newest page from the server,
+   * plus that page (which also corrects delivery ticks and removes messages deleted or expired since).
+   * If more messages arrived than fit in one page, older pages are fetched until they meet the saved copy.
+   */
+  async function mergeWithSaved(convId, saved, page) {
+    let fetched = page.messages.slice();
+    if (!fetched.length) return [];
+    const newestSaved = saved[saved.length - 1].ts;
+    let more = page.hasMore;
+    let before = page.nextBefore;
+    for (let n = 0; more && fetched[0].ts > newestSaved && n < 10; n++) {
+      const older = await emit('messages:get', { convId, before, limit: 100 });
+      fetched = older.messages.concat(fetched);
+      more = older.hasMore;
+      before = older.nextBefore;
+    }
+    const met = !more || fetched[0].ts <= newestSaved; // a gap we could not fill means the old copy cannot be trusted
+    return (met ? saved.filter((m) => m.ts < fetched[0].ts) : []).concat(fetched);
+  }
+
+  const moreEarlier = new Map(); // convId -> whether older messages may exist
+  async function loadEarlier() {
+    const convId = state.activeId;
+    const conv = state.conversations.get(convId);
+    const list = state.messages.get(convId) || [];
+    const oldest = list.find((m) => !m.localStatus);
+    if (!conv || !oldest) return;
+    let older = cacheable(conv) ? await state.cache.load(convId, 100, oldest.ts) : [];
+    if (older.length) {
+      await Promise.all(older.map(readMessage));
+    } else {
+      const res = await emit('messages:get', { convId, before: oldest.ts, limit: 100 });
+      older = res.messages;
+      moreEarlier.set(convId, res.hasMore);
+    }
+    if (!older.length) moreEarlier.set(convId, false);
+    if (state.activeId !== convId) return;
+    const box = $('#messages');
+    const height = box.scrollHeight;
+    state.messages.set(convId, older.concat(list));
+    renderMessages(false);
+    box.scrollTop = box.scrollHeight - height;
+  }
+
   async function openChat(id, { highlight } = {}) {
     const conv = state.conversations.get(id);
     if (!conv) return;
@@ -922,14 +1001,37 @@
       return;
     }
     try {
-      const { messages } = await emit('messages:get', { convId: id });
-      if (state.activeId !== id) return;
-      // Keep my unconfirmed / failed messages visible across reloads of the chat.
-      for (const m of state.outbox.values()) {
-        if (m.convId !== id) continue;
-        if (messages.some((x) => x.clientId === m.id)) state.outbox.delete(m.id);
-        else messages.push(m);
+      const withOutbox = (list) => {
+        // Keep my unconfirmed / failed messages visible across reloads of the chat.
+        for (const m of state.outbox.values()) {
+          if (m.convId !== id) continue;
+          if (list.some((x) => x.clientId === m.id)) state.outbox.delete(m.id);
+          else list.push(m);
+        }
+        return list;
+      };
+      // Show the copy saved on this device straight away, then bring it up to date.
+      let saved = [];
+      if (cacheable(conv)) {
+        saved = await state.cache.load(id);
+        if (saved.length) {
+          await Promise.all(saved.map(readMessage));
+          if (state.activeId !== id) return;
+          state.messages.set(id, saved.slice());
+          renderMessages(true);
+        }
+      } else {
+        purgeOnce(id);
       }
+      const page = await emit('messages:get', { convId: id });
+      if (state.activeId !== id) return;
+      let messages = page.messages;
+      if (saved.length) {
+        messages = await mergeWithSaved(id, saved, page);
+        if (state.activeId !== id) return;
+      }
+      moreEarlier.set(id, page.hasMore);
+      messages = withOutbox(messages);
       state.messages.set(id, messages);
       renderMessages(true);
       maybeTranslate(conv);
@@ -1105,6 +1207,12 @@
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     box.textContent = '';
     const msgs = state.messages.get(conv.id) || [];
+    if (moreEarlier.get(conv.id) && msgs.length) {
+      const earlier = el('button', 'link load-earlier', 'Load earlier messages');
+      earlier.type = 'button';
+      earlier.addEventListener('click', () => loadEarlier().catch((err) => toast(err.message)));
+      box.appendChild(earlier);
+    }
     const chatEncrypted = msgs.some((x) => x.encrypted);
     let prev = null;
     for (const m of msgs) {
@@ -1207,6 +1315,7 @@
       prev = m;
     }
     if (scrollToEnd || nearBottom) box.scrollTop = box.scrollHeight;
+    scheduleCacheSave(conv.id);
   }
 
   /** The status update a message replies to, shown above the reply. */
@@ -3319,6 +3428,35 @@
       toast(err.message);
     }
   }
+
+  // ---------- settings: chats on this device ----------
+
+  async function renderCacheRow() {
+    const on = cacheEnabled() && !!state.cache?.available;
+    $('#cache-toggle').checked = on;
+    $('#cache-toggle').disabled = !state.cache?.available;
+    $('#btn-cache-clear').disabled = !on;
+    const n = state.cache ? await state.cache.count() : 0;
+    $('#cache-summary').textContent = !state.cache?.available
+      ? 'Not available in this browser'
+      : on
+        ? `Chats open faster; only new messages are fetched${n ? ` · ${n} saved` : ''}`
+        : 'Off · every chat is fetched from the server each time';
+  }
+  $('#cache-toggle').addEventListener('change', async (e) => {
+    storage.set('chat.cache', e.target.checked ? 'on' : 'off');
+    if (!e.target.checked) await state.cache?.clear();
+    purged.clear();
+    renderCacheRow();
+  });
+  $('#btn-cache-clear').addEventListener('click', async () => {
+    if (!confirm('Remove the chats saved on this device? They stay on the server and are fetched again when you open them.')) return;
+    await state.cache?.clear();
+    purged.clear();
+    toast('Saved chats removed from this device');
+    renderCacheRow();
+  });
+  $('#btn-profile').addEventListener('click', () => { renderCacheRow(); });
 
   // ---------- appearance ----------
 

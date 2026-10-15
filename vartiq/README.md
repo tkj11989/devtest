@@ -337,6 +337,17 @@ Fingerprint / face uses WebAuthn platform authenticators (Touch ID, Face ID, Win
 
 REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
 
+## Chats saved on the device
+
+The web app keeps a copy of each chat in the browser (IndexedDB, one database per account) so a chat opens instantly and only the newest messages are fetched again:
+
+- Opening a chat shows the saved messages first, then asks the server for the latest page (50 messages). That page refreshes delivery ticks and removes anything deleted or expired since. If more than a page of new messages arrived, older pages are fetched until they meet the saved copy.
+- **Load earlier messages** at the top of a chat shows older saved messages, then older ones from the server. Up to 1,000 messages per chat are kept.
+- End-to-end encrypted messages are saved as the encrypted envelope only; the readable text is not stored and is decrypted again with this device's key.
+- Never saved: chats that are locked, hidden or have disappearing messages (their saved copy is deleted when the setting is turned on), voice-note audio, and messages not yet sent.
+- Profile → **Chats on this device** switches saving off or clears it. Logging out deletes it.
+- The server stays the master copy, so a new device or browser still shows the full history after login. This is a cache, not a backup, and it does not make the app work offline.
+
 ## PostgreSQL storage (for production)
 
 By default VartiQ keeps its data in `data/db.json`. For real use set `DATABASE_URL` and the data lives in PostgreSQL instead:
