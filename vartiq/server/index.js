@@ -9,6 +9,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 const { Store } = require('./store');
 const { createCallManager } = require('./calls');
+const { createPush } = require('./push');
 const { createService } = require('./service');
 const { createWebhookDispatcher } = require('./webhooks');
 const { createApiRouter } = require('./api');
@@ -62,6 +63,14 @@ const SOCKET_ACTIONS = {
   'messages:get': 'messages',
   'message:send': 'sendText',
   'voice:send': 'sendVoice',
+  'location:send': 'sendLocation',
+  'location:update': 'updateLocation',
+  'location:stop': 'stopLocation',
+  'push:config': 'pushConfig',
+  'push:subscribe': 'pushSubscribe',
+  'push:unsubscribe': 'pushUnsubscribe',
+  'push:settings': 'pushSettings',
+  'push:test': 'pushTest',
   'message:star': 'star',
   'messages:starred': 'starred',
   'messages:read': 'markRead',
@@ -152,6 +161,7 @@ const SOCKET_ACTIONS = {
  *   rateLimit        { windowMs, max, authMax } for the REST API
  *   corsOrigins      allowed origins for the REST API ('*' or a list)
  *   trustProxy       Express `trust proxy` setting (env TRUST_PROXY) so the real client address is used behind nginx/Cloudflare
+ *   push             { vapid, sender, extraHosts } for push notifications (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY, PUSH_SUBJECT; see push.js)
  *   messageSweepMs   how often expired disappearing messages are removed
  *   accountEraseDelayMs  how long after a deletion request the account's data is erased (default 1 hour; never more than 24 hours)
  *   kyc              { gateway, sandbox } for identity verification (see kyc.js; KYC_WEBHOOK_URL, KYC_SANDBOX=1)
@@ -176,12 +186,19 @@ function createApp({
   payments: paymentOptions = {},
   admin: adminOptions = {},
   translate: translateOptions = {},
+  push: pushOptions = {},
   trustProxy = process.env.TRUST_PROXY,
 } = {}) {
   const app = express();
   // Behind nginx or Cloudflare every request comes from the proxy: trust its forwarded address, or the sign-in rate limits
   // would treat all visitors as one person. TRUST_PROXY: `loopback` (one proxy on this machine), a number of proxies, or a list of addresses.
   if (trustProxy !== undefined && trustProxy !== '') app.set('trust proxy', /^\d+$/.test(String(trustProxy)) ? Number(trustProxy) : trustProxy);
+  // Browser features this app uses: location (sharing), microphone and camera (voice notes and calls). Nothing embedded in a page
+  // may use them, and the features it never uses are switched off.
+  app.use((req, res, next) => {
+    res.set('Permissions-Policy', 'geolocation=(self), microphone=(self), camera=(self), payment=(), usb=(), serial=(), hid=(), bluetooth=(), display-capture=()');
+    next();
+  });
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
   // Voice messages and status photos are uploaded over the socket.
   const io = new Server(server, { maxHttpBufferSize: 4 * 1024 * 1024 });
@@ -204,7 +221,17 @@ function createApp({
     ...paymentOptions,
   });
   const translator = createTranslator({ gateway: createTranslateGateway(), sandbox: process.env.TRANSLATE_SANDBOX === '1', ...translateOptions });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, accountEraseDelayMs });
+  // Push notifications: the key pair that identifies this server to the browsers' push services is kept next to the data.
+  const dataDir = store.file ? path.dirname(store.file) : store.mediaDir ? path.dirname(store.mediaDir) : null;
+  const push = createPush({
+    store,
+    isOnline,
+    featureOn: () => store.featureOn('push'),
+    subject: () => { const e = store.getSettings().legal?.contactEmail; return e ? `mailto:${e}` : undefined; },
+    vapid: { file: dataDir ? path.join(dataDir, 'vapid.json') : undefined },
+    ...pushOptions,
+  });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, accountEraseDelayMs });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -217,7 +244,7 @@ function createApp({
     }
   };
 
-  const calls = createCallManager({ io, store, isOnline, notify: service.notify, postMessage: service.postMessage, handle, ringTimeoutMs, recordConsentMs, assertCallsOn: () => service.assertFeature('calls'), assertRecordingOn: () => service.assertFeature('callRecording') });
+  const calls = createCallManager({ io, store, isOnline, reachable: (u) => isOnline(u) || push.canWake(u), pushCall: push.call, notify: service.notify, postMessage: service.postMessage, handle, ringTimeoutMs, recordConsentMs, assertCallsOn: () => service.assertFeature('calls'), assertRecordingOn: () => service.assertFeature('callRecording') });
   service.setCalls(calls);
 
   // Public REST API for other platforms (see /api/docs). It parses its own bodies.
@@ -260,6 +287,11 @@ function createApp({
 
   // Icons rarely change; let browsers keep them so they still render while offline.
   app.use('/icons', express.static(path.join(__dirname, '..', 'public', 'icons'), { maxAge: '7d' }));
+  // The service worker (notifications) must always be fetched fresh, or a fix could take days to reach people.
+  app.get('/sw.js', (req, res) => {
+    res.set({ 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/', 'Content-Type': 'text/javascript; charset=utf-8' });
+    res.sendFile(path.join(__dirname, '..', 'public', 'sw.js'));
+  });
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   const bearer = (req) => req.get('authorization')?.replace(/^Bearer /, '');
@@ -303,6 +335,7 @@ function createApp({
     clearInterval(subscriptionTimer);
     clearInterval(deletionTimer);
     webhooks.stop();
+    push.stop();
     otp.stop();
     kyc.stop();
     payments.stop();
@@ -375,7 +408,7 @@ function createApp({
     });
   });
 
-  return { app, server, io, store, calls, service, webhooks, otp };
+  return { app, server, io, store, calls, service, webhooks, otp, push };
 }
 
 if (require.main === module) {

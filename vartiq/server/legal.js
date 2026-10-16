@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-15';
+const VERSION = '2026-10-16';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -110,6 +110,8 @@ function privacyNotice() {
           ['Call history: who, when, call type, how long; whether a call was recorded', 'To show your call history. The call itself is not stored by us', 'During and after a call'],
           ['Device information: a name for each device, and the public encryption key of each device', 'To encrypt your messages for your devices and let you manage them', 'When you first use the app on a device'],
           ['Secret code for locked or hidden chats (stored only as a one-way hash); fingerprint or face unlock credentials (public key only; your fingerprint or face never leaves your device)', 'To protect chats you choose to lock or hide', 'When you turn these on'],
+          ['Notification settings of each device you turn notifications on for: an address at your browser maker\'s push service with its keys, a short description of the browser, and what you chose to be notified about', 'To send you a notification for a new message or call when the app is closed. A notification says who and what kind ("Asha: New message", "Incoming video call"), never the message itself', 'When you turn notifications on'],
+          ['A location you choose to share: coordinates and how accurate they are. For a live location, only the latest position while you are sharing', 'To show it to the people in the chat you shared it with. We never read your location in the background or when you are not sharing', 'Only when you tap Share location'],
           ['Your settings: theme, translation languages per chat, blocked people, privacy options, language', 'To keep the app the way you set it on all your devices', 'When you change them'],
           ['Verification status (yes or no and the date)', 'To show the Verified badge. We do NOT store your ID number or any ID details (see section 4)', 'After you verify'],
           ['Premium subscription: plan, period, and a payment confirmation reference', 'To give you Premium features. Card and bank details go to the payment provider and never reach us', 'When you buy Premium'],
@@ -131,6 +133,7 @@ function privacyNotice() {
       ul: [
         'Messages sent through the {brand} developer API (for example by a bot or another platform), and automatic business replies, are stored as readable text.',
         'Public channel posts, status updates, profile and business details, group names, and the names of people in a chat are visible to our servers (and to the people allowed to see them).',
+        'Locations you share in the web app are end-to-end encrypted like messages. A location shared through the developer API is stored as readable coordinates.',
         'If you turn on message translation for a chat, your app sends the text of the messages you receive to a translation service so they can be translated (see section 4).',
         'We can see who talks to whom, when, and how often (this is "metadata"), because the service needs it to deliver messages.',
         'If you lose all your devices and the encryption keys on them, older encrypted messages may no longer be readable by you.',
@@ -146,6 +149,8 @@ function privacyNotice() {
         'Service providers (data processors) who work for us under contract: a text-message and email provider (to send login codes); a cloud hosting and network provider, including a content delivery and security provider such as Cloudflare if we use one; a database provider; a relay (TURN) provider that helps voice and video calls connect when a direct connection is not possible. Call audio and video are encrypted in transit.',
         'An identity verification provider, only if you choose to verify. Your ID number is sent to it once to confirm it, together with the one-time code. {brand} does not store your ID number or any ID details; we keep only that you are verified and when.',
         'A payment provider, only if you buy Premium. It handles your payment details; we receive a confirmation.',
+        'The push services of browser makers (Google, Mozilla, Apple, Microsoft), only if you turn notifications on. Notifications pass through the push service of your browser. It can see that a notification was sent to your device and when, but a notification carries no message text.',
+        'A map service, only if you tap "Open in map" on a location someone shared: your browser or map app opens with that position, and the map service you use can then see it. {brand} itself loads no maps.',
         'A translation provider, only if you turn translation on for a chat. The text of messages you ask to be translated is sent to it and handed back. {brand} does not store or log these texts.',
         'Authorities, when the law requires it or to protect people from harm, for example an order from a court or a government body.',
         'A buyer or successor, if our business is sold or merged. Your data would stay protected by this notice.',
@@ -166,6 +171,8 @@ function privacyNotice() {
           ['Account data (profile, settings, contact details)', 'Until you delete your account; then erased within 24 hours'],
           ['Messages and voice notes', 'Until you or the sender delete them, or the chat\'s disappearing-message timer removes them; the content of the messages you sent is erased within 24 hours of deleting your account (see section 7)'],
           ['Status updates', '24 hours'],
+          ['Notification settings of a device', 'Until you turn notifications off on that device, log out, or delete your account (and removed at once if the browser says the device is gone)'],
+          ['A shared location', 'A location you share once is a message and is kept like one. A live location keeps only the latest position (no trail), and it is erased when the time you chose is up (at most 8 hours) or when you tap Stop sharing; the chat then shows "Live location ended"'],
           ['Profile-view list', '90 days (only the last view date is kept), or until you switch the setting off'],
           ['Login codes (OTP)', 'A few minutes; kept only as a one-way hash'],
           ['Saved chats on your own device', 'Until you clear them or log out'],
@@ -208,7 +215,7 @@ function privacyNotice() {
     {
       title: '10. Cookies and storage on your device',
       p: [
-        'The {brand} web app uses your browser\'s storage only for things the app needs: to keep you logged in, to keep your device\'s encryption key, to remember settings such as your theme, and (if you leave it on) to keep a copy of your chats so they open faster. You can clear this in Profile → Chats on this device, and it is removed when you log out.',
+        'The {brand} web app uses your browser\'s storage only for things the app needs: to keep you logged in, to keep your device\'s encryption key, to remember settings such as your theme, and (if you leave it on) to keep a copy of your chats so they open faster. You can clear this in Profile → Chats on this device, and it is removed when you log out. If you turn on notifications, a small background script (a service worker) is added to your browser so notifications can be shown. Your browser asks you before the app may send notifications or read your location, and you can change both in your browser\'s site settings at any time.',
       ],
     },
     {
@@ -244,6 +251,7 @@ function termsOfUse() {
         'post or send unlawful content, including content that sexually exploits children, promotes violence or hatred, infringes someone\'s rights, or spreads malware;',
         'pretend to be another person or business, or misuse the Verified badge;',
         'record a call without the agreement of everyone on it, or use any recording unlawfully;',
+        'use location sharing to follow, track, stalk or harass anyone, or share another person\'s location without their agreement;',
         'try to break, probe, overload or get around the security of the service, or collect other people\'s data in bulk;',
         'sell or share access to your account.',
       ],

@@ -31,7 +31,7 @@ const MAX_PARTICIPANTS = 6;
  * `notify(username, event, payload)` reaches all of a user's devices (and their webhooks);
  * per-socket events (joined/left/signal/hold) go only to the sockets in the call.
  */
-function createCallManager({ io, store, isOnline, notify, postMessage, handle, assertCallsOn = () => {}, assertRecordingOn = () => {}, ringTimeoutMs = 30000, recordConsentMs = 30000, recordCooldownMs = 30000 }) {
+function createCallManager({ io, store, isOnline, reachable = isOnline, pushCall = () => {}, notify, postMessage, handle, assertCallsOn = () => {}, assertRecordingOn = () => {}, ringTimeoutMs = 30000, recordConsentMs = 30000, recordCooldownMs = 30000 }) {
   const calls = new Map(); // callId -> call
 
   // ---------- recording consent ----------
@@ -168,8 +168,26 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
     return call;
   };
 
+  /** What a ringing device is told about an incoming call. */
+  function incoming(call) {
+    const conv = store.getConversation(call.convId);
+    return {
+      callId: call.id,
+      convId: call.convId,
+      kind: call.kind,
+      group: call.group,
+      title: call.group ? conv?.name : null,
+      from: call.from,
+      user: store.publicUser(call.from),
+      participants: [call.from],
+    };
+  }
+
   function attach(socket) {
     const me = socket.data.username;
+
+    // The app was opened (for example from a notification) while a call is still ringing for this person: ring now.
+    for (const call of calls.values()) if (call.ringing.has(me)) socket.emit('call:incoming', incoming(call));
 
     socket.on('call:start', handle(({ convId, kind }) => {
       assertCallsOn();
@@ -194,7 +212,7 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
         const name = store.publicUser(peer)?.displayName || peer;
         if (store.hasBlocked(me, peer)) throw new Error(`Unblock ${name} to call them`);
         // Blocked by them: they're simply never available.
-        if (store.hasBlocked(peer, me) || !isOnline(peer)) {
+        if (store.hasBlocked(peer, me) || !reachable(peer)) {
           if (!store.hasBlocked(peer, me)) logMissed();
           throw new Error(`${name} is not available right now`);
         }
@@ -204,7 +222,7 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
         }
         ring = [peer];
       } else {
-        ring = others.filter((u) => isOnline(u) && !inCall(u)).slice(0, MAX_PARTICIPANTS - 1);
+        ring = others.filter((u) => reachable(u) && !inCall(u)).slice(0, MAX_PARTICIPANTS - 1);
         if (!ring.length) {
           logMissed();
           throw new Error('No one in this group is available right now');
@@ -230,18 +248,10 @@ function createCallManager({ io, store, isOnline, notify, postMessage, handle, a
       }, ringTimeoutMs);
       calls.set(call.id, call);
 
-      const title = group ? conv.name : null;
       for (const u of ring) {
-        notify(u, 'call:incoming', {
-          callId: call.id,
-          convId,
-          kind,
-          group,
-          title,
-          from: me,
-          user: store.publicUser(me),
-          participants: [me],
-        });
+        notify(u, 'call:incoming', incoming(call));
+        // Not connected right now: wake their devices. The call keeps ringing for them to answer once the app opens.
+        if (!isOnline(u)) pushCall(u, conv, call, me);
       }
       announce(call);
       return { callId: call.id, kind, group, participants: [], onHold: [] };

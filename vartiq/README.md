@@ -10,6 +10,8 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Voice and video calls**, 1:1 and **group calls** (up to 6 people, peer-to-peer WebRTC): ringing on all devices, accept/decline, mute, camera on/off, **hold**, call timer, join a group call that's already running, and call history in the chat (missed / declined / duration, tap to call back)
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
+- **Push notifications**: a notification on the device for a new message or an incoming call while the app is closed (Web Push; works in Chrome, Edge, Firefox and Safari, and on iPhone/iPad once VartiQ is added to the Home Screen). People choose what they get; notifications say who and what kind, never the message
+- **Location sharing**: share where you are once, or live for 15 minutes, 1 hour or 8 hours (end-to-end encrypted like a message; stops by itself and the position is erased)
 - **Starred messages**: star any message, find them all in the starred list (stars are private to you)
 - **Disappearing messages**: per chat, with presets (24 hours, 7 days, 90 days) or any custom time from 1 minute to 365 days (days + hours + minutes); a default timer for new chats you start
 - **Business profiles**: business category, description, address, email, website and opening hours (with time zone and "Open now"), a business badge, a contact-info panel, and automatic **greeting** and **away** messages
@@ -351,6 +353,27 @@ Everything people agree to, and their rights over their data, is built in. **The
 - **Admin:** the user view shows which version each person accepted and when; the user list can show deleted accounts.
 - **Not built, decide with your lawyer:** there is no age confirmation at sign-up (if ExamSuit students can be under 18, ask what the law requires, for example parental consent), a consent manager, data-breach reporting procedure, and the refund and liability wording in the Terms (shown as bracketed placeholders).
 
+## Push notifications
+
+Turn them on in **Profile → Notifications** (nothing is asked on page load: the browser's permission question appears only when you tap *Turn on*). Choose what you get: new messages, calls, and whether the sender's name is shown. Each browser/device is subscribed separately (up to 8 per account) and is removed when you turn it off, log out, or delete the account.
+
+- **What is sent**: a small encrypted wake-up through the browser maker's push service (Google, Mozilla, Apple, Microsoft): who and what kind (`Asha: New message`, `Voice message`, `Incoming video call`, `Missed voice call`), never message text. Chats that are locked or hidden only ever say `New message`. A burst of messages from one chat is one notification.
+- **When**: only to people who are not connected at that moment. If the app is open but in a hidden tab, the app shows the notification itself. A direct call to someone who is offline but has notifications on *rings*: the notification wakes them and the call is still ringing when they open the app (30 seconds).
+- **Server**: keys are VAPID. Set `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` (make them with `npx web-push generate-vapid-keys`), or leave them out: a pair is created on first start and kept in `vapid.json` next to the data (back it up: if it is lost every device must turn notifications on again). `PUSH_SUBJECT` (a `mailto:` or `https:` address) identifies you to push services; by default the contact email from Admin → Settings → Legal is used. The server only sends to the known push services (`*.googleapis.com`, `*.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`; add more with `PUSH_ALLOWED_HOSTS`), never to an address a user made up.
+- **Admin**: the **Push notifications** feature switch. Off: nothing is sent and nobody can turn it on (turning off always works).
+- **API**: `GET /push`, `PUT /push/subscription`, `POST /push/unsubscribe`, `PATCH /push/settings`, `POST /push/test`; socket events `push:config`, `push:subscribe`, `push:unsubscribe`, `push:settings`, `push:test`. The service worker is `/sw.js` (served uncached).
+- Needs HTTPS (or `localhost`).
+
+## Location sharing
+
+The 📍 button in a chat opens *Share location*: **my current location (once)** or **live location for 15 minutes, 1 hour or 8 hours**. The browser asks for permission only then. Positions are sent like messages, **end-to-end encrypted** for everyone in the chat (inside the envelope as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`); only API apps send plain coordinates.
+
+- **No map is loaded in the app.** A shared position shows its coordinates and an *Open in map* link (OpenStreetMap), so nothing about where people are is sent to a map service until someone taps it.
+- **Live**: the sender's browser sends a new position when they move about 15 m (or once a minute), never faster than every 5 seconds, **only while VartiQ is open** (browsers do not let a web page track you in the background; the app says so). A banner shows the running share with a *Stop sharing* button. One live share per chat; a new one ends the earlier one. The share ends at the chosen time or on *Stop*, and **the position is then erased from the server** (the message stays as "Live location ended"). No trail is kept: each update replaces the last one. Locked chats get no updates until unlocked.
+- **Safety**: the privacy notice and terms cover it (and forbid using it to follow anyone). The device never uploads your location unless you tap Share.
+- **Admin**: the **Location sharing** switch (off: buttons hidden, new shares and updates refused; stopping always works).
+- **API**: `POST /conversations/{id}/location`, `PUT /live-locations/{id}`, `DELETE /live-locations/{id}`; socket events `location:send`, `location:update` (client → server and the event the other members get), `location:stop`; webhook event `location:update`.
+
 ## Chats saved on the device
 
 The web app keeps a copy of each chat in the browser (IndexedDB, one database per account) so a chat opens instantly and only the newest messages are fetched again:
@@ -553,6 +576,7 @@ vartiq/
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
 │   ├── translate.js # Translating received messages per chat (gateway)
+│   ├── push.js      # Push notifications (Web Push, VAPID, allowed push services)
 │   ├── admin.js     # Admin dashboard API (/admin/api)
 │   ├── features.js  # Feature switches and platform settings
 │   ├── payments.js  # Premium subscriptions: plans, checkout, payment confirmation
@@ -612,6 +636,8 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `messages:get`      | Load chat history                        |
 | `message:send`      | Send a message (`masked`, `clientId` for safe retries) |
 | `voice:send`        | Send a voice message (binary audio)      |
+| `location:send` / `location:update` / `location:stop` | Share a location (once or live), move a live share, stop it |
+| `push:config` / `push:subscribe` / `push:unsubscribe` / `push:settings` / `push:test` | Notification settings and this device's subscription |
 | `message:star`      | Star / unstar a message                  |
 | `messages:starred`  | List my starred messages                 |
 | `user:block`        | Block / unblock a contact                |
@@ -645,7 +671,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `call:hold`         | Put the call on hold / resume            |
 | `call:end`          | Leave / hang up                          |
 
-Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`.
+Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended).
 
 Voice-message audio and status photos are downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
 

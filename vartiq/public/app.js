@@ -202,6 +202,7 @@
     try {
       const { payload } = await state.e2ee.decrypt(m);
       if (m.type !== 'voice') m.text = payload.t ?? '';
+      if (m.type === 'location') m.loc = window.Place.clean(payload.loc);
     } catch (err) {
       console.warn('Could not decrypt a message:', err.message);
       m.undecryptable = true;
@@ -221,7 +222,7 @@
   }
 
   /** Text for a message in lists and previews. */
-  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.masked ? 'Masked message' : m.text);
+  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
 
   const openLockSvg = () => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -499,6 +500,7 @@
   }
 
   async function logout() {
+    await Promise.race([detachNotificationsAndLocation(), new Promise((r) => setTimeout(r, 1500))]);
     if (state.token) fetch('/api/v1/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${state.token}` } }).catch(() => {});
     storage.del('chat.token');
     cacheTimers.forEach(clearTimeout);
@@ -511,7 +513,7 @@
     statusUpdates.reset();
     channelsUI.reset();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null, privacy: null, profileCard: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null, privacy: null, profileCard: null, notif: null });
     state.conversations.clear();
     state.messages.clear();
     state.outbox.clear();
@@ -537,6 +539,8 @@
     voiceMessages: ['#btn-record'],
     disappearing: ['#menu-timer', '#btn-default-timer@.link-row'],
     calls: ['#call-buttons', '#btn-join-call'],
+    location: ['#btn-place'],
+    push: ['#btn-notifications'],
     callRecording: ['#call-record'],
     appearance: ['#btn-appearance'],
     status: ['#btn-status'],
@@ -816,6 +820,7 @@
         await loadConversations();
         statusUpdates.load();
         channelsUI.load();
+        resumeNotificationsAndLocation();
         // Refresh the open chat after a reconnect.
         if (state.activeId) openChat(state.activeId);
         // Back online: resend anything that failed while we were offline.
@@ -827,6 +832,8 @@
 
     socket.on('disconnect', () => setOffline(true));
     onOrdered('message:new', ({ message }) => onMessage(message));
+    onOrdered('location:update', ({ message }) => onLocationUpdate(message));
+    socket.on('call:incoming', (call) => localNotifyCall(call));
     onOrdered('message:starred', ({ convId, id, starred }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
       if (m) m.starred = starred;
@@ -1401,7 +1408,7 @@
       }
       const status = mine && !m.deleted ? statusOf(m, conv) : null;
       const covered = m.masked && !m.deleted && !mine && !state.revealed.has(m.id);
-      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}`);
+      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}${m.type === 'location' && !m.deleted ? ` place${m.live && window.Place.liveActive(m.live) ? ' live-on' : ''}` : ''}`);
       bubble.dataset.id = m.id;
       if (conv.type === 'group' && !mine && first) {
         const author = el('div', 'author', displayName(m.from));
@@ -1415,6 +1422,8 @@
         bubble.appendChild(text);
       } else if (m.type === 'voice') {
         bubble.appendChild(voicePlayer(m));
+      } else if (m.type === 'location') {
+        bubble.appendChild(placeCard(m, mine));
       } else if (covered) {
         const cover = el('button', 'masked-cover');
         cover.type = 'button';
@@ -1752,6 +1761,7 @@
     }
     upsertMessage(msg);
     const mine = msg.from === state.me.username;
+    if (!mine) localNotify(msg, conv);
     if (msg.convId === state.activeId) {
       renderMessages(mine);
       if (!mine) markRead(msg.convId);
@@ -1931,6 +1941,419 @@
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.emoji-wrap')) picker.classList.add('hidden');
   });
+
+  // ---------- notifications (push) ----------
+  //
+  // Notifications are asked for only when the person taps "Turn on" (never on page load). They say who and what kind,
+  // never the message. The browser's subscription belongs to this browser, so it is removed on log out (the next
+  // person to sign in here would otherwise get the previous person's notifications) and only restored when this
+  // account turned notifications on in this browser.
+
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+  const pushFlag = () => `chat.push.${state.me?.username}`;
+  let swReady = null;
+  function serviceWorkerReady() {
+    if (!pushSupported()) return Promise.resolve(null);
+    swReady ||= navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).catch(() => null);
+    return swReady;
+  }
+  const keyBytes = (b64u) => {
+    const raw = atob((b64u + '='.repeat((4 - (b64u.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  };
+
+  async function pushStatus() {
+    const cfg = await emit('push:config');
+    state.notif = cfg;
+    const reg = await serviceWorkerReady();
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    return { cfg, reg, sub, on: !!sub && Notification.permission === 'granted' && storage.get(pushFlag()) === sub.endpoint };
+  }
+
+  async function renderNotifications() {
+    const status = $('#notif-status');
+    const help = $('#notif-help');
+    const btn = $('#btn-notif-toggle');
+    const test = $('#btn-notif-test');
+    const prefs = $('#notif-prefs');
+    help.textContent = '';
+    if (!pushSupported()) {
+      status.textContent = 'This browser cannot show notifications.';
+      help.textContent = 'On iPhone and iPad, tap Share, then Add to Home Screen, and open VartiQ from the Home Screen. Notifications also need a secure (https) address.';
+      btn.disabled = true;
+      test.classList.add('hidden');
+      prefs.classList.add('hidden');
+      return;
+    }
+    let st;
+    try {
+      st = await pushStatus();
+    } catch (err) {
+      toast(err.message);
+      return;
+    }
+    const blocked = Notification.permission === 'denied';
+    btn.dataset.state = st.on ? 'on' : 'off';
+    btn.textContent = st.on ? 'Turn off' : 'Turn on';
+    btn.disabled = !st.cfg.enabled || (blocked && !st.on);
+    test.classList.toggle('hidden', !st.on);
+    prefs.classList.toggle('hidden', !st.on);
+    if (!st.cfg.enabled) status.textContent = 'Notifications are turned off by the administrator.';
+    else if (st.on) status.textContent = `On for this device. ${st.cfg.devices} device${st.cfg.devices === 1 ? '' : 's'} on your account.`;
+    else status.textContent = 'Off for this device.';
+    if (blocked && !st.on) help.textContent = 'Notifications are blocked for this site in your browser. Allow them in the browser\'s site settings (the lock icon next to the address), then come back and tap Turn on.';
+    $('#np-messages').checked = st.cfg.preferences.messages;
+    $('#np-calls').checked = st.cfg.preferences.calls;
+    $('#np-preview').checked = st.cfg.preferences.preview;
+    $('#notifications-summary').textContent = st.on ? 'On for this device' : 'Get alerts for messages and calls when the app is closed';
+  }
+
+  async function openNotifications() {
+    openPanel('#panel-notifications');
+    await renderNotifications();
+  }
+  $('#btn-notifications').addEventListener('click', openNotifications);
+
+  $('#btn-notif-toggle').addEventListener('click', async () => {
+    const btn = $('#btn-notif-toggle');
+    btn.disabled = true;
+    try {
+      if (btn.dataset.state === 'on') {
+        const st = await pushStatus();
+        if (st.sub) {
+          await emit('push:unsubscribe', { endpoint: st.sub.endpoint });
+          await st.sub.unsubscribe();
+        }
+        storage.del(pushFlag());
+        toast('Notifications are off on this device');
+      } else {
+        // Asked straight from the tap (browsers only allow the question in answer to one).
+        const perm = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+        if (perm !== 'granted') throw new Error('Notifications were not allowed. You can allow them in your browser\'s site settings.');
+        const st = await pushStatus();
+        if (!st.cfg.enabled) throw new Error('Notifications are turned off by the administrator');
+        let sub = st.sub;
+        if (sub) {
+          // A subscription made with another server key cannot be reused.
+          try { await sub.unsubscribe(); } catch { /* ignore */ }
+          sub = null;
+        }
+        sub = await st.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(st.cfg.publicKey) });
+        await emit('push:subscribe', { subscription: sub.toJSON(), userAgent: navigator.userAgent.slice(0, 120) });
+        storage.set(pushFlag(), sub.endpoint);
+        toast('Notifications are on for this device');
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+    await renderNotifications();
+  });
+
+  $('#btn-notif-test').addEventListener('click', async () => {
+    try {
+      await emit('push:test');
+      toast('Test sent. It should arrive in a moment.');
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  for (const [id, key] of [['#np-messages', 'messages'], ['#np-calls', 'calls'], ['#np-preview', 'preview']]) {
+    $(id).addEventListener('change', async (e) => {
+      try {
+        const res = await emit('push:settings', { [key]: e.target.checked });
+        state.notif = { ...state.notif, preferences: res.preferences };
+      } catch (err) {
+        e.target.checked = !e.target.checked;
+        toast(err.message);
+      }
+    });
+  }
+
+  /** A message arrived while this tab is hidden: the server sends no push to someone who is connected, so show it here. */
+  function localNotify(msg, conv) {
+    if (document.visibilityState !== 'hidden' || !pushSupported() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
+    const prefs = state.notif?.preferences || { messages: true, preview: true };
+    if (!prefs.messages || msg.type === 'call' || msg.type === 'system') return;
+    const generic = conv.locked || conv.hidden || !prefs.preview;
+    const what = msg.type === 'voice' ? 'Voice message' : msg.type === 'location' ? 'Location' : 'New message';
+    const title = generic ? 'VartiQ' : conv.type === 'group' ? conv.name : displayName(msg.from);
+    const body = !generic && conv.type === 'group' ? `${displayName(msg.from)}: ${what}` : what;
+    serviceWorkerReady().then((reg) => reg?.showNotification(title, {
+      body, tag: generic ? 'msg' : `c-${conv.id}`, renotify: true, icon: '/app-icons/icon-192.png', badge: '/app-icons/icon-32.png', data: { convId: conv.locked || conv.hidden ? null : conv.id },
+    })).catch(() => {});
+  }
+
+  function localNotifyCall(call) {
+    if (document.visibilityState !== 'hidden' || !pushSupported() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
+    if (state.notif?.preferences && !state.notif.preferences.calls) return;
+    const conv = state.conversations.get(call.convId);
+    const generic = conv?.locked || conv?.hidden || state.notif?.preferences?.preview === false;
+    serviceWorkerReady().then((reg) => reg?.showNotification(generic ? 'VartiQ' : (call.user?.displayName || call.from), {
+      body: `Incoming ${call.kind === 'video' ? 'video' : 'voice'} call`, tag: `call-${call.callId}`, requireInteraction: true, icon: '/app-icons/icon-192.png', data: { convId: generic ? null : call.convId },
+    })).catch(() => {});
+  }
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'open-chat' && state.conversations.has(e.data.convId)) openChat(e.data.convId);
+      else if (e.data?.type === 'push-resubscribe') resyncPush().catch(() => {});
+    });
+  }
+
+  /** After sign-in: keep the server's copy of this browser's subscription current (only if this account turned it on here). */
+  async function resyncPush() {
+    const cfg = await emit('push:config');
+    state.notif = cfg;
+    if (!cfg.enabled || !pushSupported() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
+    const reg = await serviceWorkerReady();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (sub && sub.endpoint === storage.get(pushFlag())) {
+      await emit('push:subscribe', { subscription: sub.toJSON(), userAgent: navigator.userAgent.slice(0, 120) });
+    } else if (reg) {
+      // The browser dropped or replaced it: try to make a fresh one with the same permission.
+      try {
+        const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(cfg.publicKey) });
+        await emit('push:subscribe', { subscription: fresh.toJSON(), userAgent: navigator.userAgent.slice(0, 120) });
+        storage.set(pushFlag(), fresh.endpoint);
+      } catch { storage.del(pushFlag()); }
+    }
+  }
+
+  // ---------- sharing a location ----------
+  //
+  // A position is sent like a message: encrypted for the people in the chat when possible. A live share keeps sending
+  // the new position (only while VartiQ is open: browsers do not let a web page track you in the background), stops at
+  // the time chosen or when you tap Stop, and the position is then erased from the server.
+
+  const GEO = { enableHighAccuracy: true, timeout: 20000, maximumAge: 5000 };
+  const geoMessage = (e) => (e.code === 1
+    ? 'Location is blocked for this site. Allow it in your browser\'s site settings and try again.'
+    : e.code === 2 ? 'Your location is not available right now.' : 'Getting your location took too long. Try again.');
+
+  function currentPosition() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error('This browser cannot share a location'));
+      return navigator.geolocation.getCurrentPosition(
+        (pos) => { const loc = window.Place.fromPosition(pos); if (loc) resolve(loc); else reject(new Error('Could not read your location')); },
+        (err) => reject(new Error(geoMessage(err))),
+        GEO,
+      );
+    });
+  }
+
+  /** The position as the server should get it: inside an encryption envelope when the chat can be encrypted. */
+  async function sealPlace(conv, loc) {
+    if (conv && state.e2ee?.ready && await state.e2ee.canEncrypt(conv.id).catch(() => false)) {
+      const sealed = await state.e2ee.encrypt(conv, { t: 'Location', loc });
+      return { e2ee: sealed.envelope };
+    }
+    return { location: loc };
+  }
+
+  function pinIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', 'M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function placeCard(m, mine) {
+    const card = el('div', 'place-card');
+    const live = m.live;
+    const active = window.Place.liveActive(live);
+    const title = el('div', 'place-title');
+    title.append(pinIcon(), live ? (active ? 'Live location' : 'Live location ended') : 'Location');
+    card.appendChild(title);
+    if (m.undecryptable) {
+      card.appendChild(el('span', 'text undecryptable', "🔒 This location can't be read on this device (it was sent before this device was set up)."));
+      return card;
+    }
+    const loc = window.Place.clean(m.loc || m.location);
+    if (live && active) card.appendChild(el('div', 'place-live', `Sharing until ${timeOf(live.until)}${live.updatedAt ? ` · updated ${window.Place.ago(live.updatedAt)}` : ''}`));
+    if (loc && (!live || active)) {
+      card.appendChild(el('div', 'place-coords', window.Place.describe(loc)));
+      const open = el('a', 'place-open', 'Open in map');
+      open.href = window.Place.mapUrl(loc);
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
+      card.appendChild(open);
+    }
+    if (mine && live && active && !m.localStatus) {
+      const stop = el('button', 'place-stop', 'Stop sharing');
+      stop.type = 'button';
+      stop.addEventListener('click', () => stopLive(m.id).catch((e) => toast(e.message)));
+      card.appendChild(stop);
+    }
+    return card;
+  }
+
+  const newClientId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+  async function sharePlace(convId, liveSeconds) {
+    const conv = state.conversations.get(convId);
+    const loc = await currentPosition();
+    const clientId = newClientId();
+    for (let attempt = 0; ; attempt++) {
+      const sealed = await sealPlace(conv, loc);
+      try {
+        const res = await emit('location:send', { convId, live: liveSeconds, clientId, ...sealed });
+        const msg = res.message;
+        if (msg.e2ee) Object.assign(msg, { text: 'Location', encrypted: true, loc });
+        upsertMessage(msg);
+        refreshConversation(convId);
+        if (liveSeconds) startLive(convId, msg.id, msg.live.until, loc);
+        return;
+      } catch (err) {
+        // Someone's keys changed while we were encrypting: fetch the new keys and encrypt again, once.
+        if (err.code === 'keys_changed' && attempt === 0) { state.e2ee?.invalidate(); continue; }
+        throw err;
+      }
+    }
+  }
+
+  async function placeDialog() {
+    const convId = state.activeId;
+    if (!convId) return;
+    await dialog({
+      title: 'Share location',
+      text: 'Your browser will ask to allow your location. Only the people in this chat see it. Opening it in a map shows it to the map service you choose. A live location is updated while VartiQ stays open and stops when the time is up or when you tap Stop sharing; then your position is erased.',
+      fields: [{
+        name: 'mode', label: 'What to share', value: 'once',
+        options: [['once', 'My current location (once)'], ...window.Place.LIVE_CHOICES.map((c) => [String(c.seconds), `Live location for ${c.label}`])],
+      }],
+      submit: 'Share',
+      onSubmit: async ({ mode }) => sharePlace(convId, mode === 'once' ? 0 : Number(mode)),
+    });
+  }
+  $('#btn-place').addEventListener('click', placeDialog);
+
+  // The running live share of this person (one at a time in the app).
+  const liveShare = { id: null, convId: null, until: 0, watch: null, timer: null, last: null, lastSent: 0, busy: false };
+  const liveKey = () => `chat.live.${state.me?.username}`;
+
+  function updateLiveBanner() {
+    const banner = $('#live-banner');
+    const on = !!liveShare.id;
+    banner.classList.toggle('hidden', !on);
+    if (!on) return;
+    const conv = state.conversations.get(liveShare.convId);
+    $('#live-banner-text').textContent = `Sharing your live location with ${conv ? (conv.type === 'group' ? conv.name : displayName(conv.members.find((u) => u !== state.me.username))) : 'a chat'} until ${timeOf(liveShare.until)}. Updates only while VartiQ is open.`;
+  }
+
+  function startLive(convId, id, until, first) {
+    clearLiveLocal();
+    Object.assign(liveShare, { id, convId, until, last: first || null, lastSent: first ? Date.now() : 0, busy: false });
+    storage.set(liveKey(), JSON.stringify({ id, convId, until }));
+    liveShare.watch = navigator.geolocation.watchPosition(onLivePosition, (err) => {
+      if (err.code === 1) { toast(geoMessage(err)); stopLive(id).catch(() => {}); }
+    }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
+    liveShare.timer = setTimeout(() => { stopLive(id).catch(() => {}); }, Math.max(0, until - Date.now()));
+    updateLiveBanner();
+  }
+
+  /** Stop watching the position here (does not tell the server). */
+  function clearLiveLocal() {
+    if (liveShare.watch != null) navigator.geolocation.clearWatch(liveShare.watch);
+    clearTimeout(liveShare.timer);
+    Object.assign(liveShare, { id: null, convId: null, until: 0, watch: null, timer: null, last: null, lastSent: 0, busy: false });
+    if (state.me) storage.del(liveKey());
+    updateLiveBanner();
+  }
+
+  /** Stop sharing: the server erases the position and tells the chat. */
+  async function stopLive(id = liveShare.id) {
+    clearLiveLocal();
+    if (!id || !state.socket?.connected) return;
+    try {
+      await emit('location:stop', { id });
+    } catch (err) {
+      if (err.code !== 'not_found') throw err; // already ended: fine
+    }
+  }
+  $('#live-banner-stop').addEventListener('click', () => stopLive().catch((e) => toast(e.message)));
+
+  async function onLivePosition(pos) {
+    const loc = window.Place.fromPosition(pos);
+    const id = liveShare.id;
+    if (!loc || !id || liveShare.busy) return;
+    const now = Date.now();
+    if (now >= liveShare.until) { stopLive(id).catch(() => {}); return; }
+    if (!window.Place.shouldSend(liveShare.last, loc, now, liveShare.lastSent)) return;
+    liveShare.busy = true;
+    try {
+      const sealed = await sealPlace(state.conversations.get(liveShare.convId), loc);
+      await emit('location:update', { id, ...sealed });
+      liveShare.last = loc;
+      liveShare.lastSent = now;
+    } catch (err) {
+      if (['not_found', 'live_ended', 'feature_disabled'].includes(err.code)) clearLiveLocal(); // ended elsewhere, or switched off
+      else if (err.code === 'chat_locked') stopLive(id).catch(() => {}); // the chat was locked: stop sharing from it
+      else if (err.code === 'keys_changed') state.e2ee?.invalidate();
+      // anything else (a brief network problem, "too frequent") just waits for the next position
+    } finally {
+      liveShare.busy = false;
+    }
+  }
+
+  /** A new position (or the end) of someone's live share, sent by the server. */
+  function onLocationUpdate(msg) {
+    const list = state.messages.get(msg.convId);
+    const i = list ? list.findIndex((m) => m.id === msg.id) : -1;
+    if (i >= 0) {
+      if (list[i].from === state.me.username && list[i].loc && !msg.loc && !msg.undecryptable) msg.loc = list[i].loc;
+      list[i] = msg;
+    }
+    const conv = state.conversations.get(msg.convId);
+    if (conv?.lastMessage?.id === msg.id) conv.lastMessage = msg;
+    if (liveShare.id === msg.id && msg.live?.endedAt) clearLiveLocal();
+    if (msg.convId === state.activeId) renderMessages();
+    renderChatList();
+  }
+
+  // Positions and "updated 2 min ago" go stale on screen: refresh a visible live share now and then.
+  setInterval(() => {
+    if (document.visibilityState !== 'visible' || !state.activeId) return;
+    if ((state.messages.get(state.activeId) || []).some((m) => m.live && window.Place.liveActive(m.live))) renderMessages();
+  }, 30000);
+
+  /** After sign-in: pick up where the person left off. */
+  function resumeNotificationsAndLocation() {
+    if (pushSupported()) serviceWorkerReady();
+    resyncPush().catch(() => {});
+    // Opened from a notification: go to that chat.
+    const wanted = new URLSearchParams(location.search).get('open');
+    if (wanted && state.conversations.has(wanted)) {
+      openChat(wanted);
+      history.replaceState(null, '', location.pathname);
+    }
+    // A live share that was running when the page was closed carries on (until its time is up).
+    try {
+      const saved = JSON.parse(storage.get(liveKey()) || 'null');
+      if (saved && saved.until > Date.now() && !liveShare.id && navigator.geolocation) {
+        const msg = (state.messages.get(saved.convId) || []).find((m) => m.id === saved.id);
+        startLive(saved.convId, saved.id, saved.until, msg?.loc || null);
+      } else if (saved && !liveShare.id) {
+        storage.del(liveKey());
+      }
+    } catch { storage.del(liveKey()); }
+  }
+
+  /** Log out: this browser stops getting this account's notifications and the live share stops. */
+  async function detachNotificationsAndLocation() {
+    try {
+      if (liveShare.id) await stopLive();
+      if (state.me && storage.get(pushFlag()) != null && pushSupported()) {
+        const reg = await serviceWorkerReady();
+        const sub = reg && await reg.pushManager.getSubscription();
+        if (sub && state.socket?.connected) await emit('push:unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+        if (sub) await sub.unsubscribe().catch(() => {});
+        storage.del(pushFlag());
+      }
+    } catch { /* logging out must not fail */ }
+  }
 
   // ---------- side panels ----------
 

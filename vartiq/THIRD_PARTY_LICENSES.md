@@ -7,8 +7,12 @@
 | @types/node | 26.6.5 | MIT |
 | @types/ws | 8.18.2 | MIT |
 | accepts | 1.3.8 | MIT |
+| agent-base | 7.1.4 | MIT |
 | array-flatten | 1.1.1 | MIT |
+| asn1.js | 5.4.1 | MIT |
+| bn.js | 4.12.5 | MIT |
 | body-parser | 1.20.8 | MIT |
+| buffer-equal-constant-time | 1.0.1 | BSD-3-Clause |
 | bytes | 3.1.2 | MIT |
 | call-bind-apply-helpers | 1.0.2 | MIT |
 | call-bound | 1.0.4 | MIT |
@@ -25,6 +29,7 @@
 | depd | 2.0.0 | MIT |
 | destroy | 1.2.0 | MIT |
 | dunder-proto | 1.0.1 | MIT |
+| ecdsa-sig-formatter | 1.0.11 | Apache-2.0 |
 | ee-first | 1.1.1 | MIT |
 | encodeurl | 2.0.0 | MIT |
 | engine.io | 6.6.11 | MIT |
@@ -44,10 +49,14 @@
 | gopd | 1.2.0 | MIT |
 | has-symbols | 1.1.0 | MIT |
 | hasown | 2.0.4 | MIT |
+| http_ece | 1.2.0 | MIT |
 | http-errors | 2.0.1 | MIT |
+| https-proxy-agent | 7.0.6 | MIT |
 | iconv-lite | 0.4.24 | MIT |
 | inherits | 2.0.4 | ISC |
 | ipaddr.js | 1.9.1 | MIT |
+| jwa | 2.0.1 | MIT |
+| jws | 4.0.1 | MIT |
 | math-intrinsics | 1.1.0 | MIT |
 | media-typer | 0.3.0 | MIT |
 | merge-descriptors | 1.0.3 | MIT |
@@ -55,6 +64,8 @@
 | mime | 1.6.0 | MIT |
 | mime-db | 1.52.0 | MIT |
 | mime-types | 2.1.35 | MIT |
+| minimalistic-assert | 1.0.1 | ISC |
+| minimist | 1.2.8 | MIT |
 | ms | 2.0.0 | MIT |
 | ms | 2.1.3 | MIT |
 | ms | 2.1.3 | MIT |
@@ -104,7 +115,10 @@
 | unpipe | 1.0.0 | MIT |
 | utils-merge | 1.0.1 | MIT |
 | vary | 1.1.2 | MIT |
+| web-push | 3.6.7 | MPL-2.0 |
 | ws | 8.21.3 | MIT |
 | xtend | 4.0.2 | MIT |
 
 Generated from package-lock.json and each package's package.json. Keep each package's licence notice when you redistribute.
+
+Note on `web-push` (MPL-2.0): it is used unmodified, as an installed dependency, to send push notifications. MPL-2.0 is a file-level licence: if you ever change `web-push`'s own files, those changed files must be published under MPL-2.0; your own code is not affected.

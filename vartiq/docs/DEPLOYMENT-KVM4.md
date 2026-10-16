@@ -268,6 +268,12 @@ TURN_URLS=turn:turn.prayuktech.com:3478?transport=udp,turn:turn.prayuktech.com:3
 TURN_SECRET=THE-SAME-SECRET-AS-IN-coturn
 TURN_TTL_SECONDS=86400
 
+# ---- push notifications (messages and calls when the app is closed). Make the pair once (Phase 5.3a) and keep it: if it
+# changes, every device must turn notifications on again. PUSH_SUBJECT identifies you to the browsers' push services.
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+PUSH_SUBJECT=mailto:hello@prayuktech.com
+
 # ---- real providers (each is a small relay you control; see README). Leave a line out to leave that feature OFF
 OTP_WEBHOOK_URL=https://...
 OTP_WEBHOOK_TOKEN=...
@@ -286,6 +292,16 @@ ACCOUNT_ERASE_DELAY_MS=3600000
 **Must NOT appear in this file in production:** `OTP_DEV_CODES`, `KYC_SANDBOX`, `PAYMENTS_SANDBOX`, `TRANSLATE_SANDBOX`, `WEBHOOKS_ALLOW_PRIVATE`. The sandbox switches give away verification and Premium, and `OTP_DEV_CODES` shows login codes on screen. Check: `grep -E "SANDBOX|DEV_CODES" /etc/vartiq/vartiq.env` must print nothing.
 
 Without `OTP_WEBHOOK_URL` login codes are only printed in the server log and nobody receives an SMS, so real sign-up does not work until it is set.
+
+### 5.3a Push notification keys
+
+Make the key pair once, after the first release is installed (Phase 5.2), and paste the two lines into `/etc/vartiq/vartiq.env`:
+
+```bash
+sudo -u vartiq /opt/node22/bin/node -e "const k=require('/opt/vartiq/current/node_modules/web-push').generateVAPIDKeys();console.log('VAPID_PUBLIC_KEY='+k.publicKey);console.log('VAPID_PRIVATE_KEY='+k.privateKey)"
+```
+
+Leave them out and VartiQ makes a pair on first start and keeps it in `/var/lib/vartiq/vapid.json` (it is in the backup below). Either way, **keep a copy**: they are secrets, and the same pair must stay in place across servers and restores. Notifications need the server to reach the browsers' push services over HTTPS (outbound port 443, which ufw allows by default on your server); no inbound port is needed.
 
 ### 5.4 The service
 
@@ -615,11 +631,15 @@ STAMP=$(date +%F-%H%M)
 mkdir -p "$DEST/db" "$DEST/media"
 # database (port 5433 = Option B; use 5432 for Option A or C)
 sudo -u postgres pg_dump -p 5433 -Fc vartiq > "$DEST/db/vartiq-$STAMP.dump"
+# push notification keys (only if you did not put them in vartiq.env) and the settings file: secrets, owner-only
+[ -f /var/lib/vartiq/vapid.json ] && install -m 600 /var/lib/vartiq/vapid.json "$DEST/vapid-$STAMP.json"
+install -m 600 /etc/vartiq/vartiq.env "$DEST/vartiq.env-$STAMP"
 # media: a hard-linked snapshot per day, only changed files take space
 rsync -a --delete --link-dest="$DEST/media/latest" /var/lib/vartiq/media/ "$DEST/media/$STAMP/"
 ln -sfn "$DEST/media/$STAMP" "$DEST/media/latest"
 # keep 14 days locally (match the "days in backups" you published in Admin -> Settings -> Legal; never more)
 find "$DEST/db" -name '*.dump' -mtime +14 -delete
+find "$DEST" -maxdepth 1 \( -name 'vapid-*.json' -o -name 'vartiq.env-*' \) -mtime +14 -delete
 find "$DEST/media" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
 # copy off the server (rclone to object storage, or rsync to another machine)
 # rclone sync "$DEST" remote:vartiq-backups --transfers 4
@@ -658,8 +678,10 @@ Use a staff phone on mobile data, and a laptop on Wi-Fi.
 6. **Restart test:** `sudo systemctl restart vartiq`; the app reconnects by itself and **nobody is logged out** (sessions are saved in the database).
 7. **Call test across networks:** phone on 4G calls laptop on Wi-Fi. If it connects, check that the relay works at all: `sudo journalctl -u coturn -n 20` (a "session ... allocation" line) or use the Trickle ICE test page with your `turn:` URL and a generated credential. If calls fail only across networks, the relay or its firewall ports are the cause.
 8. Download my data and Delete my account work for a test user (the data is erased about an hour later).
-9. **ExamSuit check:** the HTTP code and time are the same as your "before" numbers; `free -h` shows what you expected.
-10. Watch for 30 minutes: `systemd-cgtop`, `sudo journalctl -u vartiq -f`.
+9. **Notifications test** (a phone, over HTTPS): Profile → Notifications → Turn on, allow, tap *Send a test* (it arrives). Close the app, send that phone a message from another account: a notification "Name: New message" arrives, and tapping it opens the chat. On iPhone/iPad the app must be added to the Home Screen first. Turn it off again and check nothing arrives.
+10. **Location test:** share a location once and a live one (15 minutes) between two phones: the other phone sees the position move when the first walks (with VartiQ open); tapping *Stop sharing* ends it ("Live location ended"). Open the Privacy Notice and check the new sections on notifications and location are there.
+11. **ExamSuit check:** the HTTP code and time are the same as your "before" numbers; `free -h` shows what you expected.
+12. Watch for 30 minutes: `systemd-cgtop`, `sudo journalctl -u vartiq -f`.
 
 ---
 

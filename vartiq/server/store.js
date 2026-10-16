@@ -178,6 +178,7 @@ class Store {
         hiddenChats: u.hiddenChats || [],
         chatLockSet: !!u.chatLock,
         devices: (u.devices || []).map((d) => ({ id: d.id, name: d.name, publicKey: d.publicKey, createdAt: d.createdAt || null })),
+        pushNotifications: { preferences: this.pushPrefs(username), devices: (u.pushSubs || []).map((x) => ({ id: x.id, createdAt: x.createdAt, device: x.ua || null })) },
         passkeys: (u.passkeys || []).map((p) => ({ id: p.id, name: p.name || null, createdAt: p.createdAt || null })),
         suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason } : null,
       },
@@ -212,6 +213,7 @@ class Store {
     u.status = 'permanently_disabled';
     delete u.phone;
     delete u.email;
+    delete u.pushSubs; // no more notifications to this person's devices
     this._contactIdx = null;
     this.dropSessionsOf(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
@@ -278,6 +280,9 @@ class Store {
           delete m.e2ee;
           delete m.masked;
           delete m.starredBy;
+          delete m.location;
+          delete m.live;
+          this._live?.delete(m.id);
           this._touchMsg(conv.id, m);
         }
       }
@@ -323,6 +328,153 @@ class Store {
     };
     this._contactIdx = null;
     this._save();
+  }
+
+  // ---------- push notifications ----------
+  //
+  // A browser gives the app a "push subscription" (an address at the browser maker's push service plus keys). We keep
+  // it with the account so we can wake the device when a message or call arrives while the app is closed. The messages
+  // themselves are never sent through it: only "who / what kind", so the app can show a notification.
+
+  static pushDefaults() {
+    return { messages: true, calls: true, preview: true };
+  }
+
+  /** What a person wants to be notified about. `preview`: show the sender's name (off: just "New message"). */
+  pushPrefs(username) {
+    return { ...Store.pushDefaults(), ...(this.data.users[username]?.pushPrefs || {}) };
+  }
+
+  setPushPrefs(username, patch) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const next = this.pushPrefs(username);
+    for (const k of Object.keys(Store.pushDefaults())) {
+      if (patch[k] === undefined) continue;
+      if (typeof patch[k] !== 'boolean') throw Object.assign(new Error(`${k} must be true or false`), { status: 400 });
+      next[k] = patch[k];
+    }
+    u.pushPrefs = next;
+    this._save();
+    return next;
+  }
+
+  pushSubs(username) {
+    return this.data.users[username]?.pushSubs || [];
+  }
+
+  /** Save (or refresh) a device's subscription. The same endpoint is one device; the oldest are dropped past the limit. */
+  addPushSub(username, { endpoint, p256dh, auth }, userAgent = '') {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const subs = (u.pushSubs || []).filter((s) => s.endpoint !== endpoint);
+    const sub = { id: crypto.randomBytes(6).toString('hex'), endpoint, keys: { p256dh, auth }, createdAt: Date.now(), ua: String(userAgent || '').slice(0, 120) };
+    subs.push(sub);
+    while (subs.length > Store.PUSH_MAX_DEVICES) subs.shift();
+    u.pushSubs = subs;
+    this._save();
+    return sub;
+  }
+
+  /** Forget a subscription (the person turned notifications off, or the push service says it is gone). */
+  removePushSub(username, endpoint) {
+    const u = this.data.users[username];
+    if (!u?.pushSubs) return false;
+    const before = u.pushSubs.length;
+    u.pushSubs = u.pushSubs.filter((s) => s.endpoint !== endpoint);
+    if (u.pushSubs.length === before) return false;
+    if (!u.pushSubs.length) delete u.pushSubs;
+    this._save();
+    return true;
+  }
+
+  // ---------- location sharing ----------
+  //
+  // A location message is an ordinary message of type "location". The coordinates are inside the encrypted envelope
+  // (like message text), so the server cannot read them; only an unencrypted client (API app) sends them in the clear
+  // (`location`). A live share also carries `live: { until, endedAt? }`, which the server does see and enforce:
+  // updates replace the previous position (no trail is kept) and stop at `until` or when the sender stops sharing,
+  // at which point the position is erased from the message.
+
+  /** The live messages still running: id -> convId (built once, then kept up to date). */
+  _liveIndex() {
+    if (!this._live) {
+      this._live = new Map();
+      for (const [convId, msgs] of Object.entries(this.data.messages)) {
+        for (const m of msgs) if (m.live && !m.live.endedAt) this._live.set(m.id, convId);
+      }
+    }
+    return this._live;
+  }
+
+  /** The running live message `id`, if any: { convId, message }. */
+  findLive(id) {
+    const convId = this._liveIndex().get(id);
+    const message = convId && (this.data.messages[convId] || []).find((x) => x.id === id);
+    return message && message.live && !message.live.endedAt ? { convId, message } : null;
+  }
+
+  /** Ids of the live shares `username` is running in a chat. */
+  liveIn(username, convId) {
+    return [...this._liveIndex()].filter(([id, c]) => c === convId && this.findLive(id)?.message.from === username).map(([id]) => id);
+  }
+
+  /** The running live message `id` shared by `username` (or throws). */
+  _liveMessage(id, username) {
+    const convId = this._liveIndex().get(id);
+    const m = convId && (this.data.messages[convId] || []).find((x) => x.id === id);
+    if (!m || m.from !== username || !m.live || m.live.endedAt) throw Object.assign(new Error('This live location is not being shared'), { status: 404, code: 'not_found' });
+    return { convId, message: m };
+  }
+
+  /**
+   * Replace the position of a running live share. Needs `e2ee` (the new encrypted envelope) or `location` (plain).
+   * Updates arriving faster than `Store.LIVE_MIN_INTERVAL_MS` are refused.
+   */
+  updateLiveLocation(username, id, { e2ee, location }, now = Date.now()) {
+    const { convId, message: m } = this._liveMessage(id, username);
+    if (m.live.until <= now) {
+      throw Object.assign(new Error('This live location has ended'), { status: 409, code: 'live_ended' });
+    }
+    if (m.live.updatedAt && now - m.live.updatedAt < Store.LIVE_MIN_INTERVAL_MS) {
+      throw Object.assign(new Error('Location updates are too frequent'), { status: 429, code: 'rate_limited' });
+    }
+    if (e2ee) {
+      m.e2ee = e2ee;
+      delete m.location;
+    } else {
+      m.location = location;
+      delete m.e2ee;
+    }
+    m.live.updatedAt = now;
+    this._touchMsg(convId, m);
+    this._save();
+    return { convId, message: m };
+  }
+
+  /** Stop a live share: the position is erased from the message, which stays as "Live location ended". */
+  endLiveLocation(id, now = Date.now()) {
+    const convId = this._liveIndex().get(id);
+    this._liveIndex().delete(id);
+    const m = convId && (this.data.messages[convId] || []).find((x) => x.id === id);
+    if (!m || !m.live || m.live.endedAt) return null;
+    m.live.endedAt = now;
+    delete m.e2ee;
+    delete m.location;
+    m.text = '';
+    this._touchMsg(convId, m);
+    this._save();
+    return { convId, message: m };
+  }
+
+  /** Live shares whose time is up (or whose sender's account closed): returns the ids to end. */
+  liveDue(now = Date.now()) {
+    const due = [];
+    for (const [id, convId] of this._liveIndex()) {
+      const m = (this.data.messages[convId] || []).find((x) => x.id === id);
+      if (!m || m.live?.endedAt || m.live.until <= now || this.isClosed(m.from)) due.push(id);
+    }
+    return due;
   }
 
   // ---------- platform settings, feature switches (administrators) ----------
@@ -1952,8 +2104,9 @@ class Store {
    * timeout or reconnect) returns the stored message instead of duplicating it.
    * `voice`: `{ mediaId, duration, mime }` for a voice message (text is then empty).
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
+   * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -1971,7 +2124,7 @@ class Store {
     }
 
     text = voice || e2ee ? '' : String(text || '').trim();
-    if (!voice && !e2ee && !text) throw new Error('Message is empty');
+    if (!voice && !e2ee && !text && !place) throw new Error('Message is empty');
     if (text.length > 4000) throw new Error('Message is too long');
     const msg = {
       id: crypto.randomBytes(8).toString('hex'),
@@ -1987,7 +2140,12 @@ class Store {
       msg.voice = { mediaId: voice.mediaId, duration: Math.max(0, Math.round(Number(voice.duration) || 0)), mime: voice.mime };
     }
     if (e2ee) msg.e2ee = e2ee; // end-to-end encrypted: the server holds only ciphertext
-    if (masked && !voice) msg.masked = true;
+    if (place) {
+      msg.type = 'location';
+      if (place.location) msg.location = place.location;
+      if (place.live) msg.live = { startedAt: msg.ts, until: msg.ts + place.live * 1000 };
+    }
+    if (masked && !voice && !place) msg.masked = true;
     if (statusReply) msg.statusReply = statusReply;
     if (auto) msg.auto = auto; // 'greeting' | 'away' (business automatic replies)
     if (conv.disappearAfter) msg.expiresAt = msg.ts + conv.disappearAfter * 1000;
@@ -1995,6 +2153,7 @@ class Store {
     if (hiddenFor.length) msg.hiddenFor = hiddenFor;
     const list = this.data.messages[convId];
     list.push(msg);
+    if (msg.live) this._liveIndex().set(msg.id, convId);
     this._touchList('messages', convId);
     this._save();
     return list[list.length - 1]; // the tracked copy (the same object when nothing is tracked)
@@ -2220,6 +2379,9 @@ class Store {
       delete m.e2ee;
       delete m.masked;
       delete m.starredBy;
+      delete m.location;
+      delete m.live;
+      this._live?.delete(m.id);
       this._touchMsg(convId, m);
       this._save();
       return { convId, message: m };
@@ -2237,6 +2399,10 @@ Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */
 Store.MAX_DEVICES = 5;
+Store.PUSH_MAX_DEVICES = 8;
+/** Live-location shares: how long they may run, and how often the position may change. */
+Store.LIVE_DURATIONS = [15 * 60, 60 * 60, 8 * 60 * 60];
+Store.LIVE_MIN_INTERVAL_MS = 4000;
 Store.CHANNELS_PER_OWNER = 10;
 Store.CHANNEL_ADMINS_MAX = 5;
 Store.CHANNEL_POSTS_MAX = 5000;
@@ -2249,7 +2415,7 @@ Store.WEBHOOK_EVENTS = [
   'call:incoming', 'call:ended', 'call:state',
   'status:new', 'status:viewed', 'status:deleted',
   'chatlock:update',
-  'conversation:updated', 'message:expired',
+  'conversation:updated', 'message:expired', 'location:update',
   'ping',
 ];
 Store.NOISY_EVENTS = ['typing', 'presence'];

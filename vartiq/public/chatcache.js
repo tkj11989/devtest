@@ -19,6 +19,12 @@
     delete c.undecryptable;
     delete c.encrypted;
     if (c.e2ee && !c.deleted) c.text = '';
+    // Decrypted positions are never kept. A live share's position is not kept at all (it changes, and ends).
+    delete c.loc;
+    if (c.live) {
+      delete c.e2ee;
+      delete c.location;
+    }
     return c;
   }
 

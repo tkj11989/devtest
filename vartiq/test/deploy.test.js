@@ -67,3 +67,23 @@ test('with a TURN server configured, each person gets short-lived credentials (n
   assert.strictEqual(turn.credential, crypto.createHmac('sha1', 'a-long-shared-secret').update(turn.username).digest('base64'), 'coturn can check it with the same secret');
   assert.deepStrictEqual(iceServers.find((s) => !s.credential).urls, ['stun:turn.example.com:3478'], 'your own STUN as well, without ?transport=');
 });
+
+test('pages declare which browser features they use (location, microphone, camera) and the service worker is never cached', async (t) => {
+  const store = new Store({ file: null });
+  const app = createApp({ store });
+  await new Promise((r) => app.server.listen(0, r));
+  t.after(() => { app.io.close(); app.server.close(); });
+  const base = `http://localhost:${app.server.address().port}`;
+  const page = await fetch(`${base}/`);
+  const policy = page.headers.get('permissions-policy');
+  assert.match(policy, /geolocation=\(self\)/);
+  assert.match(policy, /microphone=\(self\)/);
+  assert.match(policy, /camera=\(self\)/);
+  assert.match(policy, /usb=\(\)/);
+  const sw = await fetch(`${base}/sw.js`);
+  assert.strictEqual(sw.status, 200);
+  assert.match(sw.headers.get('content-type'), /javascript/);
+  assert.strictEqual(sw.headers.get('cache-control'), 'no-cache');
+  assert.strictEqual(sw.headers.get('service-worker-allowed'), '/');
+  assert.match(await sw.text(), /addEventListener\('push'/);
+});

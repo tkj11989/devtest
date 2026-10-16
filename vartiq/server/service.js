@@ -33,7 +33,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, accountEraseDelayMs = 60 * 60 * 1000 }) {
+function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, accountEraseDelayMs = 60 * 60 * 1000 }) {
   const userRoom = (u) => `user:${u}`;
 
   /** A feature that sends data to an outside service only works once the person has agreed to that (code `consent_<id>`). */
@@ -109,6 +109,11 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       if (hiddenFrom(username, m.convId, lockKey)) return null;
       return isUnlocked(username, m.convId, { lockKey }) ? payload : { message: redactMessage(m) };
     }
+    if (event === 'location:update') {
+      // A moving position is content: only for chats that are open in this app session (a locked chat loads fresh when unlocked).
+      const id = payload.convId;
+      return hiddenFrom(username, id, lockKey) || !isUnlocked(username, id, { lockKey }) ? null : payload;
+    }
     if (event === 'conversation:new' || event === 'conversation:updated') {
       if (hiddenFrom(username, payload.conversation.id, lockKey)) return null;
       return { ...payload, conversation: lockView(username, payload.conversation, lockKey) };
@@ -117,7 +122,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
   };
   // Events that only name a chat (no content): dropped for closed hidden chats.
   const CONV_EVENTS = new Set(['typing', 'message:status', 'message:deleted', 'message:expired', 'message:starred']);
-  const LOCK_SENSITIVE = new Set(['message:new', 'conversation:new', 'conversation:updated', ...CONV_EVENTS]);
+  const LOCK_SENSITIVE = new Set(['message:new', 'location:update', 'conversation:new', 'conversation:updated', ...CONV_EVENTS]);
 
   /**
    * Prove it is you: the secret code, or a fingerprint/face check from an enrolled device
@@ -287,6 +292,51 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     for (const m of conv.members) notify(m, event, payload);
   };
 
+  // ---------- location sharing ----------
+
+  /** A position from an app that does not encrypt: checked and rounded to about 10 cm. */
+  const checkLocation = (l) => {
+    const bad = () => new ApiError(400, 'invalid_request', 'location needs lat (-90 to 90), lon (-180 to 180) and optionally acc (metres)');
+    const lat = Number(l?.lat);
+    const lon = Number(l?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw bad();
+    const out = { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 };
+    if (l.acc !== undefined && l.acc !== null) {
+      const acc = Number(l.acc);
+      if (!(acc >= 0 && acc <= 1e6)) throw bad();
+      out.acc = Math.round(acc);
+    }
+    return out;
+  };
+
+  /** Tell everyone in the chat about a live-location message (new position, or the share ended). */
+  const sendLive = (conv, message) => {
+    for (const m of conv.members) {
+      if (Store.visibleTo(message, m)) notify(m, 'location:update', { convId: conv.id, message: store.viewFor(message, m) });
+    }
+  };
+
+  /** End a live share and tell the chat. */
+  const liveEnded = (conv, id) => {
+    const r = store.endLiveLocation(id);
+    if (r) sendLive(conv, r.message);
+  };
+
+  /** One live share per person per chat: starting another ends the earlier one. */
+  const endLiveShares = (me, convId) => {
+    const conv = store.getConversation(convId);
+    for (const id of store.liveIn(me, convId)) liveEnded(conv, id);
+  };
+
+  /** Live shares whose time is up end by themselves, and the position is erased. */
+  const endDueLocations = () => {
+    for (const id of store.liveDue()) {
+      const r = store.endLiveLocation(id);
+      const conv = r && store.getConversation(r.convId);
+      if (conv) sendLive(conv, r.message);
+    }
+  };
+
   /** `username` as `viewer` sees them: blocking (either way) hides online status and last seen. */
   const userView = (username, viewer) => ({
     ...store.publicUserFor(username, viewer),
@@ -309,6 +359,8 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     }
     store._save();
     for (const m of recipients) notify(m, 'message:new', { message: store.viewFor(msg, m) });
+    // Anyone not connected gets a notification on their devices (if they turned that on): who and what kind, never the text.
+    if (push) for (const m of recipients) if (m !== msg.from) push.message(m, conv, msg);
     return store.viewFor(msg, msg.from);
   };
 
@@ -946,6 +998,98 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       }
     },
 
+
+    // ----- push notifications -----
+
+    /** What the app needs to turn notifications on, and the current state. */
+    pushConfig(me) {
+      return {
+        enabled: !!push && push.enabled(),
+        publicKey: push && push.enabled() ? push.publicKey() : null,
+        devices: store.pushSubs(me).length,
+        preferences: store.pushPrefs(me),
+      };
+    },
+
+    /** Save this browser's push subscription (the person allowed notifications). */
+    pushSubscribe(me, { subscription, userAgent }) {
+      if (!push) throw new ApiError(503, 'unavailable', 'Notifications are not available on this server');
+      try {
+        const devices = push.subscribe(me, subscription, userAgent);
+        return { devices, preferences: store.pushPrefs(me) };
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+    },
+
+    pushUnsubscribe(me, { endpoint }) {
+      store.removePushSub(me, String(endpoint || ''));
+      return { devices: store.pushSubs(me).length };
+    },
+
+    /** Choose what to be notified about: `messages`, `calls`, and `preview` (show the sender's name). */
+    pushSettings(me, patch) {
+      try {
+        return { preferences: store.setPushPrefs(me, patch || {}) };
+      } catch (err) {
+        throw new ApiError(err.status || 400, 'invalid_request', err.message);
+      }
+    },
+
+    /** Send a test notification to my devices. */
+    async pushTest(me) {
+      if (!push) throw new ApiError(503, 'unavailable', 'Notifications are not available on this server');
+      const sent = await push.test(me);
+      if (!sent) throw new ApiError(409, 'no_devices', 'No device is subscribed. Turn notifications on first.');
+      return { sent };
+    },
+
+    // ----- location sharing -----
+
+    /**
+     * Share where I am: once (`live` 0), or live for 15 minutes, 1 hour or 8 hours (`live` in seconds). In an encrypted
+     * chat the position travels inside `e2ee`; otherwise send `location: { lat, lon, acc }`.
+     */
+    sendLocation(me, { convId, live, clientId, e2ee, location }, ctx) {
+      const conv = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      live = Number(live) || 0;
+      if (live && !Store.LIVE_DURATIONS.includes(live)) throw new ApiError(400, 'invalid_request', `live must be 0 (share once) or one of ${Store.LIVE_DURATIONS.join(', ')} seconds`);
+      const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
+      const place = { live, ...(env ? {} : { location: checkLocation(location) }) };
+      const dup = store.findByClientId(convId, me, clientId);
+      if (dup) return { message: store.viewFor(dup, me) };
+      if (live) endLiveShares(me, convId); // one live share per chat: a new one replaces the old
+      return { message: sendMessage(me, convId, env ? '' : 'Location', { clientId, e2ee: env, place }) };
+    },
+
+    /** Move a running live share to my new position (at most every few seconds; stops by itself when time is up). */
+    updateLocation(me, { id, e2ee, location }, ctx) {
+      const found = store.findLive(String(id || ''));
+      if (!found) throw new ApiError(404, 'not_found', 'This live location is not being shared');
+      const conv = member(me, found.convId);
+      requireUnlocked(me, found.convId, ctx);
+      const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
+      const place = env ? { e2ee: env } : { location: checkLocation(location) };
+      try {
+        const { convId, message } = store.updateLiveLocation(me, String(id), place);
+        sendLive(conv, message);
+        return { updatedAt: message.live.updatedAt, until: message.live.until };
+      } catch (err) {
+        if (err.code === 'live_ended') liveEnded(conv, String(id));
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+    },
+
+    /** Stop sharing now: the position is erased and the message shows "Live location ended". */
+    stopLocation(me, { id }) {
+      const found = store.findLive(String(id || ''));
+      if (!found || found.message.from !== me) throw new ApiError(404, 'not_found', 'This live location is not being shared');
+      const conv = member(me, found.convId);
+      liveEnded(conv, String(id));
+      return { ended: true };
+    },
+
     markRead(me, { convId }, ctx) {
       member(me, convId);
       requireUnlocked(me, convId, ctx);
@@ -1256,6 +1400,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
 
   /** Delete messages whose timer ran out, and tell everyone in those chats. */
   const pruneExpired = () => {
+    endDueLocations();
     for (const { convId, ids } of store.pruneMessages()) {
       const conv = store.getConversation(convId);
       if (conv) notifyMembers(conv, 'message:expired', { convId, ids });
@@ -1306,6 +1451,8 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     catalogue: 'catalogue', saveProduct: 'catalogue', deleteProduct: 'catalogue', setProductImage: 'catalogue', removeProductImage: 'catalogue', setCatalogueCurrency: 'catalogue',
     subscriptionCheckout: 'premium',
     kycStart: 'verification',
+    pushSubscribe: 'push', pushTest: 'push',
+    sendLocation: 'location', updateLocation: 'location',
   };
   const assertFeature = (id) => {
     if (!store.featureOn(id)) throw new ApiError(403, 'feature_disabled', `${featureLabel[id] || id} is turned off by the administrator`);

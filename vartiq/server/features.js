@@ -11,6 +11,8 @@ const FEATURES = [
   { id: 'groups', group: 'Messaging', label: 'Group chats', description: 'Creating new group chats.' },
   { id: 'voiceMessages', group: 'Messaging', label: 'Voice messages', description: 'Recording and sending voice messages.' },
   { id: 'disappearing', group: 'Messaging', label: 'Disappearing messages', description: 'Setting auto-delete timers on chats.' },
+  { id: 'push', group: 'Messaging', label: 'Push notifications', description: 'Notifications on people\'s devices for new messages and calls when the app is closed. Off: no notifications are sent and nobody can turn them on (turning them off always works).' },
+  { id: 'location', group: 'Messaging', label: 'Location sharing', description: 'Sharing a location, once or live, in a chat. Off: the buttons are hidden and live updates are refused (stopping a share always works).' },
   { id: 'calls', group: 'Messaging', label: 'Voice & video calls', description: 'Starting and joining calls.' },
   { id: 'callRecording', group: 'Messaging', label: 'Call recording', description: 'Asking to record a call. Recording only starts when everyone in the call agrees, and is saved on the requester\'s own device. Off: the Record button is hidden and requests are refused (stopping always works).' },
   { id: 'appearance', group: 'Social', label: 'Personalisation', description: 'Changing the colour theme, app icon and avatar shape (Premium options). Off: everyone sees the default look.' },

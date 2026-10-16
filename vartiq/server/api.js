@@ -356,6 +356,26 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   }, req.ctx)));
   router.post('/chat-lock/clear', ...authed, json, run((req) => actions.clearChatLocks(req.user, proof(req))));
 
+  // ---------- push notifications ----------
+
+  router.get('/push', ...authed, run((req) => actions.pushConfig(req.user)));
+  router.put('/push/subscription', ...authed, json, run((req) => actions.pushSubscribe(req.user, { subscription: req.body?.subscription, userAgent: req.body?.userAgent || req.get('user-agent') })));
+  router.post('/push/unsubscribe', ...authed, json, run((req) => actions.pushUnsubscribe(req.user, { endpoint: req.body?.endpoint })));
+  router.patch('/push/settings', ...authed, json, run((req) => actions.pushSettings(req.user, req.body || {})));
+  router.post('/push/test', ...authed, run((req) => actions.pushTest(req.user)));
+
+  // ---------- location sharing ----------
+
+  router.post('/conversations/:id/location', ...authed, json, run((req) => actions.sendLocation(req.user, {
+    convId: p(req, 'id'),
+    live: req.body?.live,
+    location: req.body?.location,
+    e2ee: req.body?.e2ee,
+    clientId: idempotency(req),
+  }, req.ctx), 201));
+  router.put('/live-locations/:id', ...authed, json, run((req) => actions.updateLocation(req.user, { id: p(req, 'id'), location: req.body?.location, e2ee: req.body?.e2ee }, req.ctx)));
+  router.delete('/live-locations/:id', ...authed, run((req) => actions.stopLocation(req.user, { id: p(req, 'id') })));
+
   // ---------- end-to-end encryption ----------
 
   router.get('/e2ee/devices', ...authed, run((req) => actions.e2eeDevices(req.user)));

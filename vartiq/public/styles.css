@@ -1397,3 +1397,21 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .consent-toggle input[type=checkbox] { width: 20px; min-width: 20px; height: 20px; flex: 0 0 20px; padding: 0; accent-color: var(--primary); margin-top: 2px; }
 .consent-toggle span { flex: 1; min-width: 0; font-size: 14px; }
 .consent-links a, .legal-links a, .card-lite a, .gate-card a { color: var(--primary-text); }
+
+/* ---------- shared locations ---------- */
+.msg.place { min-width: 230px; }
+.place-card { display: grid; gap: 4px; white-space: normal; }
+.place-card .place-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.place-card .place-title svg { width: 20px; height: 20px; fill: var(--primary-text); flex: none; }
+.place-card .place-live { color: var(--accent-text); font-size: 13px; }
+.place-card .place-coords { color: var(--muted); font-size: 13px; }
+.place-card .place-open { color: var(--primary-text); font-weight: 600; width: fit-content; }
+.place-card .place-stop { width: fit-content; background: none; border: 1px solid var(--danger); color: var(--danger); border-radius: 16px; padding: 4px 12px; cursor: pointer; font: inherit; }
+.msg.place.live-on .place-title svg { fill: var(--accent); animation: place-pulse 1.8s ease-in-out infinite; }
+@keyframes place-pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .msg.place.live-on .place-title svg { animation: none; } }
+.live-banner { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--accent-soft); color: var(--accent-text); font-size: 14px; border-bottom: 1px solid var(--border); }
+.live-banner svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
+.live-banner span { flex: 1; min-width: 0; }
+.live-banner button { color: var(--danger); font-weight: 600; }
+.live-banner.hidden { display: none; }

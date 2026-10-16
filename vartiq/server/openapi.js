@@ -116,12 +116,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       keyId: { type: 'string', description: 'short fingerprint of the key' },
       createdAt: { type: 'integer' },
     }, ['id', 'name', 'publicKey', 'keyId']),
+    PushPreferences: obj({ messages: { type: 'boolean' }, calls: { type: 'boolean' }, preview: { type: 'boolean', description: 'show the sender\'s name' } }),
     Message: obj({
       id: { type: 'string' },
       e2ee: { oneOf: [{ $ref: '#/components/schemas/Envelope' }], description: 'end-to-end encrypted message: `text` is absent and the content is in this envelope. Messages without it (REST API, business auto replies, older messages) are not end-to-end encrypted.' },
       convId: { type: 'string' },
       from: { type: 'string', description: 'username of the sender' },
-      type: { type: 'string', enum: ['text', 'voice', 'call', 'system'], description: 'absent for text messages; `system` = a notice such as a timer change' },
+      type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location'], description: 'absent for text messages; `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
       expiresAt: { type: 'integer', description: 'disappearing messages: when it will be deleted (ms since epoch)' },
       auto: { type: 'string', enum: ['greeting', 'away'], description: "a business's automatic reply" },
       system: obj({ event: { const: 'disappearing' }, seconds: { type: ['integer', 'null'] } }),
@@ -133,6 +134,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       masked: { type: 'boolean', description: 'recipients should hide the text until tapped' },
       starred: { type: 'boolean', description: 'starred by you' },
       deleted: { type: 'boolean' },
+      location: obj({ lat: { type: 'number' }, lon: { type: 'number' }, acc: { type: 'integer', description: 'accuracy in metres' } }, ['lat', 'lon']),
+      live: obj({ startedAt: { type: 'integer' }, until: { type: 'integer', description: 'when the share stops by itself' }, updatedAt: { type: 'integer' }, endedAt: { type: 'integer', description: 'set when the share has ended; the position is then erased' } }, ['startedAt', 'until']),
       voice: obj({ mediaId: { type: 'string' }, duration: { type: 'integer', description: 'seconds' }, mime: { type: 'string' } }),
       call: obj({
         kind: { type: 'string', enum: ['audio', 'video'] },
@@ -281,7 +284,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -342,7 +345,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
-          consent: { terms: true, version: '2026-10-15' },
+          consent: { terms: true, version: '2026-10-16' },
         }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session'), ...errors(400, 409, 429) },
       }),
@@ -766,6 +769,52 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
       }),
     },
+    '/conversations/{id}/location': {
+      post: op(T.msg, 'Share a location (once or live)', {
+        description: 'Share where you are: once (`live` 0 or absent), or **live** for 900 (15 min), 3600 (1 h) or 28800 (8 h) seconds. In an end-to-end encrypted chat send the position inside an `e2ee` envelope (payload `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`); otherwise send `location`. A live share is moved with `PUT /live-locations/{id}` (at most every 4 seconds), ends by itself at `live.until` or with `DELETE /live-locations/{id}`, and the position is then erased from the message. One live share per person per chat: a new one ends the earlier one. No trail is kept: each update replaces the previous position.',
+        params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
+        body: jsonBody(obj({ live: { type: 'integer', enum: [0, 900, 3600, 28800] }, location: obj({ lat: { type: 'number' }, lon: { type: 'number' }, acc: { type: 'number' } }, ['lat', 'lon']), e2ee: ref('Envelope') }), { live: 3600, location: { lat: 12.9716, lon: 77.5946, acc: 20 } }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
+      }),
+    },
+    '/live-locations/{id}': {
+      put: op(T.msg, 'Update my live location', {
+        description: '`id` is the message id returned when the share started. Send the new `location` (or a new `e2ee` envelope). Answers `429` if sent more often than every 4 seconds and `409 live_ended` once the time is up.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ location: obj({ lat: { type: 'number' }, lon: { type: 'number' }, acc: { type: 'number' } }, ['lat', 'lon']), e2ee: ref('Envelope') }), { location: { lat: 12.9718, lon: 77.595, acc: 18 } }),
+        responses: { 200: ok(obj({ updatedAt: { type: 'integer' }, until: { type: 'integer' } })), ...errors(400, 401, 403, 404, 409, 429) },
+      }),
+      delete: op(T.msg, 'Stop sharing my live location', { description: 'The position is erased and the message shows that the share ended.', params: [idParam('id')], responses: { 200: ok(obj({ ended: { type: 'boolean' } })), ...errors(401, 404) } }),
+    },
+    '/push': {
+      get: op(T.push, 'Notification settings and the key to subscribe with', {
+        description: 'Browsers: ask permission (from a button tap), subscribe with `applicationServerKey` = `publicKey`, then `PUT /push/subscription`. `enabled` is false when the administrator turned notifications off.',
+        responses: { 200: ok(obj({ enabled: { type: 'boolean' }, publicKey: { type: ['string', 'null'] }, devices: { type: 'integer' }, preferences: ref('PushPreferences') })), ...errors(401) },
+      }),
+    },
+    '/push/subscription': {
+      put: op(T.push, 'Save this device\'s push subscription', {
+        description: 'Send the object from `PushManager.subscribe()` (`toJSON()`). Only addresses of the browser makers\' push services (Google, Mozilla, Apple, Microsoft) are accepted. Up to 8 devices per account.',
+        body: jsonBody(obj({ subscription: obj({ endpoint: { type: 'string' }, keys: obj({ p256dh: { type: 'string' }, auth: { type: 'string' } }, ['p256dh', 'auth']) }, ['endpoint', 'keys']), userAgent: { type: 'string' } }, ['subscription'])),
+        responses: { 200: ok(obj({ devices: { type: 'integer' }, preferences: ref('PushPreferences') })), ...errors(400, 401, 403) },
+      }),
+    },
+    '/push/unsubscribe': {
+      post: op(T.push, 'Forget a device\'s push subscription', {
+        body: jsonBody(obj({ endpoint: { type: 'string' } }, ['endpoint'])),
+        responses: { 200: ok(obj({ devices: { type: 'integer' } })), ...errors(401) },
+      }),
+    },
+    '/push/settings': {
+      patch: op(T.push, 'Choose what to be notified about', {
+        description: '`messages`, `calls`, and `preview` (show the sender\'s name; off: just "New message"). Chats that are locked or hidden never show a name. Notifications never contain message text.',
+        body: jsonBody(ref('PushPreferences')),
+        responses: { 200: ok(obj({ preferences: ref('PushPreferences') })), ...errors(400, 401) },
+      }),
+    },
+    '/push/test': {
+      post: op(T.push, 'Send a test notification to my devices', { responses: { 200: ok(obj({ sent: { type: 'integer' } })), ...errors(401, 403, 409) } }),
+    },
     '/conversations/{id}/read': { post: op(T.msg, 'Mark everything in the chat as read', { params: [CONV_ID], responses: { 200: ok(obj({ updated: { type: 'integer' } })), ...errors(401, 404) } }) },
     '/conversations/{id}/typing': {
       post: op(T.msg, 'Show "typing…" / "recording audio…" to the others', {
@@ -1094,6 +1143,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /conversations/{id}/hide': 'hideChat',
     'delete /conversations/{id}/hide': 'unhideChat',
     'put /hidden-contacts/{username}': 'hideContactChat',
+    'post /conversations/{id}/location': 'shareLocation',
+    'put /live-locations/{id}': 'updateLiveLocation',
+    'delete /live-locations/{id}': 'stopLiveLocation',
+    'get /push': 'getPushSettings',
+    'put /push/subscription': 'savePushSubscription',
+    'post /push/unsubscribe': 'removePushSubscription',
+    'patch /push/settings': 'updatePushSettings',
+    'post /push/test': 'sendTestPush',
     'get /e2ee/devices': 'listDevices',
     'post /e2ee/devices': 'registerDevice',
     'delete /e2ee/devices/{id}': 'removeDevice',
@@ -1142,6 +1199,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       '',
       'Not covered: messages sent by the REST API without an envelope, business auto replies, status updates, names, times and who talks to whom. Calls are encrypted peer to peer by WebRTC.',
     ].join('\n'),
+    [T.push]: 'Notifications on a person\'s devices for new messages and calls while the app is closed (Web Push). They carry no message text.',
     [T.chan]: 'Public one-to-many channels: owners and admins post, anyone can read and follow (not end-to-end encrypted)',
     [T.i18n]: 'Show received messages of a chat in the language you choose',
     [T.hide]: 'Hide chats from the chat list, opened with the secret code or fingerprint/face lock',
