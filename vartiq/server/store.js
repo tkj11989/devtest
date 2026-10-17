@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const guardianRules = require('./guardian');
 const BusinessHours = require('../public/business-hours.js');
 const { DEFAULT_SETTINGS, applySettings } = require('./features');
 
@@ -178,6 +179,8 @@ class Store {
         hiddenChats: u.hiddenChats || [],
         chatLockSet: !!u.chatLock,
         devices: (u.devices || []).map((d) => ({ id: d.id, name: d.name, publicKey: d.publicKey, createdAt: d.createdAt || null })),
+        birthDate: u.birthDate || null,
+        parentOrGuardian: u.guardian ? { name: u.guardian.name || null, relationship: u.guardian.relationship || null, mobile: u.guardian.phone || null, email: u.guardian.email || null, agreedAt: u.guardian.consentedAt || null, controls: u.guardian.releasedAt ? null : this.guardianControls(username), endedAt: u.guardian.releasedAt || null } : null,
         pushNotifications: { preferences: this.pushPrefs(username), devices: (u.pushSubs || []).map((x) => ({ id: x.id, createdAt: x.createdAt, device: x.ua || null })) },
         passkeys: (u.passkeys || []).map((p) => ({ id: p.id, name: p.name || null, createdAt: p.createdAt || null })),
         suspended: u.suspended ? { at: u.suspended.at, reason: u.suspended.reason } : null,
@@ -214,6 +217,10 @@ class Store {
     delete u.phone;
     delete u.email;
     delete u.pushSubs; // no more notifications to this person's devices
+    if (u.guardian?.tokenHash) {
+      this._guardianIndex().delete(u.guardian.tokenHash);
+      delete u.guardian.tokenHash; // the guardian's link stops working
+    }
     this._contactIdx = null;
     this.dropSessionsOf(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
@@ -325,9 +332,200 @@ class Store {
       ...(u.consent ? { consent: u.consent } : {}),
       ...(u.subscription ? { subscription: u.subscription } : {}),
       ...(u.verifiedAt ? { verifiedAt: u.verifiedAt } : {}),
+      ...(u.guardian?.consentedAt ? { guardianConsent: { at: u.guardian.consentedAt, version: u.guardian.consentVersion || null } } : {}),
     };
     this._contactIdx = null;
     this._save();
+  }
+
+  // ---------- children and their parents or guardians ----------
+  //
+  // The date of birth is kept to know when the controls end (at 18). A child's account has a `guardian` record: who
+  // they are, how to reach them, a hash of the private link we sent, whether they agreed, and what they allow. See guardian.js.
+
+  /** Age in years today, or null when no date of birth is on file (accounts from before ages were asked count as adults). */
+  ageOf(username, now = Date.now()) {
+    return guardianRules.ageOn(this.data.users[username]?.birthDate, now);
+  }
+
+  isMinor(username, now = Date.now()) {
+    const age = this.ageOf(username, now);
+    return age !== null && age < guardianRules.ADULT_AGE;
+  }
+
+  /** `pending` (waiting for the guardian), `active`, or null (an adult, or no guardian). */
+  guardianState(username, now = Date.now()) {
+    const g = this.data.users[username]?.guardian;
+    return g && this.isMinor(username, now) ? g.state : null;
+  }
+
+  /** The guardian's choices with defaults filled in (what a child account may do). */
+  guardianControls(username) {
+    return { ...guardianRules.defaultControls(), ...(this.data.users[username]?.guardian?.controls || {}) };
+  }
+
+  /**
+   * Is `control` ('calls', 'location', 'discoverable', 'channels') switched off for this account by its guardian?
+   * While the guardian has not agreed yet, everything is.
+   */
+  minorBlocks(username, control, now = Date.now()) {
+    const state = this.guardianState(username, now);
+    if (!state) return false;
+    if (state === 'pending') return true;
+    return this.guardianControls(username)[control] === false;
+  }
+
+  /** Does a chat between these two already exist? (People a child already talks to are not "new people".) */
+  hasDirect(a, b) {
+    return !!this.data.conversations[Store.directId(a, b)];
+  }
+
+  /** May `from` start a new chat or group with `to`? Not when `to` is a child whose guardian keeps them from new people. */
+  canStartChat(from, to) {
+    return !(this.minorBlocks(to, 'discoverable') && !this.hasDirect(from, to));
+  }
+
+  static _guardianTokenKey(token) {
+    return crypto.createHash('sha256').update(String(token)).digest('hex');
+  }
+
+  _guardianIndex() {
+    if (!this._guardianIdx) {
+      this._guardianIdx = new Map();
+      for (const u of Object.values(this.data.users)) if (u.guardian?.tokenHash) this._guardianIdx.set(u.guardian.tokenHash, u.username);
+    }
+    return this._guardianIdx;
+  }
+
+  /** Put a new private link on a guardian record; returns the token (shown once: only its hash is kept). */
+  _newGuardianToken(u) {
+    const token = crypto.randomBytes(24).toString('base64url');
+    if (u.guardian.tokenHash) this._guardianIndex().delete(u.guardian.tokenHash);
+    u.guardian.tokenHash = Store._guardianTokenKey(token);
+    this._guardianIndex().set(u.guardian.tokenHash, u.username);
+    return token;
+  }
+
+  /** Check and normalise guardian details from a sign-up or an edit. Needs a name, a relationship and a phone or an email. */
+  static checkGuardian(g, { normalisePhone, normaliseEmail }) {
+    const bad = (m) => Object.assign(new Error(m), { status: 400, code: 'guardian_required' });
+    if (!g || typeof g !== 'object') throw bad("A parent or guardian's details are required for someone under 18");
+    const name = String(g.name || '').trim().slice(0, 60);
+    if (!name) throw bad("Enter your parent's or guardian's name");
+    const relationship = String(g.relationship || '').trim().toLowerCase();
+    if (!guardianRules.RELATIONSHIPS.some((r) => r.id === relationship)) throw bad('Choose how this person is related to you');
+    const out = { name, relationship };
+    try {
+      if (g.phone) out.phone = normalisePhone(g.phone);
+      if (g.email) out.email = normaliseEmail(g.email);
+    } catch (err) {
+      throw Object.assign(new Error(err.message), { status: 400, code: err.code || 'invalid_request' });
+    }
+    if (!out.phone && !out.email) throw bad("Enter your parent's or guardian's mobile number or email (at least one)");
+    return out;
+  }
+
+  /** Attach a guardian to a new child account (before it is returned to anyone); returns the private-link token. */
+  _attachGuardian(u, details) {
+    u.guardian = { ...details, state: 'pending', createdAt: Date.now(), controls: guardianRules.defaultControls() };
+    return this._newGuardianToken(u);
+  }
+
+  /** The child fixed a typo in the guardian's details, or asked for the link again: a new link, the old one stops working. */
+  renewGuardianLink(username, details) {
+    const u = this.data.users[username];
+    if (!u?.guardian || u.guardian.state !== 'pending' || !this.isMinor(username)) throw Object.assign(new Error('Nothing to resend'), { status: 409, code: 'conflict' });
+    if (details) {
+      const keep = { name: details.name, relationship: details.relationship };
+      u.guardian = { ...u.guardian, ...keep };
+      delete u.guardian.phone;
+      delete u.guardian.email;
+      if (details.phone) u.guardian.phone = details.phone;
+      if (details.email) u.guardian.email = details.email;
+    }
+    const token = this._newGuardianToken(u);
+    this._save();
+    return { token, guardian: u.guardian };
+  }
+
+  /** Who a guardian link belongs to (a child who is still under 18 and whose account is not closed), or null. */
+  findByGuardianToken(token) {
+    if (!token) return null;
+    const username = this._guardianIndex().get(Store._guardianTokenKey(token));
+    const u = username && this.data.users[username];
+    if (!u?.guardian || this.isClosed(username) || !this.isMinor(username)) return null;
+    return username;
+  }
+
+  /** What the guardian's page shows. */
+  guardianPage(username) {
+    const u = this.data.users[username];
+    const g = u.guardian;
+    return {
+      child: { username, displayName: u.displayName },
+      relationship: guardianRules.RELATIONSHIPS.find((r) => r.id === g.relationship)?.label.split(' ')[0].toLowerCase() || 'parent or guardian',
+      state: g.state,
+      consentedAt: g.consentedAt || null,
+      disabled: u.suspended?.by === 'guardian',
+      controls: this.guardianControls(username),
+      controlList: guardianRules.CONTROLS.map(({ id, label, help }) => ({ id, label, help })),
+    };
+  }
+
+  guardianConsent(username, version) {
+    const g = this.data.users[username].guardian;
+    if (g.state !== 'pending') return g;
+    g.state = 'active';
+    g.consentedAt = Date.now();
+    g.consentVersion = version;
+    this._save();
+    return g;
+  }
+
+  guardianSetControls(username, patch) {
+    const g = this.data.users[username].guardian;
+    const next = this.guardianControls(username);
+    for (const c of guardianRules.CONTROLS) {
+      if (patch[c.id] === undefined) continue;
+      if (typeof patch[c.id] !== 'boolean') throw Object.assign(new Error(`${c.id} must be true or false`), { status: 400, code: 'invalid_request' });
+      next[c.id] = patch[c.id];
+    }
+    g.controls = next;
+    this._save();
+    return next;
+  }
+
+  /** The guardian pauses the account: the child is signed out everywhere and cannot log in until it is enabled again. */
+  guardianDisable(username) {
+    const u = this.data.users[username];
+    if (!u.suspended) {
+      u.suspended = { at: Date.now(), reason: 'Disabled by your parent or guardian', by: 'guardian' };
+      this.dropSessionsOf(username);
+      this._save();
+    }
+  }
+
+  guardianEnable(username) {
+    const u = this.data.users[username];
+    if (u.suspended?.by === 'guardian') {
+      delete u.suspended;
+      this._save();
+    }
+  }
+
+  /** Children who turned 18: the controls end, the guardian's contact details and link are erased. Returns their usernames. */
+  releaseGuardians(now = Date.now()) {
+    const released = [];
+    for (const u of Object.values(this.data.users)) {
+      const g = u.guardian;
+      if (!g || g.releasedAt || u.deletion || u.deletedAt || this.isMinor(u.username, now)) continue;
+      if (g.tokenHash) this._guardianIndex().delete(g.tokenHash);
+      u.guardian = { state: g.state, relationship: g.relationship, createdAt: g.createdAt, ...(g.consentedAt ? { consentedAt: g.consentedAt, consentVersion: g.consentVersion } : {}), releasedAt: now };
+      if (u.suspended?.by === 'guardian') delete u.suspended;
+      released.push(u.username);
+    }
+    if (released.length) this._save();
+    return released;
   }
 
   // ---------- push notifications ----------
@@ -599,6 +797,8 @@ class Store {
     else if (filter === 'verified') list = list.filter((u) => u.verifiedAt);
     else if (filter === 'business') list = list.filter((u) => u.business);
     else if (filter === 'suspended') list = list.filter((u) => u.suspended);
+    else if (filter === 'children') list = list.filter((u) => this.isMinor(u.username));
+    else if (filter === 'awaiting-guardian') list = list.filter((u) => this.guardianState(u.username) === 'pending');
     list.sort((a, b) => (b.createdAt || b.deletedAt || 0) - (a.createdAt || a.deletedAt || 0));
     const total = list.length;
     pageSize = Math.max(1, Math.min(100, Number(pageSize) || 25));
@@ -627,6 +827,17 @@ class Store {
       disabledAt: u.disabledAt || u.deletion?.requestedAt || null,
       deleted: u.deletedAt || null,
       deletion: u.deletion ? { requestedAt: u.deletion.requestedAt, eraseAt: u.deletion.eraseAt } : null,
+      age: this.ageOf(username),
+      minor: this.isMinor(username),
+      guardian: u.guardian ? {
+        state: u.guardian.releasedAt ? 'ended (turned 18)' : u.guardian.state,
+        name: u.guardian.name || null,
+        relationship: u.guardian.relationship || null,
+        phone: u.guardian.phone || null,
+        email: u.guardian.email || null,
+        consentedAt: u.guardian.consentedAt || null,
+        controls: u.guardian.releasedAt ? null : this.guardianControls(username),
+      } : null,
       consent: u.consent ? { version: u.consent.version, at: u.consent.at, optional: Object.fromEntries(Object.entries(u.consent.optional || {}).map(([k, v]) => [k, v.granted])) } : null,
       chats: this._convsOf(username).length,
       channelsOwned: Object.values(this.data.channels).filter((c) => c.owner === username).length,
@@ -672,6 +883,8 @@ class Store {
         premium: users.filter((u) => this.isPremium(u.username)).length,
         business: users.filter((u) => u.business).length,
         suspended: users.filter((u) => u.suspended).length,
+        children: users.filter((u) => this.isMinor(u.username)).length,
+        awaitingGuardian: users.filter((u) => this.guardianState(u.username) === 'pending').length,
       },
       content: {
         chats: Object.keys(this.data.conversations).length,
@@ -725,7 +938,7 @@ class Store {
    * verified by OTP. There is no password: you log in with a code sent to the number.
    * `business` (optional) is the business profile, e.g. `{ category }`.
    */
-  registerVerified({ displayName, username, phone, email, business }) {
+  registerVerified({ displayName, username, phone, email, business, birthDate, guardian }) {
     displayName = String(displayName || '').trim().slice(0, 40);
     if (!displayName) throw new Error('Enter your name');
     if (!phone) throw new Error('A verified mobile number is required');
@@ -746,10 +959,14 @@ class Store {
       about: business ? 'Business account' : 'Hey there! I am using VartiQ.',
       phone,
       ...(email ? { email } : {}),
+      ...(birthDate ? { birthDate } : {}),
       lastSeen: now,
       createdAt: now,
     };
     this._contactIdx = null;
+    // Under 18: the guardian record goes in with the account, so there is never a child without one.
+    let guardianToken = null;
+    if (guardian) guardianToken = this._attachGuardian(this.data.users[username], guardian);
     if (business) {
       try {
         this.setBusiness(username, business);
@@ -760,7 +977,7 @@ class Store {
       }
     }
     this._save();
-    return this.createSession(username);
+    return { ...this.createSession(username), ...(guardianToken ? { guardianToken } : {}) };
   }
 
   /** "Anita's Café" -> "anitascafe", or "anitascafe4821" when taken. */
@@ -1827,6 +2044,7 @@ class Store {
     const phone = /^\+?\d{8,15}$/.test(digits) ? digits.replace(/^(?!\+)/, '+') : null;
     return Object.values(this.data.users)
       .filter((u) => u.username !== exclude && !u.deletedAt && !u.deletion)
+      .filter((u) => !u.guardian || this.canStartChat(exclude, u.username)) // a child kept from new people is not found by them
       .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q)
         || (u.business && u.business.category.toLowerCase().includes(q))
         || (phone && u.phone === phone))

@@ -154,7 +154,35 @@ function createOtpService({
 
   const consume = (requestId) => requests.delete(requestId);
 
-  return { request, verify, consume, stop: () => clearInterval(sweep), exposeCodes };
+  /**
+   * Send a message that is not a code (for example the private link to a child's parent). The same limits apply, so a
+   * number or address cannot be flooded: one per `resendMs` per purpose and `maxPerHour` of everything.
+   * Returns `{ sentTo }` (masked); with `exposeCodes` also `devText` (the whole message, for tests and development).
+   */
+  async function notify({ channel, to, purpose = 'guardian', text }) {
+    if (!['sms', 'email'].includes(channel)) throw new OtpError(400, 'invalid_request', 'channel must be "sms" or "email"');
+    const now = Date.now();
+    const key = `${channel}:${to}`;
+    const times = (sent.get(key) || []).filter((t) => t > now - 60 * 60 * 1000);
+    const last = lastSent.get(`${key}:${purpose}`);
+    if (last && now - last < resendMs) {
+      const wait = Math.ceil((resendMs - (now - last)) / 1000);
+      throw new OtpError(429, 'otp_too_soon', `Please wait ${wait} seconds before sending this again`, { retryAfter: wait });
+    }
+    if (times.length >= maxPerHour) throw new OtpError(429, 'otp_limit', 'Too many messages sent to this address. Try again later.', { retryAfter: Math.ceil((times[0] + 60 * 60 * 1000 - now) / 1000) });
+    try {
+      await deliver({ channel, to, code: '', purpose, text });
+    } catch (err) {
+      console.error(`Message to ${maskDestination(channel, to)} failed:`, err.message);
+      throw new OtpError(502, 'otp_delivery_failed', `Could not send the message by ${channel === 'sms' ? 'SMS' : 'email'}. Check the ${channel === 'sms' ? 'number' : 'address'} and try again shortly.`);
+    }
+    times.push(now);
+    sent.set(key, times);
+    lastSent.set(`${key}:${purpose}`, now);
+    return { sentTo: maskDestination(channel, to), ...(exposeCodes ? { devText: text } : {}) };
+  }
+
+  return { request, verify, consume, notify, stop: () => clearInterval(sweep), exposeCodes };
 }
 
 /** Development delivery: print the code on the server console. */

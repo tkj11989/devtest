@@ -121,6 +121,9 @@ const SOCKET_ACTIONS = {
   'translate:languages': 'translateLanguages',
   'translate:set': 'setTranslation',
   'translate:text': 'translateTexts',
+  'guardian:status': 'guardianStatus',
+  'guardian:resend': 'guardianResend',
+  'guardian:contact': 'guardianContact',
   'consent:status': 'consentStatus',
   'consent:accept': 'consentAccept',
   'consent:set': 'consentSet',
@@ -188,6 +191,8 @@ function createApp({
   translate: translateOptions = {},
   push: pushOptions = {},
   trustProxy = process.env.TRUST_PROXY,
+  publicUrl = process.env.PUBLIC_URL,
+  guardianSweepMs = 60 * 60 * 1000,
 } = {}) {
   const app = express();
   // Behind nginx or Cloudflare every request comes from the proxy: trust its forwarded address, or the sign-in rate limits
@@ -210,7 +215,7 @@ function createApp({
 
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
   const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
-  const auth = createAuth({ store, otp, assertSignupsOpen: () => service.assertFeature('registration') });
+  const auth = createAuth({ store, otp, publicUrl, minAge: () => store.getSettings().limits.minAge, assertSignupsOpen: () => service.assertFeature('registration') });
   const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
   const payments = createPayments({
     store,
@@ -231,7 +236,7 @@ function createApp({
     vapid: { file: dataDir ? path.join(dataDir, 'vapid.json') : undefined },
     ...pushOptions,
   });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, accountEraseDelayMs });
+  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl, accountEraseDelayMs });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -278,6 +283,11 @@ function createApp({
     const html = legal.documentHtml(req.params.doc, legal.details(store.getSettings()));
     if (!html) return res.status(404).send('Not found');
     return res.type('html').send(html);
+  });
+  // The parent or guardian's page: opened from the private link sent to them (no sign-in; the link is the key).
+  app.get('/guardian/:token', (req, res) => {
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
+    res.type('html').send(require('./guardian').pageHtml());
   });
   app.get('/api/docs', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'api-docs.html')));
   // Swagger UI is served from node_modules so the docs work without internet access.
@@ -326,6 +336,9 @@ function createApp({
   const subscriptionTimer = setInterval(() => service.expireSubscriptions(), subscriptionSweepMs);
   // Accounts people asked to delete: their data is erased within 24 hours (by default about an hour after the request).
   const deletionTimer = setInterval(() => { service.eraseDueAccounts(); }, deletionSweepMs);
+  // Children who turn 18 are released from their guardian's controls.
+  const guardianTimer = setInterval(() => { service.releaseGuardians(); }, guardianSweepMs);
+  guardianTimer.unref();
   subscriptionTimer.unref();
   deletionTimer.unref();
   expiryTimer.unref();
@@ -334,6 +347,7 @@ function createApp({
     clearInterval(expiryTimer);
     clearInterval(subscriptionTimer);
     clearInterval(deletionTimer);
+    clearInterval(guardianTimer);
     webhooks.stop();
     push.stop();
     otp.stop();
@@ -374,15 +388,23 @@ function createApp({
 
     // Until the current Terms and Privacy Notice are accepted, only the events needed to accept (or leave) get through.
     const CONSENT_EVENTS = new Set(['me', 'consent:status', 'consent:accept', 'consent:set', 'account:export', 'account:delete-code', 'account:delete']);
+    const GUARDIAN_EVENTS = new Set([...CONSENT_EVENTS, 'guardian:status', 'guardian:resend', 'guardian:contact']);
     socket.use(([event, ...args], next) => {
-      if (CONSENT_EVENTS.has(event) || store.consentUpToDate(me, legal.VERSION)) return next();
       const ack = args[args.length - 1];
-      if (typeof ack === 'function') ack({ ok: false, code: 'consent_required', error: 'Please accept the current Terms of Use and Privacy Notice to continue' });
-      return undefined;
+      if (!CONSENT_EVENTS.has(event) && !store.consentUpToDate(me, legal.VERSION)) {
+        if (typeof ack === 'function') ack({ ok: false, code: 'consent_required', error: 'Please accept the current Terms of Use and Privacy Notice to continue' });
+        return undefined;
+      }
+      // A child's account does nothing until the parent or guardian has agreed.
+      if (!GUARDIAN_EVENTS.has(event) && store.guardianState(me) === 'pending') {
+        if (typeof ack === 'function') ack({ ok: false, code: 'guardian_required', error: 'Your parent or guardian needs to approve your account first' });
+        return undefined;
+      }
+      return next();
     });
 
     calls.attach(socket);
-    const ctx = { lockKey: socket.data.lockKey };
+    const ctx = { lockKey: socket.data.lockKey, origin: `${socket.handshake.secure ? 'https' : 'http'}://${socket.handshake.headers.host}` };
     for (const [event, action] of Object.entries(SOCKET_ACTIONS)) {
       socket.on(event, handle((payload) => {
         service.assertAvailable();

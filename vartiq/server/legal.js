@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-16';
+const VERSION = '2026-10-17';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -100,6 +100,8 @@ function privacyNotice() {
         rows: [
           ['Mobile number', 'To create your account, send you login codes (OTP), let people who know your number find you, and keep your account secure', 'At sign-up and login'],
           ['Name, username, "about" line', 'To show who you are to the people you chat with', 'At sign-up and when you edit your profile'],
+          ['Date of birth', 'To apply our age rules, to know when a young person needs a parent or guardian, and to end the parent\'s controls when the person turns 18', 'At sign-up'],
+          ['For people under 18: the name, relationship, mobile number and/or email of a parent or guardian; whether and when they agreed; and what they allow (calls, location sharing, being found by new people, public channels)', 'To ask the parent or guardian for permission, to give them the controls, and to contact them about the account', 'At sign-up, and when the parent or guardian decides'],
           ['Email address (business accounts)', 'To verify a business account and contact it about its account', 'At business sign-up'],
           ['Business details you add: category, opening hours, address, website, greeting and away messages, product catalogue with prices', 'To show your business profile to people who view it (these are visible to them)', 'When you set up a business profile'],
           ['Messages: the text, the sender, the chat, the time, delivery and read status. Voice notes (audio)', 'To deliver your messages and show your chats on all your devices', 'When you send a message'],
@@ -151,6 +153,7 @@ function privacyNotice() {
         'A payment provider, only if you buy Premium. It handles your payment details; we receive a confirmation.',
         'The push services of browser makers (Google, Mozilla, Apple, Microsoft), only if you turn notifications on. Notifications pass through the push service of your browser. It can see that a notification was sent to your device and when, but a notification carries no message text.',
         'A map service, only if you tap "Open in map" on a location someone shared: your browser or map app opens with that position, and the map service you use can then see it. {brand} itself loads no maps.',
+        'A parent or guardian, if you are under 18: they see your name and username, can switch calls, location sharing, being found by new people and public channels on or off, and can disable or delete your account. They cannot read your messages, which are end-to-end encrypted.',
         'A translation provider, only if you turn translation on for a chat. The text of messages you ask to be translated is sent to it and handed back. {brand} does not store or log these texts.',
         'Authorities, when the law requires it or to protect people from harm, for example an order from a court or a government body.',
         'A buyer or successor, if our business is sold or merged. Your data would stay protected by this notice.',
@@ -173,6 +176,7 @@ function privacyNotice() {
           ['Status updates', '24 hours'],
           ['Notification settings of a device', 'Until you turn notifications off on that device, log out, or delete your account (and removed at once if the browser says the device is gone)'],
           ['A shared location', 'A location you share once is a message and is kept like one. A live location keeps only the latest position (no trail), and it is erased when the time you chose is up (at most 8 hours) or when you tap Stop sharing; the chat then shows "Live location ended"'],
+          ['A parent or guardian\'s details (for someone under 18)', 'Until the young person turns 18, when the contact details are erased (we keep only that a parent or guardian agreed, and when), or until the account is deleted'],
           ['Profile-view list', '90 days (only the last view date is kept), or until you switch the setting off'],
           ['Login codes (OTP)', 'A few minutes; kept only as a one-way hash'],
           ['Saved chats on your own device', 'Until you clear them or log out'],
@@ -219,7 +223,17 @@ function privacyNotice() {
       ],
     },
     {
-      title: '11. Changes to this notice',
+      title: '11. Children and young people',
+      p: [
+        '{brand} is for people aged 8 and over. We ask for your date of birth when you sign up, and we do not create accounts for younger children.',
+        'If you are 8 to 17 you must give the name and a mobile number or email of a parent or guardian. We send them a private link. Your account opens when they agree, and until then you cannot use it. We do this because a young person\'s parent or guardian should decide whether and how their child uses the service.',
+        'A parent or guardian can, with that link: agree or decline; switch calls, location sharing, being found by new people and public channels on or off; disable your account for a while; or delete it (section 7). By default a young person\'s account does not share location and cannot be found or started chats with by people they are not already chatting with. Parents and guardians cannot read messages.',
+        'We never show advertising to anyone, and we do not use children\'s data for tracking or profiling. At 18 the controls end and we erase the parent\'s or guardian\'s contact details.',
+        'If you are a parent or guardian and did not agree to this, or the person is not your child, open the link and choose to delete the account, or write to us (section 9).',
+      ],
+    },
+    {
+      title: '12. Changes to this notice',
       p: [
         'We will update this notice when our practices change. The version date is at the top. If a change is important, we will tell you in the app and ask you to accept again before you keep using it.',
       ],
@@ -238,6 +252,7 @@ function termsOfUse() {
     {
       title: '2. Who can use {brand}',
       ul: [
+        'You must be at least 8 years old. If you are under 18 you need the permission of a parent or guardian: you give their details when you sign up, we send them a private link, and your account opens when they agree. They can switch some features off (calls, location sharing, being found by new people, public channels), disable the account, or delete it. At 18 these controls end.',
         'You must give a mobile number that you own and can receive codes on. A business account also needs a working email address and a correct business category.',
         'One person, one account per mobile number. You are responsible for what happens under your account, so keep your login codes, secret codes and devices safe, and tell us if you think someone else has access.',
       ],

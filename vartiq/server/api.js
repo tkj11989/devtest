@@ -88,7 +88,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     req.user = username;
     req.credential = token;
     // Chat lock: unlocks last for this credential (optionally narrowed with X-App-Session).
-    req.ctx = { lockKey: service.lockKeyFor(username, token, req.get('x-app-session')) };
+    req.ctx = { lockKey: service.lockKeyFor(username, token, req.get('x-app-session')), origin: `${req.protocol}://${req.get('host')}` };
     next();
   };
   const authed = [auth, limiter((req) => `u:${req.credential}`, limits.max)];
@@ -138,7 +138,19 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     }
   };
   router.post('/auth/otp', authLimit, open, json, run((req) => accounts.requestCode(req.body || {})));
-  router.post('/auth/register', authLimit, open, json, run((req) => accounts.register(req.body || {}), 201));
+  router.post('/auth/register', authLimit, open, json, run((req) => accounts.register(req.body || {}, { origin: `${req.protocol}://${req.get('host')}` }), 201));
+
+  // ---------- parent or guardian ----------
+
+  // The guardian's page works with the private link alone (no account). A wrong link is a plain 404, and tries are limited.
+  const portal = service.guardianPortal;
+  const guardianLimit = limiter((req) => `g:${req.ip}`, 60);
+  router.get('/guardian/:token', guardianLimit, run((req) => portal.view(p(req, 'token'))));
+  router.post('/guardian/:token/consent', guardianLimit, json, run((req) => portal.consent(p(req, 'token'), req.body || {})));
+  router.put('/guardian/:token/controls', guardianLimit, json, run((req) => portal.controls(p(req, 'token'), req.body || {})));
+  router.post('/guardian/:token/disable', guardianLimit, run((req) => portal.disable(p(req, 'token'))));
+  router.post('/guardian/:token/enable', guardianLimit, run((req) => portal.enable(p(req, 'token'))));
+  router.post('/guardian/:token/delete', guardianLimit, json, run((req) => portal.remove(p(req, 'token'), req.body || {})));
   router.post('/auth/login', authLimit, open, json, run((req) => accounts.login(req.body || {})));
   router.post('/auth/logout', ...authed, run((req) => {
     store.logout(req.credential);
@@ -355,6 +367,12 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     biometric: req.body?.biometric,
   }, req.ctx)));
   router.post('/chat-lock/clear', ...authed, json, run((req) => actions.clearChatLocks(req.user, proof(req))));
+
+  // ---------- my parent or guardian (children) ----------
+
+  router.get('/me/guardian', ...authed, run((req) => actions.guardianStatus(req.user)));
+  router.post('/me/guardian/resend', ...authed, run((req) => actions.guardianResend(req.user, {}, req.ctx)));
+  router.put('/me/guardian', ...authed, json, run((req) => actions.guardianContact(req.user, req.body || {}, req.ctx)));
 
   // ---------- push notifications ----------
 

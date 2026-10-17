@@ -142,7 +142,8 @@
       !legal?.configured && h('div', { class: 'card warn-card' }, h('strong', {}, 'Legal details are missing. '), 'The Terms of Use and Privacy Notice still show placeholders such as [Company legal name]. Fill in the company details and Grievance Officer before launch. ', h('a', { href: '#settings' }, 'Open Settings → Legal')),
       h('div', { class: 'grid' },
         tile('Users', s.users.total), tile('Online now', s.users.online), tile('New today', s.users.newToday), tile('New in 7 days', s.users.new7d),
-        tile('Premium', s.users.premium), tile('Verified', s.users.verified), tile('Business', s.users.business), tile('Suspended', s.users.suspended, true)),
+        tile('Premium', s.users.premium), tile('Verified', s.users.verified), tile('Business', s.users.business), tile('Under 18', s.users.children), tile('Suspended', s.users.suspended, true)),
+      s.users.awaitingGuardian ? h('div', { class: 'grid' }, tile('Waiting for a parent or guardian', s.users.awaitingGuardian, true)) : null,
       s.users.deleting ? h('div', { class: 'grid' }, tile('Disabled, data waiting to be erased', s.users.deleting, true), tile('Overdue (over 24 hours)', s.users.deletionOverdue, true)) : null,
       h('p'),
       h('div', { class: 'grid' },
@@ -180,7 +181,7 @@
     let timer;
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { userFilter.q = search.value; userFilter.page = 1; route().then(() => $('#page input[type=search]')?.focus()); }, 350); });
     const filter = h('select', { 'aria-label': 'Filter', onchange: (e) => { userFilter.filter = e.target.value; userFilter.page = 1; route(); } },
-      [['', 'All users'], ['premium', 'Premium'], ['verified', 'Verified'], ['business', 'Business'], ['suspended', 'Suspended'], ['deleted', 'Permanently disabled']].map(([v, l]) => h('option', { value: v, selected: v === userFilter.filter }, l)));
+      [['', 'All users'], ['premium', 'Premium'], ['verified', 'Verified'], ['business', 'Business'], ['children', 'Under 18'], ['awaiting-guardian', 'Waiting for a parent or guardian'], ['suspended', 'Suspended'], ['deleted', 'Permanently disabled']].map(([v, l]) => h('option', { value: v, selected: v === userFilter.filter }, l)));
     return h('div', {},
       head(`Users (${fmt.n(res.total)})`),
       h('div', { class: 'toolbar' }, search, filter),
@@ -189,7 +190,7 @@
         h('tbody', {}, res.users.map((u) => h('tr', { class: 'click', tabindex: 0, onclick: () => openUser(u.username), onkeydown: (e) => e.key === 'Enter' && openUser(u.username) },
           h('td', {}, h('strong', {}, u.displayName), h('br'), h('span', { class: 'muted' }, `@${u.username}`)),
           h('td', {}, u.phone || '—'), h('td', {}, fmt.date(u.createdAt)), h('td', {}, fmt.ago(u.lastSeen)),
-          h('td', {}, u.suspended && h('span', { class: 'tag bad' }, 'Suspended'), u.premium && h('span', { class: 'tag gold' }, 'Premium'), u.verified && h('span', { class: 'tag ok' }, 'Verified'), u.business && h('span', { class: 'tag' }, 'Business')))))),
+          h('td', {}, u.suspended && h('span', { class: 'tag bad' }, 'Suspended'), u.minor && h('span', { class: 'tag' }, u.guardian?.state === 'pending' ? 'Under 18, waiting' : 'Under 18'), u.premium && h('span', { class: 'tag gold' }, 'Premium'), u.verified && h('span', { class: 'tag ok' }, 'Verified'), u.business && h('span', { class: 'tag' }, 'Business')))))),
         !res.users.length && h('p', { class: 'muted' }, 'No users found.')),
       h('div', { class: 'pager' },
         h('button', { class: 'btn small', disabled: userFilter.page <= 1, onclick: () => { userFilter.page -= 1; route(); } }, 'Previous'),
@@ -210,6 +211,10 @@
         ['Premium', u.premium ? `${u.plan || 'yes'} until ${fmt.date(u.premiumUntil)}` : 'No'], ['Verified', u.verified ? 'Yes' : 'No'], ['Business', u.business || 'No'],
         ['Chats', u.chats], ['Channels owned', u.channelsOwned], ['API keys', u.apiKeys], ['Devices (encryption)', u.devices],
         ['Terms and Privacy accepted', u.consent ? `version ${u.consent.version}, ${fmt.date(u.consent.at)}${Object.entries(u.consent.optional).map(([k, v]) => ` · ${k}: ${v ? 'yes' : 'no'}`).join('')}` : 'No record (account made before consent was added)'],
+        ...(u.age !== null && u.age !== undefined ? [['Age', u.minor ? `${u.age} (under 18)` : `${u.age}`]] : []),
+        ...(u.guardian ? [['Parent or guardian', u.guardian.state === 'ended (turned 18)' ? 'Controls ended (turned 18); contact details erased' : `${u.guardian.name} (${u.guardian.relationship}), ${[u.guardian.phone, u.guardian.email].filter(Boolean).join(', ')}`],
+          ['Their approval', u.guardian.state === 'pending' ? 'Waiting: the account cannot be used yet' : u.guardian.consentedAt ? `Agreed ${fmt.date(u.guardian.consentedAt)}` : u.guardian.state],
+          ...(u.guardian.controls ? [['What they allow', Object.entries(u.guardian.controls).map(([k, v]) => `${k}: ${v ? 'on' : 'off'}`).join(' · ')]] : [])] : []),
         ...(u.deleted ? [['Account deleted', fmt.date(u.deleted)]] : [])]
         .flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, String(v))]),
       u.deletion || u.deleted ? [h('dt', {}, 'Status'), h('dd', {}, u.deleted ? `Permanently disabled ${fmt.date(u.disabledAt)}; chats, media and personal data erased ${fmt.date(u.deleted)}. Only a basic record is kept.` : `Permanently disabled ${fmt.date(u.deletion.requestedAt)}; login blocked; chats, media and personal data are erased by ${fmt.date(u.deletion.eraseAt)} (always within 24 hours)`)] : [],
@@ -340,7 +345,7 @@
   async function settings() {
     const { settings: s } = await loadSettings();
     const num = (v, min) => h('input', { type: 'number', min, value: v, disabled: !isSuper() });
-    const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1);
+    const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1), minAge = num(s.limits.minAge, 5);
     const price = (id) => h('input', { type: 'number', min: 1, step: '0.01', placeholder: 'default', value: s.prices[id] ?? '', disabled: !isSuper() });
     const prices = { daily: price('daily'), monthly: price('monthly'), yearly: price('yearly') };
     return h('div', {},
@@ -350,7 +355,8 @@
         h('p', { class: 'muted' }, 'Premium accounts have no limits. Chats already locked or hidden are never exposed if a limit is lowered.'),
         h('div', { class: 'row' }, h('label', {}, 'Locked chats (free)', locks), h('label', {}, 'Hidden chats (free)', hidden)),
         h('div', { class: 'row' }, h('label', {}, 'Channels per owner', channelsMax), h('label', {}, 'Products per catalogue', products)),
-        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value) } }, 'Limits saved') }, 'Save limits'))),
+        h('div', { class: 'row' }, h('label', {}, 'Youngest age allowed to sign up (5 to 17; under 18 needs a parent or guardian)', minAge)),
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value), minAge: Number(minAge.value) } }, 'Limits saved') }, 'Save limits'))),
       legalCard(s),
       h('div', { class: 'card' }, h('h3', {}, 'Premium prices'),
         h('p', { class: 'muted' }, 'Leave a field empty to use the default price. Changes apply to new purchases.'),

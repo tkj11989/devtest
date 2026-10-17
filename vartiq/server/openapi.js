@@ -116,6 +116,34 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       keyId: { type: 'string', description: 'short fingerprint of the key' },
       createdAt: { type: 'integer' },
     }, ['id', 'name', 'publicKey', 'keyId']),
+    GuardianDetails: obj({
+      name: { type: 'string', maxLength: 60 },
+      relationship: { type: 'string', enum: ['mother', 'father', 'guardian', 'other'] },
+      phone: { type: 'string', description: 'international format; at least one of phone and email is required' },
+      email: { type: 'string', format: 'email' },
+    }, ['name', 'relationship']),
+    GuardianControls: obj({
+      calls: { type: 'boolean', description: 'voice and video calls (default on)' },
+      location: { type: 'boolean', description: 'sharing a location (default off)' },
+      discoverable: { type: 'boolean', description: 'found by, and open to chats and groups from, people the child is not already chatting with (default off)' },
+      channels: { type: 'boolean', description: 'public channels (default on)' },
+    }),
+    GuardianPage: obj({
+      child: obj({ username: { type: 'string' }, displayName: { type: 'string' } }),
+      relationship: { type: 'string' },
+      state: { type: 'string', enum: ['pending', 'active'] },
+      consentedAt: { type: ['integer', 'null'] },
+      disabled: { type: 'boolean', description: 'the guardian has disabled the account' },
+      controls: ref('GuardianControls'),
+      controlList: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, help: { type: 'string' } })),
+    }),
+    GuardianView: obj({
+      state: { type: 'string', enum: ['pending', 'active'] },
+      name: { type: ['string', 'null'] },
+      contacts: arrayOf({ type: 'string' }),
+      controls: ref('GuardianControls'),
+      controlList: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, help: { type: 'string' } })),
+    }),
     PushPreferences: obj({ messages: { type: 'boolean' }, calls: { type: 'boolean' }, preview: { type: 'boolean', description: 'show the sender\'s name' } }),
     Message: obj({
       id: { type: 'string' },
@@ -284,7 +312,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', guardian: 'Parent or guardian', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -325,6 +353,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           '**Consent (required)**: `consent: { terms: true, version }`. The person must have read and accepted the Terms of Use and Privacy Notice (`GET /legal`); `version` must be the current `version` from `GET /legal`. Without it the answer is `400 consent_required`; an old version is `409 consent_outdated`. The acceptance (what, which version, when) is recorded on the account.',
           '**Individual**: `displayName`, `phone` and `phoneOtp` (the `requestId` from `POST /auth/otp` and the code received by SMS).',
           '**Business**: `accountType: "business"`, the business name as `displayName`, `phone` + `phoneOtp`, `email` + `emailOtp` (both are required and verified) and `business` with at least a `category` (any other `Business` fields are optional).',
+          '**Age (required)**: `birthDate` as `YYYY-MM-DD`. Below the minimum age (8 by default, set by the administrator) the answer is `403 too_young`. **Under 18** a parent or guardian is mandatory: send `guardian` with `name`, `relationship` and a `phone` and/or `email` (at least one; `400 guardian_required` otherwise; it must not be the child\'s own number or email). The account is created, but every call except `GET /me`, the legal/consent and data-export/delete calls and `/me/guardian*` answers `403 guardian_required` until the parent or guardian has opened the private link we send them and agreed. A business account must be opened by an adult (`400 business_adult`). The link is built on the server\'s `PUBLIC_URL`; if that is not set (and the request is not to localhost) a child cannot register (`503`).',
           'Every code is checked before any is used up, so a typo in one code does not cost the other. A username is made from the name unless you send `username`.',
         ].join('\n\n'),
         body: jsonBody(obj({
@@ -337,7 +366,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           emailOtp: ref('OtpProof'),
           business: ref('Business'),
           consent: ref('ConsentAccept'),
-        }, ['displayName', 'phone', 'phoneOtp', 'consent']), {
+          birthDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'date of birth, YYYY-MM-DD' },
+          guardian: ref('GuardianDetails'),
+        }, ['displayName', 'phone', 'phoneOtp', 'consent', 'birthDate']), {
           accountType: 'business',
           displayName: 'Pizza Palace',
           phone: '+919876543210',
@@ -345,9 +376,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
-          consent: { terms: true, version: '2026-10-16' },
+          consent: { terms: true, version: '2026-10-17' },
+          birthDate: '1990-05-17',
         }),
-        responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session'), ...errors(400, 409, 429) },
+        responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session. For someone under 18 the response also has `guardian` (`state: "pending"`, whether the private link reached the parent, and the masked contacts): the account cannot be used until the parent or guardian agrees.'), ...errors(400, 403, 409, 429, 503) },
       }),
     },
     '/auth/login': {
@@ -786,6 +818,72 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
       delete: op(T.msg, 'Stop sharing my live location', { description: 'The position is erased and the message shows that the share ended.', params: [idParam('id')], responses: { 200: ok(obj({ ended: { type: 'boolean' } })), ...errors(401, 404) } }),
     },
+    '/guardian/{token}': {
+      get: op(T.guardian, 'The parent or guardian page: a child and what the guardian allows', {
+        auth: false,
+        description: 'For the parent or guardian of someone under 18. The `token` is the private link sent to them when the child signed up (the page at `/guardian/{token}` uses these calls). No account is needed: the link is the key. It stops working when it is replaced by a newer one, the account is deleted, or the child turns 18 (`404 not_found`). Guardians never see messages.',
+        params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: ok(ref('GuardianPage')), ...errors(404, 429) },
+      }),
+    },
+    '/guardian/{token}/consent': {
+      post: op(T.guardian, 'Agree: allow the child to use the app', {
+        auth: false,
+        params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        body: jsonBody(obj({ agree: { const: true } }, ['agree']), { agree: true }),
+        responses: { 200: ok(ref('GuardianPage')), ...errors(400, 404, 429) },
+      }),
+    },
+    '/guardian/{token}/controls': {
+      put: op(T.guardian, 'Choose what the child can do', {
+        auth: false,
+        description: 'Only after agreeing. Send any of `calls`, `location`, `discoverable`, `channels`. The child\'s apps update at once.',
+        params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        body: jsonBody(ref('GuardianControls'), { location: true }),
+        responses: { 200: ok(ref('GuardianPage')), ...errors(400, 404, 409, 429) },
+      }),
+    },
+    '/guardian/{token}/disable': {
+      post: op(T.guardian, 'Disable the account for now', {
+        auth: false,
+        description: 'The child is signed out everywhere and cannot log in until it is enabled again.',
+        params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: ok(ref('GuardianPage')), ...errors(404, 429) },
+      }),
+    },
+    '/guardian/{token}/enable': {
+      post: op(T.guardian, 'Enable the account again', {
+        auth: false,
+        params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: ok(ref('GuardianPage')), ...errors(404, 429) },
+      }),
+    },
+    '/guardian/{token}/delete': {
+      post: op(T.guardian, 'Delete the account', {
+        auth: false,
+        description: 'The account is permanently disabled at once; the chats and personal data are erased within 24 hours.',
+        params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        body: jsonBody(obj({ confirmed: { const: true } }, ['confirmed']), { confirmed: true }),
+        responses: { 200: ok(obj({ deleted: { type: 'boolean' } })), ...errors(400, 404, 429) },
+      }),
+    },
+    '/me/guardian': {
+      get: op(T.guardian, 'My parent or guardian (under 18 only)', {
+        description: '`guardian` is null for adults. For a child: whether the parent or guardian has agreed (`state`), the masked contacts, and what they allow.',
+        responses: { 200: ok(obj({ guardian: { oneOf: [ref('GuardianView'), { type: 'null' }] } })), ...errors(401) },
+      }),
+      put: op(T.guardian, 'Fix the guardian\'s details while waiting', {
+        description: 'Only while the parent or guardian has not agreed yet. A new private link goes to the new contacts and the old link stops working.',
+        body: jsonBody(ref('GuardianDetails'), { name: 'Meera Iyer', relationship: 'mother', phone: '+919876543210' }),
+        responses: { 200: ok(obj({ guardian: ref('GuardianView'), delivery: obj({ delivered: { type: 'boolean' }, to: arrayOf({ type: 'string' }), error: { type: 'string' } }) })), ...errors(400, 401, 409, 429, 503) },
+      }),
+    },
+    '/me/guardian/resend': {
+      post: op(T.guardian, 'Send the guardian their link again', {
+        description: 'A new link; the old one stops working. At most one message per 30 seconds and 5 per hour to the same number or address.',
+        responses: { 200: ok(obj({ guardian: ref('GuardianView'), delivery: obj({ delivered: { type: 'boolean' }, to: arrayOf({ type: 'string' }), error: { type: 'string' } }) })), ...errors(401, 409, 429, 503) },
+      }),
+    },
     '/push': {
       get: op(T.push, 'Notification settings and the key to subscribe with', {
         description: 'Browsers: ask permission (from a button tap), subscribe with `applicationServerKey` = `publicKey`, then `PUT /push/subscription`. `enabled` is false when the administrator turned notifications off.',
@@ -1146,6 +1244,15 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /conversations/{id}/location': 'shareLocation',
     'put /live-locations/{id}': 'updateLiveLocation',
     'delete /live-locations/{id}': 'stopLiveLocation',
+    'get /guardian/{token}': 'getGuardianPage',
+    'post /guardian/{token}/consent': 'guardianConsent',
+    'put /guardian/{token}/controls': 'setGuardianControls',
+    'post /guardian/{token}/disable': 'guardianDisableAccount',
+    'post /guardian/{token}/enable': 'guardianEnableAccount',
+    'post /guardian/{token}/delete': 'guardianDeleteAccount',
+    'get /me/guardian': 'getMyGuardian',
+    'put /me/guardian': 'updateMyGuardian',
+    'post /me/guardian/resend': 'resendGuardianLink',
     'get /push': 'getPushSettings',
     'put /push/subscription': 'savePushSubscription',
     'post /push/unsubscribe': 'removePushSubscription',
@@ -1199,6 +1306,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       '',
       'Not covered: messages sent by the REST API without an envelope, business auto replies, status updates, names, times and who talks to whom. Calls are encrypted peer to peer by WebRTC.',
     ].join('\n'),
+    [T.guardian]: 'Under 18? A parent or guardian is mandatory: they get a private link, agree, and choose what the child can do (calls, location, being found by new people, public channels), or disable or delete the account. They never see messages.',
     [T.push]: 'Notifications on a person\'s devices for new messages and calls while the app is closed (Web Push). They carry no message text.',
     [T.chan]: 'Public one-to-many channels: owners and admins post, anyone can read and follow (not end-to-end encrypted)',
     [T.i18n]: 'Show received messages of a chat in the language you choose',

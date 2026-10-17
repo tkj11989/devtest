@@ -1,7 +1,7 @@
 'use strict';
 
 const { Store } = require('./store');
-const { normalisePhone, normaliseEmail } = require('./otp');
+const { normalisePhone, normaliseEmail, maskDestination } = require('./otp');
 const legal = require('./legal');
 
 /** A deleted account's data is always erased within this long of the request. */
@@ -9,6 +9,7 @@ const ERASE_DEADLINE_MS = 24 * 60 * 60 * 1000;
 const { createWebAuthn } = require('./webauthn');
 const { FEATURES, versionLess } = require('./features');
 const appearance = require('./appearance');
+const guardianRules = require('./guardian');
 const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -33,7 +34,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, accountEraseDelayMs = 60 * 60 * 1000 }) {
+function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl = process.env.PUBLIC_URL, accountEraseDelayMs = 60 * 60 * 1000 }) {
   const userRoom = (u) => `user:${u}`;
 
   /** A feature that sends data to an outside service only works once the person has agreed to that (code `consent_<id>`). */
@@ -292,6 +293,99 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     for (const m of conv.members) notify(m, event, payload);
   };
 
+  // ---------- children and their parents or guardians ----------
+
+  const guardianMailer = guardianRules.createMailer(otp);
+
+  /** What a child's app needs: the state of the guardian's approval and what the guardian allows. Null for adults. */
+  const guardianView = (me) => {
+    const state = store.guardianState(me);
+    if (!state) return null;
+    const g = store.data.users[me].guardian;
+    return {
+      state,
+      name: g.name || null,
+      contacts: guardianMailer.contacts(g).map((d) => maskDestination(d.channel, d.to)),
+      controls: store.guardianControls(me),
+      controlList: guardianRules.CONTROLS.map(({ id, label, help }) => ({ id, label, help })),
+    };
+  };
+
+  /** Tell a child's open apps that their guardian's approval or choices changed. */
+  const guardianChanged = (username) => io.to(userRoom(username)).emit('guardian:update', { guardian: guardianView(username) });
+
+  /** A child asked for the link again (or fixed the details): make a new link and send it. */
+  const resendGuardianLink = async (me, details, ctx) => {
+    const base = guardianRules.baseUrl(publicUrl, ctx?.origin);
+    if (!base) throw new ApiError(503, 'unavailable', 'Parental approval is not set up on this server yet. The administrator must set PUBLIC_URL.');
+    let renewed;
+    try {
+      renewed = store.renewGuardianLink(me, details);
+    } catch (err) {
+      throw new ApiError(err.status || 409, err.code || 'conflict', err.message);
+    }
+    const delivery = await guardianMailer.send({ childName: store.data.users[me].displayName, token: renewed.token, guardian: renewed.guardian, base });
+    return { guardian: guardianView(me), delivery };
+  };
+
+  /** What the guardian's page may do, addressed by the private link. Every call needs a valid link of a child under 18. */
+  const guardianPortal = (() => {
+    const gone = () => new ApiError(404, 'not_found', 'This link is not valid any more. It may have been replaced by a newer one, or your child has turned 18.');
+    const who = (token) => {
+      const u = store.findByGuardianToken(String(token || ''));
+      if (!u) throw gone();
+      return u;
+    };
+    return {
+      view: (token) => store.guardianPage(who(token)),
+      consent(token, { agree } = {}) {
+        const u = who(token);
+        if (agree !== true) throw new ApiError(400, 'invalid_request', 'Send agree: true to allow your child to use the app');
+        store.guardianConsent(u, legal.VERSION);
+        guardianChanged(u);
+        return store.guardianPage(u);
+      },
+      controls(token, patch) {
+        const u = who(token);
+        if (store.guardianState(u) !== 'active') throw new ApiError(409, 'conflict', 'Agree first, then choose what your child can do');
+        try {
+          store.guardianSetControls(u, patch || {});
+        } catch (err) {
+          throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+        }
+        guardianChanged(u);
+        return store.guardianPage(u);
+      },
+      disable(token) {
+        const u = who(token);
+        store.guardianDisable(u);
+        setImmediate(() => io.in(userRoom(u)).disconnectSockets(true));
+        return store.guardianPage(u);
+      },
+      enable(token) {
+        const u = who(token);
+        store.guardianEnable(u);
+        return store.guardianPage(u);
+      },
+      remove(token, { confirmed } = {}) {
+        const u = who(token);
+        if (confirmed !== true) throw new ApiError(400, 'invalid_request', 'Send confirmed: true to delete the account');
+        const peers = store.peersOf(u);
+        store.requestAccountDeletion(u, { delayMs: Math.min(accountEraseDelayMs, ERASE_DEADLINE_MS - 60 * 1000) });
+        setImmediate(() => io.in(userRoom(u)).disconnectSockets(true));
+        for (const p of peers) notify(p, 'peer:deleted', { username: u });
+        return { deleted: true };
+      },
+    };
+  })();
+
+  /** Children who turned 18 are released from their guardian's controls (run regularly). Tells their apps. */
+  const releaseGuardians = () => {
+    const released = store.releaseGuardians();
+    for (const u of released) guardianChanged(u);
+    return released;
+  };
+
   // ---------- location sharing ----------
 
   /** A position from an app that does not encrypt: checked and rounded to about 10 cm. */
@@ -476,6 +570,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
         business: store.getBusiness(me),
         contact: store.contactOf(me),
         privacy: { profileViews: store.profileViewsEnabled(me) },
+        guardian: guardianView(me),
         consent: { version: legal.VERSION, upToDate: store.consentUpToDate(me, legal.VERSION), optional: Object.fromEntries(legal.CONSENTS.filter((x) => !x.required).map((x) => [x.id, store.hasOptionalConsent(me, x.id)])) },
         appearance: appearance.effective(store.prefsOf(me), store.isPremium(me)),
       };
@@ -922,11 +1017,16 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     },
 
     openDirect(me, { username }, ctx) {
-      const conv = store.getOrCreateDirect(me, String(username || '').toLowerCase());
+      const target = String(username || '').toLowerCase();
+      if (!store.canStartChat(me, target)) throw new ApiError(403, 'not_accepting', 'This person is not accepting new chats');
+      const conv = store.getOrCreateDirect(me, target);
       return { conversation: conversationView(me, conv, ctx) };
     },
 
     createGroup(me, { name, members }, ctx) {
+      for (const m of members || []) {
+        if (!store.canStartChat(me, String(m).toLowerCase())) throw new ApiError(403, 'not_accepting', `${store.publicUser(String(m).toLowerCase())?.displayName || m} is not accepting new chats or groups`);
+      }
       const conv = store.createGroup(me, name, members);
       for (const m of conv.members) {
         notify(m, 'conversation:new', { conversation: store.summarize(conv, m), users: usersFor(conv.members, m) });
@@ -998,6 +1098,32 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       }
     },
 
+
+    // ----- parent or guardian (a child's own view) -----
+
+    guardianStatus(me) {
+      return { guardian: guardianView(me) };
+    },
+
+    /** Send the guardian their private link again (a new link; the old one stops working). */
+    guardianResend(me, _body, ctx) {
+      return resendGuardianLink(me, null, ctx);
+    },
+
+    /** Fix the guardian's details while they have not agreed yet; a new link goes to the new contacts. */
+    guardianContact(me, body, ctx) {
+      let details;
+      try {
+        details = Store.checkGuardian(body, { normalisePhone, normaliseEmail });
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      const mine = store.contactOf(me) || {};
+      if ((details.phone && details.phone === mine.phone) || (details.email && details.email === mine.email)) {
+        throw new ApiError(400, 'guardian_same_person', "Your parent's or guardian's contact must be different from yours");
+      }
+      return resendGuardianLink(me, details, ctx);
+    },
 
     // ----- push notifications -----
 
@@ -1466,15 +1592,33 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     };
   }
 
+  // What a parent or guardian switched off for their child: refused, whichever way the app asks.
+  const RESTRICT = { sendLocation: 'location', updateLocation: 'location' };
+  for (const [name, gate] of Object.entries(GATES)) if (gate === 'channels') RESTRICT[name] = 'channels';
+  const restrictLabel = { location: 'Sharing location', channels: 'Public channels' };
+  for (const [name, control] of Object.entries(RESTRICT)) {
+    const fn = actions[name];
+    actions[name] = function restricted(me, payload, ctx) {
+      if (store.minorBlocks(me, control)) throw new ApiError(403, 'guardian_restricted', `${restrictLabel[control]} is turned off by your parent or guardian`);
+      return fn.call(actions, me, payload, ctx);
+    };
+  }
+
   // Nobody uses the service until they have accepted the current Terms and Privacy Notice (people who signed up before
   // they existed are held to it only when the administrator turns that on). These can always be reached, so a person can
   // accept, download their data, or delete their account.
   const CONSENT_EXEMPT = new Set(['me', 'consentStatus', 'consentAccept', 'consentSet', 'accountExport', 'accountDeleteCode', 'accountDelete']);
+  // A child's account does nothing until the parent or guardian has agreed; these stay open so the child can see the state,
+  // send the link again, fix a wrong number, or leave.
+  const GUARDIAN_EXEMPT = new Set([...CONSENT_EXEMPT, 'guardianStatus', 'guardianResend', 'guardianContact']);
   for (const [name, fn] of Object.entries(actions)) {
     if (typeof fn !== 'function' || CONSENT_EXEMPT.has(name)) continue;
     actions[name] = function consented(me, payload, ctx) {
       if (me && !store.consentUpToDate(me, legal.VERSION)) {
         throw new ApiError(403, 'consent_required', 'Please accept the current Terms of Use and Privacy Notice to continue');
+      }
+      if (me && !GUARDIAN_EXEMPT.has(name) && store.guardianState(me) === 'pending') {
+        throw new ApiError(403, 'guardian_required', 'Your parent or guardian needs to approve your account first');
       }
       return fn.call(actions, me, payload, ctx);
     };
@@ -1488,7 +1632,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       maintenance: s.maintenance.on ? { on: true, message: s.maintenance.message } : { on: false },
       announcement: s.announcement || '',
       minClientVersion: s.minClientVersion || null,
-      limits: { free: { chatLocks: s.limits.freeChatLocks, hiddenChats: s.limits.freeHiddenChats } },
+      limits: { free: { chatLocks: s.limits.freeChatLocks, hiddenChats: s.limits.freeHiddenChats }, minAge: s.limits.minAge, adultAge: guardianRules.ADULT_AGE },
     };
   };
   const broadcastConfig = () => io.emit('config:update', config());
@@ -1520,6 +1664,9 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     pruneExpired,
     expireSubscriptions,
     eraseDueAccounts,
+    releaseGuardians,
+    guardianPortal,
+    GUARDIAN_EXEMPT,
     forgetUnlocks,
     userRoom,
     userView,

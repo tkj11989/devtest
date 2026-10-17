@@ -191,6 +191,7 @@ function createCallManager({ io, store, isOnline, reachable = isOnline, pushCall
 
     socket.on('call:start', handle(({ convId, kind }) => {
       assertCallsOn();
+      if (store.minorBlocks(me, 'calls')) throw new Error('Calls are turned off for this account by your parent or guardian');
       if (kind !== 'audio' && kind !== 'video') throw new Error('Invalid call type');
       const conv = store.getConversation(convId);
       if (!conv || !conv.members.includes(me)) throw new Error('Not a member of this chat');
@@ -212,6 +213,8 @@ function createCallManager({ io, store, isOnline, reachable = isOnline, pushCall
         const name = store.publicUser(peer)?.displayName || peer;
         if (store.hasBlocked(me, peer)) throw new Error(`Unblock ${name} to call them`);
         // Blocked by them: they're simply never available.
+        // A child whose guardian turned calls off is simply not available (the caller is not told why, and no missed call is logged).
+        if (store.minorBlocks(peer, 'calls')) throw new Error(`${name} is not available right now`);
         if (store.hasBlocked(peer, me) || !reachable(peer)) {
           if (!store.hasBlocked(peer, me)) logMissed();
           throw new Error(`${name} is not available right now`);
@@ -222,7 +225,7 @@ function createCallManager({ io, store, isOnline, reachable = isOnline, pushCall
         }
         ring = [peer];
       } else {
-        ring = others.filter((u) => reachable(u) && !inCall(u)).slice(0, MAX_PARTICIPANTS - 1);
+        ring = others.filter((u) => reachable(u) && !inCall(u) && !store.minorBlocks(u, 'calls')).slice(0, MAX_PARTICIPANTS - 1);
         if (!ring.length) {
           logMissed();
           throw new Error('No one in this group is available right now');
@@ -258,6 +261,7 @@ function createCallManager({ io, store, isOnline, reachable = isOnline, pushCall
     }));
 
     socket.on('call:accept', handle(({ callId }) => {
+      if (store.minorBlocks(me, 'calls')) throw new Error('Calls are turned off for this account by your parent or guardian');
       const call = calls.get(callId);
       if (!call || !(call.ringing.has(me) || (call.group && store.isMember(call.convId, me)))) {
         throw new Error('Call not found');

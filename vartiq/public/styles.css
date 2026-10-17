@@ -1398,6 +1398,13 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .consent-toggle span { flex: 1; min-width: 0; font-size: 14px; }
 .consent-links a, .legal-links a, .card-lite a, .gate-card a { color: var(--primary-text); }
 
+/* ---------- parent or guardian ---------- */
+.guardian-off { display: none !important; }
+.guardian-box { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.guardian-box.hidden { display: none; }
+.guardian-box .small-note { margin: 0; }
+.otp-field-lite { display: grid; gap: 4px; }
+
 /* ---------- shared locations ---------- */
 .msg.place { min-width: 230px; }
 .place-card { display: grid; gap: 4px; white-space: normal; }

@@ -268,6 +268,10 @@ TURN_URLS=turn:turn.prayuktech.com:3478?transport=udp,turn:turn.prayuktech.com:3
 TURN_SECRET=THE-SAME-SECRET-AS-IN-coturn
 TURN_TTL_SECONDS=86400
 
+# ---- the public address of the app. Links sent to parents and guardians of under-18 users are built on it (required: without it
+# a child cannot register on a public server).
+PUBLIC_URL=https://vartiq.prayuktech.com
+
 # ---- push notifications (messages and calls when the app is closed). Make the pair once (Phase 5.3a) and keep it: if it
 # changes, every device must turn notifications on again. PUSH_SUBJECT identifies you to the browsers' push services.
 VAPID_PUBLIC_KEY=
@@ -678,6 +682,7 @@ Use a staff phone on mobile data, and a laptop on Wi-Fi.
 6. **Restart test:** `sudo systemctl restart vartiq`; the app reconnects by itself and **nobody is logged out** (sessions are saved in the database).
 7. **Call test across networks:** phone on 4G calls laptop on Wi-Fi. If it connects, check that the relay works at all: `sudo journalctl -u coturn -n 20` (a "session ... allocation" line) or use the Trickle ICE test page with your `turn:` URL and a generated credential. If calls fail only across networks, the relay or its firewall ports are the cause.
 8. Download my data and Delete my account work for a test user (the data is erased about an hour later).
+8a. **Under-18 test:** sign up a test account with a date of birth that makes it 14 and a parent number you control: the parent gets an SMS or email with a link that starts with `https://vartiq.prayuktech.com/guardian/`; until it is opened the account shows "Waiting for your parent or guardian"; after agreeing, the app opens by itself. In the parent page switch *Sharing location* on and off and *Disable the account* then *Enable* again. A 7-year-old date of birth must be refused. If no message arrives, check `OTP_WEBHOOK_URL` and the gateway: it must send the `text` of every message, including ones with `purpose: "guardian"` that have no code.
 9. **Notifications test** (a phone, over HTTPS): Profile → Notifications → Turn on, allow, tap *Send a test* (it arrives). Close the app, send that phone a message from another account: a notification "Name: New message" arrives, and tapping it opens the chat. On iPhone/iPad the app must be added to the Home Screen first. Turn it off again and check nothing arrives.
 10. **Location test:** share a location once and a live one (15 minutes) between two phones: the other phone sees the position move when the first walks (with VartiQ open); tapping *Stop sharing* ends it ("Live location ended"). Open the Privacy Notice and check the new sections on notifications and location are there.
 11. **ExamSuit check:** the HTTP code and time are the same as your "before" numbers; `free -h` shows what you expected.

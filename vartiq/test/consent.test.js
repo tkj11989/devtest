@@ -49,7 +49,7 @@ async function setup(t, opts = {}) {
   };
   const signup = async (name, phone, consent = CONSENT) => {
     const proof = await codeFor('register', phone);
-    return api('POST', '/auth/register', { body: { displayName: name, phone, phoneOtp: proof, consent } });
+    return api('POST', '/auth/register', { body: { birthDate: '1990-05-17', displayName: name, phone, phoneOtp: proof, consent } });
   };
   const emailCode = async () => ({ code: sms.filter((m) => m.channel === 'email').pop().code });
   return { store, api, client, sms, codeFor, emailCode, signup, app };
@@ -85,7 +85,7 @@ test('registration needs consent: the tick and the current version; nothing is u
   const { api, codeFor, store, emailCode } = await setup(t);
   const phone = '+919811100001';
   const proof = await codeFor('register', phone);
-  const reg = (consent) => api('POST', '/auth/register', { body: { displayName: 'Meera Iyer', phone, phoneOtp: proof, ...(consent ? { consent } : {}) } });
+  const reg = (consent) => api('POST', '/auth/register', { body: { birthDate: '1990-05-17', displayName: 'Meera Iyer', phone, phoneOtp: proof, ...(consent ? { consent } : {}) } });
 
   assert.deepStrictEqual([(await reg(null)).status, (await reg(null)).body.error.code], [400, 'consent_required']);
   assert.strictEqual((await reg({ terms: false, version: legal.VERSION })).body.error.code, 'consent_required');
@@ -105,9 +105,9 @@ test('registration needs consent: the tick and the current version; nothing is u
   const bsms = await codeFor('register', '+919811100002');
   const bmail = (await api('POST', '/auth/otp', { body: { purpose: 'register', email: 'shop@example.com' } })).body;
   const bemailCode = (await emailCode()).code;
-  const biz = { accountType: 'business', displayName: 'Corner Shop', phone: '+919811100002', phoneOtp: bsms, email: 'shop@example.com', emailOtp: { requestId: bmail.requestId, code: bemailCode }, business: { category: 'Retail', timezone: 'UTC' } };
+  const biz = { birthDate: '1990-05-17', accountType: 'business', displayName: 'Corner Shop', phone: '+919811100002', phoneOtp: bsms, email: 'shop@example.com', emailOtp: { requestId: bmail.requestId, code: bemailCode }, business: { category: 'Retail', timezone: 'UTC' } };
   assert.strictEqual((await api('POST', '/auth/register', { body: biz })).body.error.code, 'consent_required');
-  assert.strictEqual((await api('POST', '/auth/register', { body: { ...biz, consent: CONSENT } })).status, 201);
+  assert.strictEqual((await api('POST', '/auth/register', { body: { birthDate: '1990-05-17', ...biz, consent: CONSENT } })).status, 201);
 });
 
 test('when the texts change, everybody must accept again before they can use anything', async (t) => {

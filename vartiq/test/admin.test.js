@@ -166,7 +166,7 @@ test('feature switches: blocked on the server for every client, announced live, 
   await admin('PUT', '/settings', { token, body: { features: { registration: false } } });
   const otp = await api('POST', '/auth/otp', { body: { purpose: 'register', phone: '+919811100001' } });
   assert.deepStrictEqual([otp.status, otp.body.error.code], [403, 'feature_disabled']);
-  assert.strictEqual((await api('POST', '/auth/register', { body: { displayName: 'X', phone: '+919811100001', phoneOtp: { requestId: 'a', code: '123456' } } })).status, 403);
+  assert.strictEqual((await api('POST', '/auth/register', { body: { birthDate: '1990-05-17', displayName: 'X', phone: '+919811100001', phoneOtp: { requestId: 'a', code: '123456' } } })).status, 403);
   assert.strictEqual((await api('POST', '/auth/login', { body: { username: 'alice', password: 'pass' } })).status, 200);
 
   // Back on: everything works again, with the data that was there.
@@ -344,7 +344,7 @@ test('moderation of channels and reports; settings: limits and prices; audit log
   // Limits take effect at once; premium is unaffected.
   store.createChannel('owner', { handle: 'c3x', name: 'C3' });
   const lim = await admin('PUT', '/settings', { token, body: { limits: { freeChatLocks: 1, freeHiddenChats: 0, channelsPerOwner: 2 } } });
-  assert.deepStrictEqual(lim.body.settings.limits, { freeChatLocks: 1, freeHiddenChats: 0, channelsPerOwner: 2, catalogueMax: 100 });
+  assert.deepStrictEqual(lim.body.settings.limits, { freeChatLocks: 1, freeHiddenChats: 0, channelsPerOwner: 2, catalogueMax: 100, minAge: 8 });
   assert.strictEqual((await api('POST', '/channels', { token: owner.token, body: { handle: 'c4x', name: 'C4' } })).body.error.code, 'limit_reached');
   store.register('b1x', 'pass'); store.register('b2x', 'pass');
   store.setLockCode('fanfan', '2468');

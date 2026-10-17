@@ -182,6 +182,7 @@
   const emit = (event, payload) => new Promise((resolve, reject) => {
     state.socket.emit(event, payload, (res) => {
       if (res?.code === 'consent_required') showConsentGate(); // the Terms or Privacy Notice changed while the app was open
+      if (res?.code === 'guardian_required') showGuardianGate(null); // the account is waiting for the parent or guardian
       if (!(res && res.ok)) return reject(Object.assign(new Error(res?.error || 'Request failed'), { code: res?.code }));
       // End-to-end encrypted messages in the reply are decrypted before anyone sees them.
       decryptPayload(res).then(() => resolve(res), () => resolve(res));
@@ -253,6 +254,9 @@
     const region = (navigator.language || '').split('-')[1]?.toUpperCase();
     for (const [cc, dial] of COUNTRY_CODES) select.appendChild(new Option(`${flag(cc)} ${dial}`, `${cc}${dial}`));
     select.value = COUNTRY_CODES.some(([cc]) => cc === region) ? COUNTRY_CODES.find(([cc]) => cc === region).join('') : 'IN+91';
+    const gselect = $('#auth-form [name=gcc]');
+    for (const [cc, dial] of COUNTRY_CODES) gselect.appendChild(new Option(`${flag(cc)} ${dial}`, `${cc}${dial}`));
+    gselect.value = select.value;
     const category = $('#auth-form [name=category]');
     for (const c of window.BusinessHours.CATEGORIES) category.appendChild(new Option(c, c));
   })();
@@ -368,6 +372,46 @@
     return auth.type === 'business' ? [phoneField, emailField] : [phoneField];
   };
 
+  // Age: below the minimum there is no account; under 18 a parent or guardian is mandatory.
+  const ADULT_AGE = () => state.config?.limits?.adultAge || 18;
+  const MIN_AGE = () => state.config?.limits?.minAge || 8;
+  function ageFromInput() {
+    const v = authForm.birthDate.value;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+    if (!m) return null;
+    const born = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    const now = new Date();
+    if (born.getUTCFullYear() < 1900 || born > now) return null;
+    let age = now.getUTCFullYear() - born.getUTCFullYear();
+    if (now.getUTCMonth() < born.getUTCMonth() || (now.getUTCMonth() === born.getUTCMonth() && now.getUTCDate() < born.getUTCDate())) age -= 1;
+    return age;
+  }
+  /** Show the parent or guardian fields to someone old enough to sign up but under 18. */
+  function paintGuardianBox() {
+    const age = ageFromInput();
+    const needs = auth.mode === 'register' && auth.type === 'individual' && age !== null && age >= MIN_AGE() && age < ADULT_AGE();
+    $('#guardian-box').classList.toggle('hidden', !needs);
+    return needs;
+  }
+  /** What is wrong with the age (or the guardian's details), as { text, field }, or null. */
+  function checkAgeAndGuardian() {
+    const age = ageFromInput();
+    if (age === null) return { text: 'Enter your date of birth', field: authForm.birthDate };
+    if (age < MIN_AGE()) return { text: `VartiQ is for people aged ${MIN_AGE()} and over.`, field: authForm.birthDate };
+    if (age >= ADULT_AGE()) return null;
+    if (auth.type === 'business') return { text: 'A business account must be opened by an adult (18 or over)', field: authForm.birthDate };
+    if (!authForm.gName.value.trim()) return { text: "Enter your parent's or guardian's name", field: authForm.gName };
+    if (!authForm.gRel.value) return { text: 'Choose how they are related to you', field: authForm.gRel };
+    if (!authForm.gPhone.value.trim() && !authForm.gEmail.value.trim()) return { text: "Enter your parent's or guardian's mobile number or email (at least one)", field: authForm.gPhone };
+    if (authForm.gPhone.value.trim() && guardianPhone() === fullPhone(authForm)) return { text: "Their mobile number must be different from yours", field: authForm.gPhone };
+    return null;
+  }
+  const guardianPhone = () => {
+    const typed = authForm.gPhone.value.trim();
+    if (!typed) return '';
+    return /^(\+|00)/.test(typed) ? typed : `${authForm.gcc.value.replace(/^[A-Z]+/, '')}${typed.replace(/^0+/, '')}`;
+  };
+
   function paintAuth() {
     const register = auth.mode === 'register';
     const business = register && auth.type === 'business';
@@ -386,6 +430,7 @@
     $('#auth-email').placeholder = business ? 'you@business.com' : 'Your business email';
     $('#auth-name-label').textContent = business ? 'Business name' : 'Your name';
     $('#auth-use-email').textContent = auth.loginBy === 'email' ? 'Log in with mobile number instead' : 'Business account? Log in with email';
+    paintGuardianBox();
     $('#auth-lead').textContent = !register
       ? (auth.loginBy === 'email' ? 'Log in with your business email. We\'ll email you a code.' : 'Log in with your mobile number. We\'ll send you a code by SMS.')
       : (business ? 'Business accounts verify both a mobile number and an email address.' : 'Sign up with your mobile number. We\'ll verify it with a code by SMS.');
@@ -418,7 +463,7 @@
     authError('');
     paintAuth();
   });
-  authForm.addEventListener('input', () => { authError(''); paintSubmit(); });
+  authForm.addEventListener('input', () => { authError(''); paintGuardianBox(); paintSubmit(); });
 
   authForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -432,6 +477,13 @@
     if (business && !authForm.category.value) {
       authError('Choose a business category');
       return authForm.category.focus();
+    }
+    if (register) {
+      const problem = checkAgeAndGuardian();
+      if (problem) {
+        authError(problem.text);
+        return problem.field.focus();
+      }
     }
     // Agreement comes first: nothing is sent to anyone's phone before the person has agreed.
     if (register && !authForm.agreeTerms.checked) {
@@ -468,6 +520,15 @@
           phone: fullPhone(authForm),
           phoneOtp: phoneField.proof(),
           consent: { terms: true, version: state.legal.version },
+          birthDate: authForm.birthDate.value,
+          ...(paintGuardianBox() ? {
+            guardian: {
+              name: authForm.gName.value.trim(),
+              relationship: authForm.gRel.value,
+              ...(authForm.gPhone.value.trim() ? { phone: guardianPhone() } : {}),
+              ...(authForm.gEmail.value.trim() ? { email: authForm.gEmail.value.trim() } : {}),
+            },
+          } : {}),
           ...(business ? {
             email: authForm.email.value.trim(),
             emailOtp: emailField.proof(),
@@ -476,6 +537,7 @@
         });
       }
       storage.set('chat.token', data.token);
+      state.guardianDelivery = data.guardian?.delivery || null; // the waiting screen says whether the link reached them
       authForm.reset();
       phoneField.reset();
       emailField.reset();
@@ -507,13 +569,14 @@
     cacheTimers.clear();
     purged.clear();
     moreEarlier.clear();
+    hideGuardianGate();
     state.cache?.clear(); // the saved chats stay on this device only while you are logged in
     state.cache = null;
     state.calls?.dispose();
     statusUpdates.reset();
     channelsUI.reset();
     state.socket?.disconnect();
-    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null, privacy: null, profileCard: null, notif: null });
+    Object.assign(state, { token: null, me: null, socket: null, activeId: null, calls: null, contact: null, e2ee: null, sub: null, privacy: null, profileCard: null, notif: null, guardian: null, guardianDelivery: null });
     state.conversations.clear();
     state.messages.clear();
     state.outbox.clear();
@@ -675,6 +738,99 @@
     location.reload();
   }
 
+  // ---------- parent or guardian (under 18) ----------
+
+  let guardianPoll = null;
+  function paintGuardianGate(g) {
+    const who = g.name ? g.name : 'your parent or guardian';
+    $('#guardian-gate-text').textContent = `Because you are under 18, ${who} has to allow you to use VartiQ. We sent them a private link. Ask them to open it and agree. Until then your account is closed to you.`;
+    const where = g.contacts?.length ? `Sent to ${g.contacts.join(' and ')}.` : '';
+    const d = state.guardianDelivery;
+    $('#guardian-gate-sent').textContent = d && d.delivered === false
+      ? `We could not reach them (${d.error}). Check their details with "Change their details", or try "Send them the link again".`
+      : where;
+    $('#guardian-gate-error').textContent = '';
+  }
+  async function showGuardianGate(g) {
+    $('#consent-gate').classList.add('hidden');
+    $('#auth').classList.add('hidden');
+    $('#guardian-gate').classList.remove('hidden');
+    if (!g) {
+      try { g = (await emit('guardian:status')).guardian; } catch { return; }
+      if (!g || g.state !== 'pending') { location.reload(); return; }
+    }
+    paintGuardianGate(g);
+    clearInterval(guardianPoll);
+    guardianPoll = setInterval(() => guardianRefresh(true), 20000);
+  }
+  function hideGuardianGate() {
+    $('#guardian-gate').classList.add('hidden');
+    clearInterval(guardianPoll);
+    guardianPoll = null;
+  }
+  async function guardianRefresh(quiet) {
+    try {
+      const { guardian } = await emit('guardian:status');
+      if (!guardian || guardian.state !== 'pending') { location.reload(); return; }
+      paintGuardianGate(guardian);
+      if (!quiet) $('#guardian-gate-error').textContent = 'They have not agreed yet.';
+    } catch (err) {
+      if (!quiet) $('#guardian-gate-error').textContent = err.message;
+    }
+  }
+  $('#guardian-gate-refresh').addEventListener('click', () => guardianRefresh(false));
+  $('#guardian-gate-resend').addEventListener('click', async () => {
+    try {
+      const res = await emit('guardian:resend');
+      state.guardianDelivery = res.delivery;
+      paintGuardianGate(res.guardian);
+      $('#guardian-gate-error').textContent = res.delivery.delivered ? 'Sent again. The older link no longer works.' : res.delivery.error;
+    } catch (err) {
+      $('#guardian-gate-error').textContent = err.message;
+    }
+  });
+  $('#guardian-gate-change').addEventListener('click', async () => {
+    const res = await dialog({
+      title: 'Change your parent or guardian\'s details',
+      text: 'A new private link goes to the new details, and the old link stops working. A mobile number (with country code, e.g. +91 98765 43210) or an email: at least one.',
+      fields: [
+        { name: 'name', label: 'Their name', type: 'text', maxLength: 60 },
+        { name: 'relationship', label: 'Who are they to you?', options: [['mother', 'Mother'], ['father', 'Father'], ['guardian', 'Legal guardian'], ['other', 'Other (with the right to decide for me)']] },
+        { name: 'phone', label: 'Their mobile number', type: 'tel', required: false, maxLength: 20 },
+        { name: 'email', label: 'Or their email', type: 'email', required: false, maxLength: 120 },
+      ],
+      submit: 'Save and send the link',
+      onSubmit: async (v) => emit('guardian:contact', { name: v.name.trim(), relationship: v.relationship, ...(v.phone.trim() ? { phone: v.phone.trim() } : {}), ...(v.email.trim() ? { email: v.email.trim() } : {}) }),
+    });
+    if (res && res !== true) {
+      state.guardianDelivery = res.delivery;
+      paintGuardianGate(res.guardian);
+    }
+  });
+  $('#guardian-gate-export').addEventListener('click', downloadMyData);
+  $('#guardian-gate-delete').addEventListener('click', deleteAccountFlow);
+  $('#guardian-gate-logout').addEventListener('click', () => { hideGuardianGate(); logout(); });
+
+  /** After approval: hide what the parent or guardian switched off, and say so in Profile. */
+  function applyGuardian() {
+    const g = state.guardian;
+    const c = g?.controls || {};
+    const off = (sel, hide) => document.querySelectorAll(sel).forEach((n) => n.classList.toggle('guardian-off', !!hide));
+    off('#btn-place', g && c.location === false);
+    off('#call-buttons, #btn-join-call', g && c.calls === false);
+    off('#btn-channels', g && c.channels === false);
+    const note = $('#guardian-note');
+    note.classList.toggle('hidden', !g);
+    note.textContent = '';
+    if (!g) return;
+    note.appendChild(el('strong', '', 'Parental controls are on'));
+    note.appendChild(el('p', 'muted', `${g.name || 'Your parent or guardian'} allowed you to use VartiQ and decides these things until you turn 18:`));
+    const list = el('ul', 'consent-facts');
+    for (const item of g.controlList || []) list.appendChild(el('li', '', `${item.label}: ${c[item.id] === false ? 'off' : 'on'}`));
+    note.appendChild(list);
+    note.appendChild(el('p', 'muted small-note', 'They cannot read your messages. At 18 these controls end.'));
+  }
+
   function showConsentGate() {
     paintConsentTexts();
     $('#gate-terms').checked = false;
@@ -771,6 +927,14 @@
 
     // The administrator can change features, announcements and maintenance at any time.
     socket.on('config:update', applyConfig);
+    // The parent or guardian agreed, changed what is allowed, or the child turned 18.
+    socket.on('guardian:update', ({ guardian }) => {
+      const gateOpen = !$('#guardian-gate').classList.contains('hidden');
+      if (gateOpen && guardian?.state === 'pending') { paintGuardianGate(guardian); return; }
+      if (gateOpen || (!guardian && state.guardian)) { location.reload(); return; } // agreed, or turned 18: start afresh
+      state.guardian = guardian;
+      applyGuardian();
+    });
     socket.on('connect_error', (err) => {
       if (err.message === 'maintenance' || err.message === 'update_required') {
         showGate(err.data?.code || err.message, err.data?.message);
@@ -795,6 +959,14 @@
         hideConsentGate();
         const { user: me, iceServers, blocked, defaultDisappear, business, contact, privacy, appearance, consent } = meReply;
         state.consent = consent || null;
+        // A child's account waits here until the parent or guardian has agreed.
+        if (meReply.guardian?.state === 'pending') {
+          state.me = meReply.user;
+          showGuardianGate(meReply.guardian);
+          return;
+        }
+        hideGuardianGate();
+        state.guardian = meReply.guardian || null;
         const lockSettings = await emit('chatlock:settings');
         state.defaultDisappear = defaultDisappear || null;
         state.contact = contact || { phone: null, email: null };
@@ -818,6 +990,7 @@
         $('#app').classList.remove('hidden');
         paintAvatar($('#btn-profile'), me.displayName, me.username);
         await loadConversations();
+        applyGuardian();
         statusUpdates.load();
         channelsUI.load();
         resumeNotificationsAndLocation();

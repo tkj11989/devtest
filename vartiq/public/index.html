@@ -38,6 +38,17 @@
       <p class="gate-alt"><button class="link" type="button" id="gate-export">Download my data</button> · <button class="link" type="button" id="gate-delete">Delete my account</button> · <button class="link" type="button" id="gate-logout">Log out</button></p>
     </div>
   </div>
+  <div id="guardian-gate" class="maintenance hidden" role="dialog" aria-modal="true" aria-labelledby="guardian-gate-title">
+    <div class="maintenance-card gate-card">
+      <h2 id="guardian-gate-title">Waiting for your parent or guardian</h2>
+      <p id="guardian-gate-text">Because you are under 18, your parent or guardian has to allow you to use VartiQ.</p>
+      <p id="guardian-gate-sent" class="muted"></p>
+      <p id="guardian-gate-error" class="error" role="alert"></p>
+      <button class="primary wide" type="button" id="guardian-gate-refresh">They have agreed: check again</button>
+      <p class="gate-alt"><button class="link" type="button" id="guardian-gate-resend">Send them the link again</button> · <button class="link" type="button" id="guardian-gate-change">Change their details</button></p>
+      <p class="gate-alt"><button class="link" type="button" id="guardian-gate-export">Download my data</button> · <button class="link" type="button" id="guardian-gate-delete">Delete my account</button> · <button class="link" type="button" id="guardian-gate-logout">Log out</button></p>
+    </div>
+  </div>
   <!-- ========== Auth screen ========== -->
   <section id="auth" class="auth hidden">
     <div class="auth-card">
@@ -59,6 +70,32 @@
         <label class="register-only hidden"><span id="auth-name-label">Your name</span>
           <input name="displayName" maxlength="40" autocomplete="name" />
         </label>
+        <label class="register-only hidden">Date of birth
+          <input name="birthDate" type="date" autocomplete="bday" />
+        </label>
+        <div class="guardian-box hidden" id="guardian-box" role="group" aria-labelledby="guardian-title">
+          <strong id="guardian-title">Your parent or guardian</strong>
+          <p class="muted" id="guardian-lead">Because you are under 18, a parent or guardian must allow you to use VartiQ. We send them a private link; your account opens when they agree.</p>
+          <label>Their name <input name="gName" maxlength="60" autocomplete="off" /></label>
+          <label>Who are they to you?
+            <select name="gRel">
+              <option value="">Choose</option>
+              <option value="mother">Mother</option>
+              <option value="father">Father</option>
+              <option value="guardian">Legal guardian</option>
+              <option value="other">Other (with the right to decide for me)</option>
+            </select>
+          </label>
+          <div class="otp-field-lite">
+            <label for="auth-gphone">Their mobile number</label>
+            <div class="otp-input-row">
+              <select name="gcc" aria-label="Country code of their number" class="cc"></select>
+              <input id="auth-gphone" name="gPhone" type="tel" inputmode="tel" autocomplete="off" placeholder="98765 43210" maxlength="20" />
+            </div>
+          </div>
+          <label>Or their email <input name="gEmail" type="email" inputmode="email" autocomplete="off" maxlength="120" placeholder="parent@example.com" /></label>
+          <p class="muted small-note">A mobile number or an email: at least one. It must not be yours.</p>
+        </div>
         <label class="business-only hidden">Business category
           <select name="category"><option value="">Choose a category</option></select>
         </label>
@@ -391,6 +428,7 @@
           <p id="profile-msg" class="muted"></p>
         </form>
         <div class="pad stack">
+          <div class="card-lite hidden" id="guardian-note"></div>
           <div class="link-row static">
             <svg viewBox="0 0 24 24"><path d="M17 1H7a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2Zm0 18H7V5h10v14Zm-5 3a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
             <span><strong>Mobile number</strong><small id="contact-phone">Not added</small></span>

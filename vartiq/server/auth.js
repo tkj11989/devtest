@@ -1,8 +1,10 @@
 'use strict';
 
 const { ApiError } = require('./service');
-const { normalisePhone, normaliseEmail } = require('./otp');
+const { normalisePhone, normaliseEmail, maskDestination } = require('./otp');
 const legal = require('./legal');
+const { Store } = require('./store');
+const guardianRules = require('./guardian');
 
 /**
  * Sign-up and login with one-time codes.
@@ -14,7 +16,7 @@ const legal = require('./legal');
  * Flow: `requestCode` sends a code and returns a `requestId`; `register` / `login`
  * take that `requestId` with the code the person typed.
  */
-function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
+function createAuth({ store, otp, assertSignupsOpen = () => {}, minAge = () => guardianRules.DEFAULT_MIN_AGE, publicUrl = process.env.PUBLIC_URL }) {
   /** `{ phone }` or `{ email }` -> `{ channel, to }` (normalised), or a 400. */
   function destination(body, { allowEmail = true } = {}) {
     const bad = (err) => new ApiError(400, err.code || 'invalid_request', err.message);
@@ -26,6 +28,8 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
     }
     throw new ApiError(400, 'invalid_request', allowEmail ? 'Send "phone" or "email"' : 'Send "phone"');
   }
+
+  const mailer = guardianRules.createMailer(otp);
 
   const owner = ({ channel, to }) => (channel === 'sms' ? store.findByPhone(to) : store.findByEmail(to));
   const what = (channel) => (channel === 'sms' ? 'mobile number' : 'email');
@@ -51,7 +55,7 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
      * Create an account. Individual: `{ displayName, phone, phoneOtp: { requestId, code } }`.
      * Business: also `accountType: "business"`, `email`, `emailOtp`, and `business: { category, … }`.
      */
-    register(body = {}) {
+    async register(body = {}, { origin } = {}) {
       assertSignupsOpen();
       // Nobody gets an account without agreeing to the Terms and Privacy Notice.
       // Checked first, so a missing tick doesn't use up a login code.
@@ -66,12 +70,34 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
       if (!['individual', 'business'].includes(type)) throw new ApiError(400, 'invalid_request', 'accountType must be "individual" or "business"');
       const displayName = String(body.displayName || '').trim();
       if (!displayName) throw new ApiError(400, 'invalid_request', type === 'business' ? 'Enter your business name' : 'Enter your name');
+      // Age first: nobody under the minimum gets an account, and under 18 a parent or guardian is mandatory.
+      const birth = guardianRules.parseBirthDate(body.birthDate);
+      if (!birth) throw new ApiError(400, 'birth_date_required', 'Enter your date of birth (a real date, not in the future)');
+      const age = guardianRules.ageOn(birth.text);
+      const lowest = minAge();
+      if (age < lowest) throw new ApiError(403, 'too_young', `VartiQ is for people aged ${lowest} and over.`);
+      const child = age < guardianRules.ADULT_AGE;
+      if (child && type === 'business') throw new ApiError(400, 'business_adult', 'A business account must be opened by an adult (18 or over)');
+      let guardian = null;
+      let base = null;
+      if (child) {
+        try {
+          guardian = Store.checkGuardian(body.guardian, { normalisePhone, normaliseEmail });
+        } catch (err) {
+          throw new ApiError(err.status || 400, err.code || 'guardian_required', err.message);
+        }
+        // The link must be sent to a real address of ours; refuse rather than text people a link to somewhere else.
+        base = guardianRules.baseUrl(publicUrl, origin);
+        if (!base) throw new ApiError(503, 'unavailable', "Parental approval is not set up on this server yet. The administrator must set PUBLIC_URL.");
+      }
       const phone = destination({ phone: body.phone }, { allowEmail: false });
+      if (guardian?.phone && guardian.phone === phone.to) throw new ApiError(400, 'guardian_same_person', "Your parent's or guardian's mobile number must be different from yours");
       let email = null;
       if (type === 'business') {
         if (!body.email) throw new ApiError(400, 'invalid_request', 'Email is required for a business account');
         email = destination({ email: body.email });
         if (!body.business?.category) throw new ApiError(400, 'invalid_request', 'Choose a business category');
+        if (guardian?.email && guardian.email === email.to) throw new ApiError(400, 'guardian_same_person', "Your parent's or guardian's email must be different from yours");
       }
       if (store.findByPhone(phone.to)) throw new ApiError(409, 'phone_taken', 'This mobile number is already registered. Log in instead.');
       if (email && store.findByEmail(email.to)) throw new ApiError(409, 'email_taken', 'This email is already registered.');
@@ -89,6 +115,8 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
           phone: phone.to,
           email: email?.to,
           business: type === 'business' ? { timezone: 'UTC', ...body.business } : undefined,
+          birthDate: birth.text,
+          guardian,
         });
       } catch (err) {
         if (/already taken|already registered/i.test(err.message)) throw new ApiError(409, 'conflict', err.message);
@@ -97,8 +125,14 @@ function createAuth({ store, otp, assertSignupsOpen = () => {} }) {
       otp.consume(body.phoneOtp.requestId);
       if (email) otp.consume(body.emailOtp.requestId);
       store.recordConsent(result.user.username, { version: legal.VERSION, items: ['terms'], via: 'registration' });
-      return result;
+      const { guardianToken, ...session } = result;
+      if (!guardianToken) return session;
+      // The private link goes to the parent or guardian now. If it cannot be delivered the account stays (waiting), and the
+      // child can fix the details or ask again.
+      const delivery = await mailer.send({ childName: displayName, token: guardianToken, guardian, base });
+      return { ...session, guardian: { state: 'pending', delivery, contacts: mailer.contacts(guardian).map((d) => maskDestination(d.channel, d.to)) } };
     },
+
 
     /**
      * Log in with a code: `{ phone, requestId, code }` (or `{ email, … }` for a business).

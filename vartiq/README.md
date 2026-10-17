@@ -10,6 +10,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Voice and video calls**, 1:1 and **group calls** (up to 6 people, peer-to-peer WebRTC): ringing on all devices, accept/decline, mute, camera on/off, **hold**, call timer, join a group call that's already running, and call history in the chat (missed / declined / duration, tap to call back)
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
+- **Parental control for under-18s**: date of birth at sign-up; 8 to 17 needs a parent or guardian (name, relationship, mobile number or email), who agrees through a private link before the account opens and can then switch calls, location sharing, being found by new people and public channels on or off, or disable or delete the account
 - **Push notifications**: a notification on the device for a new message or an incoming call while the app is closed (Web Push; works in Chrome, Edge, Firefox and Safari, and on iPhone/iPad once VartiQ is added to the Home Screen). People choose what they get; notifications say who and what kind, never the message
 - **Location sharing**: share where you are once, or live for 15 minutes, 1 hour or 8 hours (end-to-end encrypted like a message; stops by itself and the position is erased)
 - **Starred messages**: star any message, find them all in the starred list (stars are private to you)
@@ -353,6 +354,17 @@ Everything people agree to, and their rights over their data, is built in. **The
 - **Admin:** the user view shows which version each person accepted and when; the user list can show deleted accounts.
 - **Not built, decide with your lawyer:** there is no age confirmation at sign-up (if ExamSuit students can be under 18, ask what the law requires, for example parental consent), a consent manager, data-breach reporting procedure, and the refund and liability wording in the Terms (shown as bracketed placeholders).
 
+## Parental control (under 18)
+
+- **Sign-up**: everyone gives a date of birth. Below the minimum age (**8**, an administrator setting: Admin → Settings → Free account limits, range 5 to 17) there is no account (`403 too_young`). **8 to 17**: a parent or guardian is mandatory: name, relationship (mother, father, legal guardian, other) and a **mobile number and/or an email** (at least one; not the child's own). 18 and over: nothing extra. A business account must be opened by an adult.
+- **Verifiable consent**: the account is created, but is closed (`403 guardian_required` on everything except `me`, the legal and consent calls, data export/delete and `/me/guardian*`) until the parent or guardian opens the **private link** sent to their mobile number and/or email and agrees. The child's app shows a waiting screen (resend the link, fix a wrong number, download or delete, log out) and moves on by itself when they agree. The link is a random token (only its hash is stored); a new link replaces the old one; messages to one number or address are rate-limited (one per 30 s, five per hour), so nobody can be flooded.
+- **Controls** (the same link opens the parent's page, `/guardian/<token>`, with no account needed): *Voice and video calls* (default on), *Sharing location* (default **off**), *Being found by new people* (default **off**: not in search, and strangers cannot start a chat or a group with them; the child can still reach out, and people they already chat with are unaffected), *Public channels* (default on). They can also **disable** the account (the child is signed out everywhere and cannot log in until it is enabled again; an administrator's own suspension is never lifted by it) or **delete** it. Changes reach the child's open apps at once. Parents never see messages (they are end-to-end encrypted) and the page never shows the child's number.
+- **At 18** the controls end automatically (checked hourly): the parent's contact details and link are erased, and only that they agreed (and when) is kept. If the account is deleted, the archive keeps only that proof of consent.
+- **Admin**: user list filters *Under 18* and *Waiting for a parent or guardian*, age and guardian details on each user, and counters on the overview.
+- **Setup**: set **`PUBLIC_URL`** (for example `https://vartiq.prayuktech.com`): guardian links are built on it. Without it only `localhost` addresses are used, and a child cannot register on a public server (`503`): a link must never point to an address taken from a request. Messages are sent through the same SMS/email gateway as login codes (`OTP_WEBHOOK_URL`; the gateway receives `{ channel, to, purpose: "guardian", text }` and should send `text`).
+- **API**: `birthDate` and `guardian` on `POST /auth/register`; `GET /me/guardian`, `PUT /me/guardian`, `POST /me/guardian/resend`; the guardian's calls `GET /guardian/{token}`, `POST …/consent`, `PUT …/controls`, `POST …/disable`, `POST …/enable`, `POST …/delete`; socket events `guardian:status`, `guardian:resend`, `guardian:contact` and the server event `guardian:update`.
+- Accounts created before ages were asked have no date of birth and are treated as adults.
+
 ## Push notifications
 
 Turn them on in **Profile → Notifications** (nothing is asked on page load: the browser's permission question appears only when you tap *Turn on*). Choose what you get: new messages, calls, and whether the sender's name is shown. Each browser/device is subscribed separately (up to 8 per account) and is removed when you turn it off, log out, or delete the account.
@@ -576,6 +588,7 @@ vartiq/
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
 │   ├── translate.js # Translating received messages per chat (gateway)
+│   ├── guardian.js  # Age rules, parent or guardian: sign-up checks, private link, controls, their page
 │   ├── push.js      # Push notifications (Web Push, VAPID, allowed push services)
 │   ├── admin.js     # Admin dashboard API (/admin/api)
 │   ├── features.js  # Feature switches and platform settings
@@ -636,6 +649,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `messages:get`      | Load chat history                        |
 | `message:send`      | Send a message (`masked`, `clientId` for safe retries) |
 | `voice:send`        | Send a voice message (binary audio)      |
+| `guardian:status` / `guardian:resend` / `guardian:contact` | A child's view of their parent or guardian: state, send the link again, fix their details |
 | `location:send` / `location:update` / `location:stop` | Share a location (once or live), move a live share, stop it |
 | `push:config` / `push:subscribe` / `push:unsubscribe` / `push:settings` / `push:test` | Notification settings and this device's subscription |
 | `message:star`      | Star / unstar a message                  |
@@ -671,7 +685,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `call:hold`         | Put the call on hold / resume            |
 | `call:end`          | Leave / hang up                          |
 
-Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended).
+Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended), `guardian:update` (a parent or guardian agreed or changed what is allowed).
 
 Voice-message audio and status photos are downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
 
