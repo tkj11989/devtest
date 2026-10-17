@@ -467,6 +467,7 @@ class Store {
       state: g.state,
       consentedAt: g.consentedAt || null,
       disabled: u.suspended?.by === 'guardian',
+      premium: this.isPremium(username), // changing the controls is a Premium feature (agreeing, disabling and deleting are always free)
       controls: this.guardianControls(username),
       controlList: guardianRules.CONTROLS.map(({ id, label, help }) => ({ id, label, help })),
     };

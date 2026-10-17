@@ -134,11 +134,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       state: { type: 'string', enum: ['pending', 'active'] },
       consentedAt: { type: ['integer', 'null'] },
       disabled: { type: 'boolean', description: 'the guardian has disabled the account' },
+      premium: { type: 'boolean', description: 'the child\'s account has Premium, so the controls can be changed' },
       controls: ref('GuardianControls'),
       controlList: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' }, help: { type: 'string' } })),
     }),
     GuardianView: obj({
       state: { type: 'string', enum: ['pending', 'active'] },
+      premium: { type: 'boolean', description: 'the account has Premium, so the parent or guardian can change the controls' },
       name: { type: ['string', 'null'] },
       contacts: arrayOf({ type: 'string' }),
       controls: ref('GuardianControls'),
@@ -837,10 +839,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/guardian/{token}/controls': {
       put: op(T.guardian, 'Choose what the child can do', {
         auth: false,
-        description: 'Only after agreeing. Send any of `calls`, `location`, `discoverable`, `channels`. The child\'s apps update at once.',
+        description: 'Only after agreeing, and only while the child\'s account has **Premium** (`402 premium_required` otherwise: the safe defaults apply). Send any of `calls`, `location`, `discoverable`, `channels`. The child\'s apps update at once. Controls already set keep applying if Premium ends. Agreeing, disabling, enabling and deleting are always free.',
         params: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
         body: jsonBody(ref('GuardianControls'), { location: true }),
-        responses: { 200: ok(ref('GuardianPage')), ...errors(400, 404, 409, 429) },
+        responses: { 200: ok(ref('GuardianPage')), ...errors(400, 402, 404, 409, 429) },
       }),
     },
     '/guardian/{token}/disable': {

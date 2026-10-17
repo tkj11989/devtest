@@ -306,6 +306,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       state,
       name: g.name || null,
       contacts: guardianMailer.contacts(g).map((d) => maskDestination(d.channel, d.to)),
+      premium: store.isPremium(me),
       controls: store.guardianControls(me),
       controlList: guardianRules.CONTROLS.map(({ id, label, help }) => ({ id, label, help })),
     };
@@ -348,6 +349,9 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       controls(token, patch) {
         const u = who(token);
         if (store.guardianState(u) !== 'active') throw new ApiError(409, 'conflict', 'Agree first, then choose what your child can do');
+        // Changing the controls is a Premium feature (of the child's account). What is already set keeps applying if Premium ends,
+        // and agreeing, disabling and deleting stay free: safety is never locked behind payment.
+        if (!store.isPremium(u)) throw new ApiError(402, 'premium_required', "Changing these controls is a Premium feature. Premium is bought in your child's app (Profile, Premium). Until then the safe defaults apply.");
         try {
           store.guardianSetControls(u, patch || {});
         } catch (err) {

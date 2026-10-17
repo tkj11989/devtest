@@ -289,6 +289,7 @@ function termsOfUse() {
       title: '6. Premium',
       ul: [
         'Premium is bought in advance for a day, a month or a year. It does not renew by itself; buying again extends it. Prices are shown before you pay and may change for future purchases.',
+        'Premium also lets a parent or guardian of a young person under 18 change that person\'s parental controls (calls, location sharing, being found by new people, public channels). Agreeing to a child\'s account, disabling it and deleting it are always free, and a child\'s safe default settings apply without Premium.',
         'Payments are handled by a payment provider. {brand} never sees your card or bank details.',
         'Refunds: [describe your refund policy here, for example "Premium is not refundable once activated, except where the law requires"]. This is for your lawyer to confirm.',
         'When Premium ends, the extra features stop; your chats and data stay, within the free limits.',

@@ -156,6 +156,7 @@ function pageHtml({ brand = 'VartiQ' } = {}) {
   <section id="manage" class="hidden">
     <p id="manage-intro"></p>
     <h2>What your child can do</h2>
+    <p id="premium-note" class="msg hidden"><strong>Premium feature.</strong> Changing these is part of ${esc(brand)} Premium, which is bought in your child's app (Profile, Premium). Until then the safe settings below stay as they are: no location sharing, and not findable by new people. You can still disable or delete the account here.</p>
     <div class="card" id="controls"></div>
     <p class="muted">Changes apply at once. Your child sees which of these are off.</p>
     <h2>Pause or delete the account</h2>
@@ -194,11 +195,13 @@ function pageHtml({ brand = 'VartiQ' } = {}) {
       $('agree-text').textContent = 'I am ' + name + '\\'s ' + s.relationship + ', or have the legal right to decide for them. I have read the Privacy Notice and Terms of Use and I allow ' + name + ' to use ${esc(brand)}.';
     }
     if (s.state === 'active') {
+      var locked = !s.premium;
+      show('premium-note', locked);
       $('manage-intro').textContent = 'You allowed ' + name + ' to use ${esc(brand)}' + (s.consentedAt ? ' on ' + new Date(s.consentedAt).toLocaleDateString() : '') + '.' + (s.disabled ? ' The account is disabled right now.' : '');
       var box = $('controls'); box.textContent = '';
       s.controlList.forEach(function (c) {
         var row = document.createElement('label'); row.className = 'row';
-        var input = document.createElement('input'); input.type = 'checkbox'; input.checked = !!s.controls[c.id];
+        var input = document.createElement('input'); input.type = 'checkbox'; input.checked = !!s.controls[c.id]; input.disabled = locked;
         input.addEventListener('change', function () {
           var patch = {}; patch[c.id] = input.checked; input.disabled = true;
           call('PUT', '/controls', patch).then(function (r) { render(r); ok('Saved'); }).catch(function (e) { input.checked = !input.checked; fail(e.message); }).then(function () { input.disabled = false; });

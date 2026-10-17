@@ -828,6 +828,7 @@
     const list = el('ul', 'consent-facts');
     for (const item of g.controlList || []) list.appendChild(el('li', '', `${item.label}: ${c[item.id] === false ? 'off' : 'on'}`));
     note.appendChild(list);
+    if (!g.premium) note.appendChild(el('p', 'muted small-note', 'Your parent or guardian can change these once your account has Premium (Profile, Premium). Until then the settings above stay as they are.'));
     note.appendChild(el('p', 'muted small-note', 'They cannot read your messages. At 18 these controls end.'));
   }
 
@@ -4371,7 +4372,7 @@
     let order;
     const chosen = await dialog({
       title: 'Upgrade to Premium',
-      text: 'Unlimited locked chats and hidden chats, plus a Premium badge. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.',
+      text: `Unlimited locked chats and hidden chats, a Premium badge${state.guardian ? ', and your parent or guardian can then change your parental controls' : ''}. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.`,
       fields: [{ name: 'plan', label: 'Plan', options: info.plans.map((p) => [p.id, `${p.label} · ${money(p)}`]) }],
       submit: 'Continue to payment',
       onSubmit: async (v) => { order = await emit('subscription:checkout', { plan: v.plan }); },

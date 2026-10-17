@@ -60,12 +60,14 @@ const MOM = { name: 'Meera Iyer', relationship: 'mother', phone: '+919811100001'
 const guardianCall = (env, token, method, path, body) => env.api(method, `/guardian/${token}${path}`, null, body);
 
 /** A child with a guardian who has agreed. */
-async function agreedChild(env, name = 'Kavya', phone = '+919822200001', guardian = MOM) {
+async function agreedChild(env, name = 'Kavya', phone = '+919822200001', guardian = MOM, { premium = true } = {}) {
   const reg = await env.signUp(name, phone, { birthDate: born(14), guardian });
   assert.strictEqual(reg.status, 201, JSON.stringify(reg.body));
   const token = env.linkOf(guardian.phone);
   assert.ok(token, 'the parent got a link');
   assert.strictEqual((await guardianCall(env, token, 'POST', '/consent', { agree: true })).status, 200);
+  // Changing the controls is a Premium feature of the child's account.
+  if (premium) env.store.setPremiumByAdmin(reg.body.user.username, Date.now() + 30 * 86400000);
   return { ...reg.body, link: token };
 }
 
@@ -431,4 +433,37 @@ test('the minimum age is a setting', async (t) => {
   const cfg = await (await fetch(`${env.base}/api/v1/config`)).json();
   assert.strictEqual(cfg.limits.minAge, 13);
   assert.strictEqual(cfg.limits.adultAge, 18);
+});
+
+test('changing the controls is Premium; agreeing, disabling and deleting are always free; the safe defaults protect a free account', async (t) => {
+  const env = await setup(t);
+  const kid = await agreedChild(env, 'Kavya', '+919822200001', MOM, { premium: false });
+  const name = kid.user.username;
+
+  const page = await guardianCall(env, kid.link, 'GET', '');
+  assert.strictEqual(page.body.premium, false, 'the page can tell the parent');
+  assert.deepStrictEqual(page.body.controls, { calls: true, location: false, discoverable: false, channels: true }, 'the safe defaults');
+  const refused = await guardianCall(env, kid.link, 'PUT', '/controls', { location: true });
+  assert.strictEqual(refused.status, 402);
+  assert.strictEqual(refused.body.error.code, 'premium_required');
+  assert.match(refused.body.error.message, /child's app/);
+  assert.strictEqual(env.store.minorBlocks(name, 'location'), true, 'nothing changed');
+  assert.strictEqual((await env.api('GET', '/me', kid.token)).body.guardian.premium, false, "the child's app says why");
+
+  // Free for everyone: pausing and deleting.
+  assert.strictEqual((await guardianCall(env, kid.link, 'POST', '/disable')).status, 200);
+  assert.strictEqual((await guardianCall(env, kid.link, 'POST', '/enable')).status, 200);
+
+  // Premium (bought in the child's app, or granted) unlocks changing.
+  env.store.setPremiumByAdmin(name, Date.now() + 86400000);
+  assert.strictEqual((await guardianCall(env, kid.link, 'GET', '')).body.premium, true);
+  assert.strictEqual((await guardianCall(env, kid.link, 'PUT', '/controls', { location: true })).status, 200);
+  assert.strictEqual(env.store.minorBlocks(name, 'location'), false);
+
+  // When Premium ends what was chosen stays in force; only changing stops.
+  env.store.setPremiumByAdmin(name, null);
+  assert.strictEqual(env.store.minorBlocks(name, 'location'), false, 'location stays allowed');
+  assert.strictEqual((await guardianCall(env, kid.link, 'PUT', '/controls', { location: false })).status, 402);
+  assert.strictEqual(env.store.guardianControls(name).location, true);
+  assert.strictEqual((await guardianCall(env, kid.link, 'POST', '/delete', { confirmed: true })).status, 200, 'deleting is always free');
 });
