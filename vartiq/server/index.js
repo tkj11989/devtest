@@ -63,6 +63,13 @@ const SOCKET_ACTIONS = {
   'messages:get': 'messages',
   'message:send': 'sendText',
   'voice:send': 'sendVoice',
+  'photos:get': 'photos',
+  'photo:upload': 'uploadPhoto',
+  'photo:main': 'setMainPhoto',
+  'photo:delete': 'deletePhoto',
+  'photo:privacy': 'setPhotoPrivacy',
+  'photos:user': 'userPhotos',
+  'photo:report': 'reportPhoto',
   'location:send': 'sendLocation',
   'location:update': 'updateLocation',
   'location:stop': 'stopLocation',
@@ -273,7 +280,7 @@ function createApp({
   app.use('/admin/api', adminRouter);
   app.use('/admin', (req, res, next) => {
     // The dashboard is its own page: no framing, no outside scripts.
-    res.set({ 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" });
+    res.set({ 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-ancestors 'none'" });
     next();
   });
   app.use('/api/v1', createApiRouter({ store, service, accounts: auth, webhooks, rateLimit, corsOrigins }));

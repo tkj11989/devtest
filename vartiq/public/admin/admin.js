@@ -240,16 +240,36 @@
 
   // --- channels & reports ---
   async function channels() {
-    const [{ channels: list }, { reports }] = await Promise.all([api('GET', '/channels'), api('GET', '/reports')]);
-    $('#nav-reports').textContent = reports.length;
-    $('#nav-reports').classList.toggle('hidden', !reports.length);
+    const [{ channels: list }, { reports }, { reports: photoReports }] = await Promise.all([api('GET', '/channels'), api('GET', '/reports'), api('GET', '/photo-reports')]);
+    $('#nav-reports').textContent = reports.length + photoReports.length;
+    $('#nav-reports').classList.toggle('hidden', !(reports.length + photoReports.length));
+    // Reported profile photos: the picture is fetched with the administrator's session (it is never public).
+    const photoImg = (g, size) => {
+      const img = h('img', { alt: 'Reported photo', width: 96, height: 96, style: 'border-radius:10px;object-fit:cover;background:#ccc;cursor:pointer' });
+      fetch(`/admin/api/photo-reports/${encodeURIComponent(g.owner)}/${encodeURIComponent(g.photoId)}/image?size=${size}`, { headers: { Authorization: `Bearer ${state.token}` } })
+        .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) img.src = URL.createObjectURL(b); });
+      return img;
+    };
+    const photoAction = (path, g, done) => async () => { if (await attempt(() => api('POST', path, { owner: g.owner, photoId: g.photoId })) !== null) { toast(done); route(); } };
+    const photoCard = h('div', { class: 'card' }, h('h3', {}, `Reported profile photos (${photoReports.length})`),
+      photoReports.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Photo', 'Owner', 'Reports', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, photoReports.map((g) => h('tr', {},
+          h('td', {}, photoImg(g, 'thumb')),
+          h('td', {}, `${g.ownerName} (@${g.owner})`, h('br'), g.minor && h('span', { class: 'tag bad' }, 'Under 18'), g.hidden && h('span', { class: 'tag' }, 'Hidden from others')),
+          h('td', { class: 'wrap' }, g.reports.map((r) => h('div', {}, `${fmt.date(r.ts)} · @${r.reporter}: ${r.reason}${r.detail ? ` — ${r.detail}` : ''}`))),
+          h('td', {}, h('div', { class: 'actions' },
+            h('button', { class: 'btn small', onclick: async () => { const r = await fetch(`/admin/api/photo-reports/${encodeURIComponent(g.owner)}/${encodeURIComponent(g.photoId)}/image?size=full`, { headers: { Authorization: `Bearer ${state.token}` } }); if (r.ok) window.open(URL.createObjectURL(await r.blob()), '_blank'); } }, 'View large'),
+            h('button', { class: 'btn small', onclick: photoAction('/photo-reports/dismiss', g, 'Restored and cleared') }, 'Looks fine'),
+            h('button', { class: 'btn small danger', onclick: () => { if (confirm(`Remove this photo of ${g.ownerName}? Their other photos stay.`)) photoAction('/photo-reports/remove', g, 'Photo removed')(); } }, 'Remove photo'))))))))
+        : h('p', { class: 'muted' }, 'No reported photos. Three different people, or one report that a child may be at risk, hide a photo from everyone but its owner until you decide.'));
     const removeChannel = (c) => async () => {
       if (!confirm(`Delete channel "${c.name}" (@${c.handle}) and all its posts? Its ${c.followers} followers will lose it.`)) return;
       if (await attempt(() => api('DELETE', `/channels/${c.id}`)) !== null) { toast('Channel deleted'); route(); }
     };
     return h('div', {},
       head('Channels & reports'),
-      h('div', { class: 'card' }, h('h3', {}, `Open reports (${reports.length})`),
+      photoCard,
+      h('div', { class: 'card' }, h('h3', {}, `Open channel reports (${reports.length})`),
         reports.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Channel', 'Owner', 'Reported by', 'Reason', ''].map((t) => h('th', {}, t)))),
           h('tbody', {}, reports.map((r) => h('tr', {},
             h('td', {}, fmt.date(r.ts)), h('td', {}, r.channel ? `${r.channel.name} (@${r.channel.handle})` : 'deleted'), h('td', {}, r.channel?.owner || '—'), h('td', {}, `@${r.reporter}`), h('td', { class: 'wrap' }, r.reason),
@@ -345,7 +365,7 @@
   async function settings() {
     const { settings: s } = await loadSettings();
     const num = (v, min) => h('input', { type: 'number', min, value: v, disabled: !isSuper() });
-    const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1), minAge = num(s.limits.minAge, 5);
+    const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1), minAge = num(s.limits.minAge, 5), freePhotos = num(s.limits.freeProfilePhotos, 1), premiumPhotos = num(s.limits.premiumProfilePhotos, 1);
     const price = (id) => h('input', { type: 'number', min: 1, step: '0.01', placeholder: 'default', value: s.prices[id] ?? '', disabled: !isSuper() });
     const prices = { daily: price('daily'), monthly: price('monthly'), yearly: price('yearly') };
     return h('div', {},
@@ -355,8 +375,9 @@
         h('p', { class: 'muted' }, 'Premium accounts have no limits. Chats already locked or hidden are never exposed if a limit is lowered.'),
         h('div', { class: 'row' }, h('label', {}, 'Locked chats (free)', locks), h('label', {}, 'Hidden chats (free)', hidden)),
         h('div', { class: 'row' }, h('label', {}, 'Channels per owner', channelsMax), h('label', {}, 'Products per catalogue', products)),
+        h('div', { class: 'row' }, h('label', {}, 'Profile photos (free account)', freePhotos), h('label', {}, 'Profile photos (Premium)', premiumPhotos)),
         h('div', { class: 'row' }, h('label', {}, 'Youngest age allowed to sign up (5 to 17; under 18 needs a parent or guardian)', minAge)),
-        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value), minAge: Number(minAge.value) } }, 'Limits saved') }, 'Save limits'))),
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value), minAge: Number(minAge.value), freeProfilePhotos: Number(freePhotos.value), premiumProfilePhotos: Number(premiumPhotos.value) } }, 'Limits saved') }, 'Save limits'))),
       legalCard(s),
       h('div', { class: 'card' }, h('h3', {}, 'Premium prices'),
         h('p', { class: 'muted' }, 'Leave a field empty to use the default price. Changes apply to new purchases.'),

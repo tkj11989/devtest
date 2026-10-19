@@ -185,7 +185,7 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
   }));
 
   router.get('/reports', auth, run(() => ({
-    reports: store.data.reports.map((r) => ({ ...r, channel: store.data.channels[r.channelId] ? { id: r.channelId, handle: store.data.channels[r.channelId].handle, name: store.data.channels[r.channelId].name, owner: store.data.channels[r.channelId].owner } : null })).sort((a, b) => b.ts - a.ts),
+    reports: store.data.reports.filter((r) => r.type !== 'photo').map((r) => ({ ...r, channel: store.data.channels[r.channelId] ? { id: r.channelId, handle: store.data.channels[r.channelId].handle, name: store.data.channels[r.channelId].name, owner: store.data.channels[r.channelId].owner } : null })).sort((a, b) => b.ts - a.ts),
   })));
 
   router.post('/reports/dismiss', auth, run((req) => {
@@ -195,6 +195,45 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     if (store.data.reports.length === before) throw fail(404, 'not_found', 'Report not found');
     store._save();
     log(req, 'report-dismiss', channelId, reporter || 'all');
+    return undefined;
+  }));
+
+  // ---------- reported profile photos ----------
+
+  const photoReportView = (g) => ({
+    owner: g.owner, photoId: g.photoId, hidden: g.hidden, minor: g.minor, reports: g.reports,
+    ownerName: store.data.users[g.owner]?.displayName || g.owner,
+  });
+  router.get('/photo-reports', auth, run(() => ({ reports: store.photoReports().map(photoReportView) })));
+
+  // The picture itself, for review (administrators only; the owner's privacy setting does not apply to a reported photo).
+  router.get('/photo-reports/:owner/:photoId/image', auth, (req, res) => {
+    const file = store.photoFile(String(req.params.owner), String(req.params.photoId), req.query.size === 'full' ? 'full' : 'thumb');
+    if (!file) return res.status(404).json({ error: { code: 'not_found', message: 'Photo not found' } });
+    return res.set('Content-Type', file.mime).send(file.buffer);
+  });
+
+  router.post('/photo-reports/dismiss', auth, run((req) => {
+    const { owner, photoId } = req.body || {};
+    try {
+      store.dismissPhotoReports(String(owner), String(photoId));
+    } catch (err) {
+      throw fail(err.status || 400, err.code || 'invalid_request', err.message);
+    }
+    service.refreshPhotos(String(owner));
+    log(req, 'photo-report-dismiss', String(owner), String(photoId));
+    return undefined;
+  }));
+
+  router.post('/photo-reports/remove', auth, run((req) => {
+    const { owner, photoId } = req.body || {};
+    try {
+      store.removePhoto(String(owner), String(photoId));
+    } catch (err) {
+      throw fail(err.status || 400, err.code || 'invalid_request', err.message);
+    }
+    service.refreshPhotos(String(owner));
+    log(req, 'photo-remove', String(owner), String(photoId));
     return undefined;
   }));
 

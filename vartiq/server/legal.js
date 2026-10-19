@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-17';
+const VERSION = '2026-10-19';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -100,6 +100,8 @@ function privacyNotice() {
         rows: [
           ['Mobile number', 'To create your account, send you login codes (OTP), let people who know your number find you, and keep your account secure', 'At sign-up and login'],
           ['Name, username, "about" line', 'To show who you are to the people you chat with', 'At sign-up and when you edit your profile'],
+          ['Profile photos you add (a picture and a small thumbnail of each), and who you let see them', 'To show your picture next to your name to the people you choose (everyone, your contacts, or nobody; for people under 18, only people they chat with)', 'When you add a photo'],
+          ['Reports about a photo (who reported it, why, when)', 'To review reported photos and keep people safe', 'When someone reports a photo'],
           ['Date of birth', 'To apply our age rules, to know when a young person needs a parent or guardian, and to end the parent\'s controls when the person turns 18', 'At sign-up'],
           ['For people under 18: the name, relationship, mobile number and/or email of a parent or guardian; whether and when they agreed; and what they allow (calls, location sharing, being found by new people, public channels)', 'To ask the parent or guardian for permission, to give them the controls, and to contact them about the account', 'At sign-up, and when the parent or guardian decides'],
           ['Email address (business accounts)', 'To verify a business account and contact it about its account', 'At business sign-up'],
@@ -136,6 +138,7 @@ function privacyNotice() {
         'Messages sent through the {brand} developer API (for example by a bot or another platform), and automatic business replies, are stored as readable text.',
         'Public channel posts, status updates, profile and business details, group names, and the names of people in a chat are visible to our servers (and to the people allowed to see them).',
         'Locations you share in the web app are end-to-end encrypted like messages. A location shared through the developer API is stored as readable coordinates.',
+        'Profile photos are not end-to-end encrypted: the people you allow can see them, and our moderators can see a photo that has been reported.',
         'If you turn on message translation for a chat, your app sends the text of the messages you receive to a translation service so they can be translated (see section 4).',
         'We can see who talks to whom, when, and how often (this is "metadata"), because the service needs it to deliver messages.',
         'If you lose all your devices and the encryption keys on them, older encrypted messages may no longer be readable by you.',
@@ -176,6 +179,8 @@ function privacyNotice() {
           ['Status updates', '24 hours'],
           ['Notification settings of a device', 'Until you turn notifications off on that device, log out, or delete your account (and removed at once if the browser says the device is gone)'],
           ['A shared location', 'A location you share once is a message and is kept like one. A live location keeps only the latest position (no trail), and it is erased when the time you chose is up (at most 8 hours) or when you tap Stop sharing; the chat then shows "Live location ended"'],
+          ['Profile photos', 'Until you remove them or delete your account (then erased within 24 hours). A photo that was reported and removed by us is deleted too'],
+          ['Reports about a photo', 'Until a moderator has decided, then deleted'],
           ['A parent or guardian\'s details (for someone under 18)', 'Until the young person turns 18, when the contact details are erased (we keep only that a parent or guardian agreed, and when), or until the account is deleted'],
           ['Profile-view list', '90 days (only the last view date is kept), or until you switch the setting off'],
           ['Login codes (OTP)', 'A few minutes; kept only as a one-way hash'],
@@ -266,6 +271,7 @@ function termsOfUse() {
         'post or send unlawful content, including content that sexually exploits children, promotes violence or hatred, infringes someone\'s rights, or spreads malware;',
         'pretend to be another person or business, or misuse the Verified badge;',
         'record a call without the agreement of everyone on it, or use any recording unlawfully;',
+        'upload a profile photo that shows nudity or sexual content, violence, or a child in a way that could harm them; that you do not have the right to use; or that shows another person without their agreement;',
         'use location sharing to follow, track, stalk or harass anyone, or share another person\'s location without their agreement;',
         'try to break, probe, overload or get around the security of the service, or collect other people\'s data in bulk;',
         'sell or share access to your account.',
@@ -290,6 +296,7 @@ function termsOfUse() {
       ul: [
         'Premium is bought in advance for a day, a month or a year. It does not renew by itself; buying again extends it. Prices are shown before you pay and may change for future purchases.',
         'Premium also lets a parent or guardian of a young person under 18 change that person\'s parental controls (calls, location sharing, being found by new people, public channels). Agreeing to a child\'s account, disabling it and deleting it are always free, and a child\'s safe default settings apply without Premium.',
+        'Premium lets you keep more profile photos (5 instead of 2 by default).',
         'Payments are handled by a payment provider. {brand} never sees your card or bank details.',
         'Refunds: [describe your refund policy here, for example "Premium is not refundable once activated, except where the law requires"]. This is for your lawyer to confirm.',
         'When Premium ends, the extra features stop; your chats and data stay, within the free limits.',

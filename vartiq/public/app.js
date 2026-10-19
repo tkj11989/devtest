@@ -63,15 +63,39 @@
 
   function avatar(name, key, { online = false, cls = 'avatar', group = false } = {}) {
     const a = el(cls === 'avatar-btn' ? 'button' : 'div', cls);
-    a.style.background = colorFor(key || name);
-    a.textContent = group ? '👥' : initials(name);
-    if (online) a.classList.add('online');
+    paintAvatar(a, name, key, { online, group });
     return a;
   }
-  function paintAvatar(node, name, key, { online = false, group = false } = {}) {
+  /**
+   * A round picture: the person's photo when I may see one, else their initials on a colour. Photos need my login to
+   * download, so they are fetched with it and shown from memory (`big`: the 512 px picture, else the thumbnail).
+   */
+  function paintAvatar(node, name, key, { online = false, group = false, big = false } = {}) {
     node.style.background = colorFor(key || name);
     node.textContent = group ? '👥' : initials(name);
     node.classList.toggle('online', online);
+    node.classList.remove('has-photo');
+    const photo = !group && state.users?.[key]?.photo;
+    const id = photo && (big ? photo.id : photo.thumb);
+    node.dataset.photo = id || '';
+    if (id) {
+      photoUrl(id).then((url) => {
+        if (!url || node.dataset.photo !== id) return;
+        node.style.background = `center / cover no-repeat url("${url}")`;
+        node.textContent = '';
+        node.classList.add('has-photo');
+      });
+    }
+  }
+  const photoUrls = new Map(); // media id -> Promise of an object URL
+  function photoUrl(id) {
+    if (!photoUrls.has(id)) {
+      photoUrls.set(id, fetch(`/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } })
+        .then((r) => (r.ok ? r.blob() : null))
+        .then((b) => (b ? URL.createObjectURL(b) : (photoUrls.delete(id), null)))
+        .catch(() => { photoUrls.delete(id); return null; }));
+    }
+    return photoUrls.get(id);
   }
 
   const displayName = (u) => state.users[u]?.displayName || u;
@@ -570,6 +594,9 @@
     purged.clear();
     moreEarlier.clear();
     hideGuardianGate();
+    photoUrls.forEach((p) => p.then((u) => u && URL.revokeObjectURL(u)));
+    photoUrls.clear();
+    state.photos = null;
     state.cache?.clear(); // the saved chats stay on this device only while you are logged in
     state.cache = null;
     state.calls?.dispose();
@@ -603,6 +630,7 @@
     disappearing: ['#menu-timer', '#btn-default-timer@.link-row'],
     calls: ['#call-buttons', '#btn-join-call'],
     location: ['#btn-place'],
+    profilePhotos: ['#btn-photos'],
     push: ['#btn-notifications'],
     callRecording: ['#call-record'],
     appearance: ['#btn-appearance'],
@@ -737,6 +765,218 @@
     });
     location.reload();
   }
+
+  // ---------- profile photos ----------
+  //
+  // Up to 2 photos for a free account, 5 with Premium. The first is the picture people see. Each photo is cropped square
+  // and shrunk here (512 px, plus a 128 px thumbnail) before it is sent, so uploads are small and fast.
+
+  state.photos = null;
+
+  async function loadPhotos() {
+    try {
+      state.photos = await emit('photos:get');
+    } catch { /* the panel shows what it has */ }
+    renderPhotos();
+  }
+
+  function renderPhotos() {
+    const ph = state.photos;
+    if (!ph) return;
+    const tag = (cls, text) => el('span', `tag ${cls}`, text);
+    $('#photos-summary').textContent = `${ph.photos.length} of ${ph.limit} photos.${!ph.premium && ph.limit < ph.premiumLimit ? ` Premium lets you keep ${ph.premiumLimit}.` : ''} The first one is your picture.`;
+    $('#photos-row-summary').textContent = ph.photos.length ? `${ph.photos.length} photo${ph.photos.length === 1 ? '' : 's'} · ${ph.privacy === 'everyone' ? 'everyone sees' : ph.privacy === 'nobody' ? 'nobody sees' : 'my contacts see'}` : 'Add a picture people see next to your name';
+    const grid = $('#photo-grid');
+    grid.textContent = '';
+    for (const p of ph.photos) {
+      const tile = el('div', `photo-tile${p.main ? ' main' : ''}`);
+      const pic = el('button', 'pic');
+      pic.type = 'button';
+      pic.title = 'View photo';
+      pic.setAttribute('aria-label', 'View photo');
+      photoUrl(p.thumb).then((url) => { if (url) pic.style.backgroundImage = `url("${url}")`; });
+      pic.addEventListener('click', () => openPhotoViewer(state.me.username, p.id));
+      tile.appendChild(pic);
+      if (p.main) tile.appendChild(tag('', 'Your picture'));
+      if (p.hidden) tile.appendChild(tag('warn', 'Under review'));
+      const acts = el('div', 'acts');
+      if (!p.main) {
+        const make = el('button', 'link', 'Make main');
+        make.type = 'button';
+        make.addEventListener('click', () => photoAction('photo:main', { id: p.id }));
+        acts.appendChild(make);
+      }
+      const del = el('button', 'link', 'Remove');
+      del.type = 'button';
+      del.addEventListener('click', () => { if (confirm('Remove this photo?')) photoAction('photo:delete', { id: p.id }); });
+      acts.appendChild(del);
+      tile.appendChild(acts);
+      grid.appendChild(tile);
+    }
+    const full = ph.photos.length >= ph.limit;
+    const add = el('button', 'photo-add', '+');
+    add.type = 'button';
+    add.title = full ? 'Photo limit reached' : 'Add a photo';
+    add.setAttribute('aria-label', add.title);
+    add.addEventListener('click', () => {
+      $('#photos-error').textContent = '';
+      if (!full) return $('#photo-file').click();
+      if (!ph.premium && ph.limit < ph.premiumLimit) return offerUpgrade(`A free account can keep ${ph.freeLimit} profile photos. Premium allows ${ph.premiumLimit}.`);
+      $('#photos-error').textContent = `You can keep up to ${ph.limit} photos. Remove one to add another.`;
+      return undefined;
+    });
+    grid.appendChild(add);
+    document.querySelectorAll('input[name=photo-privacy]').forEach((r) => { r.checked = r.value === ph.privacy; });
+    $('#photos-privacy-note').textContent = ph.minor
+      ? 'Because you are under 18, your photos are only ever shown to people you already chat with, whatever you choose here.'
+      : ph.privacy === 'contacts' ? 'People who are not in a chat or group with you cannot see your photos.' : '';
+  }
+
+  async function photoAction(event, payload) {
+    $('#photos-error').textContent = '';
+    try {
+      state.photos = await emit(event, payload);
+      renderPhotos();
+    } catch (err) {
+      $('#photos-error').textContent = err.message;
+    }
+  }
+
+  function openPhotos() {
+    openPanel('#panel-photos');
+    renderPhotos();
+    loadPhotos();
+  }
+  $('#btn-photos').addEventListener('click', openPhotos);
+  $('#profile-avatar').addEventListener('click', openPhotos);
+  $('#profile-avatar').style.cursor = 'pointer';
+  document.querySelectorAll('input[name=photo-privacy]').forEach((r) => r.addEventListener('change', () => photoAction('photo:privacy', { who: r.value })));
+
+  // --- crop: a square, moved by dragging and zoomed with a slider ---
+  const crop = { bmp: null, zoom: 1, ox: 0, oy: 0, base: 1 };
+  const cropCanvas = $('#crop-canvas');
+  function drawCrop(canvas, size) {
+    const ctx = canvas.getContext('2d');
+    canvas.width = size;
+    canvas.height = size;
+    const k = size / 280; // the preview is 280 px: everything is relative to it
+    const scale = crop.base * crop.zoom * k;
+    const w = crop.bmp.width * scale;
+    const h = crop.bmp.height * scale;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, size, size);
+    ctx.drawImage(crop.bmp, (size - w) / 2 + crop.ox * k, (size - h) / 2 + crop.oy * k, w, h);
+  }
+  const clampCrop = () => {
+    const w = crop.bmp.width * crop.base * crop.zoom;
+    const h = crop.bmp.height * crop.base * crop.zoom;
+    crop.ox = Math.max(-(w - 280) / 2, Math.min((w - 280) / 2, crop.ox));
+    crop.oy = Math.max(-(h - 280) / 2, Math.min((h - 280) / 2, crop.oy));
+  };
+  const repaintCrop = () => { clampCrop(); drawCrop(cropCanvas, 280); };
+  let dragging = null;
+  cropCanvas.addEventListener('pointerdown', (e) => { dragging = { x: e.clientX, y: e.clientY, ox: crop.ox, oy: crop.oy }; cropCanvas.setPointerCapture(e.pointerId); });
+  cropCanvas.addEventListener('pointermove', (e) => { if (!dragging) return; crop.ox = dragging.ox + (e.clientX - dragging.x); crop.oy = dragging.oy + (e.clientY - dragging.y); repaintCrop(); });
+  cropCanvas.addEventListener('pointerup', () => { dragging = null; });
+  $('#crop-zoom').addEventListener('input', (e) => { crop.zoom = Number(e.target.value); repaintCrop(); });
+  const toBlob = (canvas, quality) => new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+
+  /** Let the person place the picture, then return { image, thumb } as bytes (or null if they cancel). */
+  function cropPhoto(file) {
+    return new Promise((resolve) => {
+      createImageBitmap(file).then((bmp) => {
+        Object.assign(crop, { bmp, zoom: 1, ox: 0, oy: 0, base: 280 / Math.min(bmp.width, bmp.height) });
+        $('#crop-zoom').value = 1;
+        $('#crop-error').textContent = '';
+        $('#crop-modal').classList.remove('hidden');
+        repaintCrop();
+        const done = (result) => {
+          $('#crop-modal').classList.add('hidden');
+          $('#crop-save').onclick = null;
+          $('#crop-cancel').onclick = null;
+          bmp.close?.();
+          resolve(result);
+        };
+        $('#crop-cancel').onclick = () => done(null);
+        $('#crop-save').onclick = async () => {
+          const big = document.createElement('canvas');
+          const small = document.createElement('canvas');
+          drawCrop(big, 512);
+          drawCrop(small, 128);
+          const [image, thumb] = await Promise.all([toBlob(big, 0.86), toBlob(small, 0.8)]);
+          if (!image || !thumb) { $('#crop-error').textContent = 'Could not prepare this photo'; return; }
+          done({ image: await image.arrayBuffer(), thumb: await thumb.arrayBuffer() });
+        };
+      }).catch(() => { $('#photos-error').textContent = 'This file cannot be read as a picture. Use a JPEG, PNG or WebP photo.'; resolve(null); });
+    });
+  }
+  $('#photo-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { $('#photos-error').textContent = 'That file is too large'; return; }
+    const prepared = await cropPhoto(file);
+    if (prepared) await photoAction('photo:upload', prepared);
+  });
+
+  // --- viewing someone's photos, and reporting one ---
+  const viewer = { photos: [], i: 0, username: null, canReport: false, reasons: [] };
+  async function openPhotoViewer(username, startId) {
+    try {
+      const res = await emit('photos:user', { username });
+      if (!res.photos.length) return toast('No photos to show');
+      Object.assign(viewer, { photos: res.photos, i: Math.max(0, res.photos.findIndex((p) => p.id === startId)), username, canReport: res.canReport, reasons: res.reasons });
+      $('#photo-viewer').classList.remove('hidden');
+      showViewerPhoto();
+    } catch (err) {
+      toast(err.message);
+    }
+    return undefined;
+  }
+  function showViewerPhoto() {
+    const p = viewer.photos[viewer.i];
+    const img = $('#pv-img');
+    img.removeAttribute('src');
+    photoUrl(p.image).then((url) => { if (url && viewer.photos[viewer.i] === p) img.src = url; });
+    $('#pv-title').textContent = displayName(viewer.username);
+    $('#pv-count').textContent = `${viewer.i + 1} of ${viewer.photos.length}`;
+    $('#pv-prev').hidden = viewer.i === 0;
+    $('#pv-next').hidden = viewer.i === viewer.photos.length - 1;
+    $('#pv-report').classList.toggle('hidden', !viewer.canReport);
+  }
+  const closeViewer = () => $('#photo-viewer').classList.add('hidden');
+  $('#pv-close').addEventListener('click', closeViewer);
+  $('#pv-prev').addEventListener('click', () => { viewer.i = Math.max(0, viewer.i - 1); showViewerPhoto(); });
+  $('#pv-next').addEventListener('click', () => { viewer.i = Math.min(viewer.photos.length - 1, viewer.i + 1); showViewerPhoto(); });
+  document.addEventListener('keydown', (e) => {
+    if ($('#photo-viewer').classList.contains('hidden')) return;
+    if (e.key === 'Escape') closeViewer();
+    else if (e.key === 'ArrowLeft') $('#pv-prev').click();
+    else if (e.key === 'ArrowRight') $('#pv-next').click();
+  });
+  $('#pv-report').addEventListener('click', async () => {
+    const p = viewer.photos[viewer.i];
+    const who = viewer.username;
+    closeViewer();
+    const done = await dialog({
+      title: 'Report this photo',
+      text: `Tell us what is wrong with ${displayName(who)}'s photo. We review reports. If several people report a photo, or you say a child may be at risk, it is hidden from everyone while we look.`,
+      fields: [
+        { name: 'reason', label: 'What is wrong?', options: viewer.reasons.map((r) => [r.id, r.label]) },
+        { name: 'detail', label: 'More details (optional)', type: 'text', required: false, maxLength: 300 },
+      ],
+      submit: 'Send report',
+      onSubmit: async (v) => emit('photo:report', { username: who, id: p.id, reason: v.reason, detail: (v.detail || '').trim() }),
+    });
+    if (done) toast('Thank you. We will review this photo.');
+  });
+  // Someone's big picture (their profile card or contact info) opens their photos.
+  document.addEventListener('click', (e) => {
+    const av = e.target.closest('#contact-body .avatar.xl');
+    if (!av) return;
+    const username = state.profileCard || (state.conversations.get(state.activeId)?.type === 'direct' ? convPeer(state.conversations.get(state.activeId)) : null);
+    if (username && state.users[username]?.photo) openPhotoViewer(username);
+  });
 
   // ---------- parent or guardian (under 18) ----------
 
@@ -928,6 +1168,7 @@
 
     // The administrator can change features, announcements and maintenance at any time.
     socket.on('config:update', applyConfig);
+    socket.on('photos:update', (ph) => { state.photos = ph; renderPhotos(); }); // another of my devices changed my photos
     // The parent or guardian agreed, changed what is allowed, or the child turned 18.
     socket.on('guardian:update', ({ guardian }) => {
       const gateOpen = !$('#guardian-gate').classList.contains('hidden');
@@ -1107,7 +1348,7 @@
       const prev = state.users[user.username] || {};
       state.users[user.username] = { ...user, online: user.online ?? prev.online };
       if (user.username === state.me?.username) {
-        state.me = { ...state.me, ...user, business: user.business, verified: user.verified, premium: user.premium };
+        state.me = { ...state.me, ...user, business: user.business, verified: user.verified, premium: user.premium, photo: user.photo };
         renderVerifyRow();
         if (!user.business) state.myBusiness = null;
       }
@@ -2686,7 +2927,7 @@
     form.displayName.value = state.me.displayName;
     form.about.value = state.me.about || '';
     $('#profile-msg').textContent = '';
-    paintAvatar($('#profile-avatar'), state.me.displayName, state.me.username);
+    paintAvatar($('#profile-avatar'), state.me.displayName, state.me.username, { big: true });
     $('#profile-username').textContent = '@' + state.me.username;
     renderVerifyRow();
     renderLockSummary();
@@ -2704,7 +2945,7 @@
       state.me = user;
       state.users[user.username] = { ...user, online: true };
       paintAvatar($('#btn-profile'), user.displayName, user.username);
-      paintAvatar($('#profile-avatar'), user.displayName, user.username);
+      paintAvatar($('#profile-avatar'), user.displayName, user.username, { big: true });
       $('#profile-msg').textContent = 'Saved ✓';
       renderVerifyRow();
     } catch (err) {
@@ -3163,7 +3404,7 @@
 
     const top = el('section', 'info-top');
     const av = el('div', 'avatar xl');
-    paintAvatar(av, convTitle(conv), group ? conv.id : peer, { group });
+    paintAvatar(av, convTitle(conv), group ? conv.id : peer, { group, big: true });
     const name = el('h2', 'info-name', convTitle(conv));
     if (user && !group) name.append(...userBadges(user));
     top.append(av, name, el('p', 'muted', group ? `Group · ${conv.members.length} members` : `@${peer}`));
@@ -3274,7 +3515,7 @@
     $('#contact-title').textContent = user.business ? 'Business info' : 'Profile';
     const top = el('section', 'info-top');
     const av = el('div', 'avatar xl');
-    paintAvatar(av, user.displayName, user.username);
+    paintAvatar(av, user.displayName, user.username, { big: true });
     const name = el('h2', 'info-name', user.displayName);
     name.append(...userBadges(user));
     top.append(av, name, el('p', 'muted', `@${user.username}`), el('p', 'muted', user.online ? 'online' : lastSeenText(user.username) || ''));
@@ -4372,7 +4613,7 @@
     let order;
     const chosen = await dialog({
       title: 'Upgrade to Premium',
-      text: `Unlimited locked chats and hidden chats, a Premium badge${state.guardian ? ', and your parent or guardian can then change your parental controls' : ''}. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.`,
+      text: `Unlimited locked chats and hidden chats, up to 5 profile photos (free accounts: 2), a Premium badge${state.guardian ? ', and your parent or guardian can then change your parental controls' : ''}. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.`,
       fields: [{ name: 'plan', label: 'Plan', options: info.plans.map((p) => [p.id, `${p.label} · ${money(p)}`]) }],
       submit: 'Continue to payment',
       onSubmit: async (v) => { order = await emit('subscription:checkout', { plan: v.plan }); },

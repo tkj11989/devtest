@@ -368,6 +368,16 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   }, req.ctx)));
   router.post('/chat-lock/clear', ...authed, json, run((req) => actions.clearChatLocks(req.user, proof(req))));
 
+  // ---------- profile photos ----------
+
+  router.get('/me/photos', ...authed, run((req) => actions.photos(req.user)));
+  router.post('/me/photos', ...authed, express.json({ limit: '1mb' }), run((req) => actions.uploadPhoto(req.user, { image: req.body?.image, thumb: req.body?.thumb }), 201));
+  router.put('/me/photos/:id/main', ...authed, run((req) => actions.setMainPhoto(req.user, { id: p(req, 'id') })));
+  router.delete('/me/photos/:id', ...authed, run((req) => actions.deletePhoto(req.user, { id: p(req, 'id') })));
+  router.put('/me/photo-privacy', ...authed, json, run((req) => actions.setPhotoPrivacy(req.user, { who: req.body?.who })));
+  router.get('/users/:username/photos', ...authed, run((req) => actions.userPhotos(req.user, { username: p(req, 'username') })));
+  router.post('/users/:username/photos/:id/report', ...authed, json, run((req) => actions.reportPhoto(req.user, { username: p(req, 'username'), id: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail }), 201));
+
   // ---------- my parent or guardian (children) ----------
 
   router.get('/me/guardian', ...authed, run((req) => actions.guardianStatus(req.user)));

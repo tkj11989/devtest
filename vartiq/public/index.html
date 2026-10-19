@@ -49,6 +49,23 @@
       <p class="gate-alt"><button class="link" type="button" id="guardian-gate-export">Download my data</button> · <button class="link" type="button" id="guardian-gate-delete">Delete my account</button> · <button class="link" type="button" id="guardian-gate-logout">Log out</button></p>
     </div>
   </div>
+  <div id="photo-viewer" class="photo-viewer hidden" role="dialog" aria-modal="true" aria-label="Profile photos">
+    <button type="button" class="pv-close" id="pv-close" aria-label="Close">&times;</button>
+    <button type="button" class="pv-nav prev" id="pv-prev" aria-label="Previous photo">&lsaquo;</button>
+    <img id="pv-img" alt="Profile photo" />
+    <button type="button" class="pv-nav next" id="pv-next" aria-label="Next photo">&rsaquo;</button>
+    <div class="pv-bar"><span id="pv-title"></span><span id="pv-count"></span><button type="button" class="link" id="pv-report">Report photo</button></div>
+  </div>
+  <div id="crop-modal" class="maintenance hidden" role="dialog" aria-modal="true" aria-labelledby="crop-title">
+    <div class="maintenance-card gate-card crop-card">
+      <h2 id="crop-title">Position your photo</h2>
+      <p class="muted">Drag to move, and use the slider to zoom. The whole square is what people see.</p>
+      <canvas id="crop-canvas" width="280" height="280" aria-label="Photo preview"></canvas>
+      <label class="crop-zoom">Zoom <input type="range" id="crop-zoom" min="1" max="4" step="0.01" value="1" /></label>
+      <p id="crop-error" class="error" role="alert"></p>
+      <div class="row-actions"><button class="link" type="button" id="crop-cancel">Cancel</button><button class="primary" type="button" id="crop-save">Use this photo</button></div>
+    </div>
+  </div>
   <!-- ========== Auth screen ========== -->
   <section id="auth" class="auth hidden">
     <div class="auth-card">
@@ -292,6 +309,24 @@
       </div>
 
       <!-- Privacy and consent -->
+      <div class="panel overlay hidden" id="panel-photos">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Profile photos</h2></header>
+        <div class="pad stack">
+          <p class="muted" id="photos-summary"></p>
+          <div class="photo-grid" id="photo-grid"></div>
+          <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp" hidden />
+          <p class="error" id="photos-error" role="alert"></p>
+          <div class="card-lite">
+            <strong>Who can see my photos</strong>
+            <label class="radio-row"><input type="radio" name="photo-privacy" value="everyone" /><span><strong>Everyone</strong></span></label>
+            <label class="radio-row"><input type="radio" name="photo-privacy" value="contacts" /><span><strong>My contacts</strong><br />People I chat with, in a chat or a group</span></label>
+            <label class="radio-row"><input type="radio" name="photo-privacy" value="nobody" /><span><strong>Nobody</strong></span></label>
+            <p class="muted small-note" id="photos-privacy-note"></p>
+          </div>
+          <p class="muted small-note">Photos are not end-to-end encrypted: the people you allow can see them, and if someone reports a photo our moderators review it. Do not upload photos of other people without their agreement.</p>
+        </div>
+      </div>
+
       <div class="panel overlay hidden" id="panel-notifications">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Notifications</h2></header>
         <div class="pad stack">
@@ -458,6 +493,10 @@
             <label class="cache-switch"><input type="checkbox" id="cache-toggle" checked aria-label="Save chats on this device" /></label>
             <button class="link" type="button" id="btn-cache-clear">Clear</button>
           </div>
+          <button class="link-row" type="button" id="btn-photos">
+            <svg viewBox="0 0 24 24"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.500 13.500l2.500 3 3.500-4.500 4.500 6H5l3.500-4.500Z"/></svg>
+            <span><strong>Profile photos</strong><small id="photos-row-summary">Add a picture people see next to your name</small></span>
+          </button>
           <button class="link-row" type="button" id="btn-notifications">
             <svg viewBox="0 0 24 24"><path d="M12 22a2.500 2.500 0 0 0 2.500-2.500h-5A2.500 2.500 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.500-6.850V3.500a1.500 1.500 0 0 0-3 0v.65A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
             <span><strong>Notifications</strong><small id="notifications-summary">Get alerts for messages and calls when the app is closed</small></span>

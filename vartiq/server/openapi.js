@@ -41,6 +41,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       business: ref('BusinessPublic'),
       verified: { type: 'boolean', description: 'present (true) when the person passed identity verification; absent = not verified' },
       premium: { type: 'boolean', description: 'present (true) while the person has an active Premium subscription' },
+      photo: obj({ id: { type: 'string', description: 'media id of the picture (512 px)' }, thumb: { type: 'string', description: 'media id of the thumbnail (128 px)' }, count: { type: 'integer', description: 'how many photos you may see' } }, ['id', 'thumb']),
     }, ['username', 'displayName']),
     DayHours: {
       oneOf: [
@@ -116,6 +117,17 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       keyId: { type: 'string', description: 'short fingerprint of the key' },
       createdAt: { type: 'integer' },
     }, ['id', 'name', 'publicKey', 'keyId']),
+    ProfilePhotos: obj({
+      photos: arrayOf(obj({ id: { type: 'string' }, image: { type: 'string', description: 'media id (download from `GET /media/{id}`)' }, thumb: { type: 'string' }, ts: { type: 'integer' }, main: { type: 'boolean', description: 'the one shown as your picture' }, hidden: { type: 'boolean', description: 'under review after reports: only you can see it' } })),
+      limit: { type: 'integer', description: 'how many you may keep now' },
+      freeLimit: { type: 'integer' },
+      premiumLimit: { type: 'integer' },
+      premium: { type: 'boolean' },
+      privacy: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+      appliedPrivacy: { type: 'string', enum: ['everyone', 'contacts', 'nobody'], description: 'what is really applied: under 18 never goes beyond `contacts`' },
+      minor: { type: 'boolean' },
+      reasons: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' } })),
+    }),
     GuardianDetails: obj({
       name: { type: 'string', maxLength: 60 },
       relationship: { type: 'string', enum: ['mother', 'father', 'guardian', 'other'] },
@@ -314,7 +326,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', guardian: 'Parent or guardian', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', guardian: 'Parent or guardian', photo: 'Profile photos', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -378,7 +390,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
-          consent: { terms: true, version: '2026-10-17' },
+          consent: { terms: true, version: '2026-10-19' },
           birthDate: '1990-05-17',
         }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session. For someone under 18 the response also has `guardian` (`state: "pending"`, whether the private link reached the parent, and the masked contacts): the account cannot be used until the parent or guardian agrees.'), ...errors(400, 403, 409, 429, 503) },
@@ -820,6 +832,38 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
       delete: op(T.msg, 'Stop sharing my live location', { description: 'The position is erased and the message shows that the share ended.', params: [idParam('id')], responses: { 200: ok(obj({ ended: { type: 'boolean' } })), ...errors(401, 404) } }),
     },
+    '/me/photos': {
+      get: op(T.photo, 'My profile photos', { responses: { 200: ok(ref('ProfilePhotos')), ...errors(401) } }),
+      post: op(T.photo, 'Add a profile photo', {
+        description: 'Send `image` (the picture, at most 1024 px and 400 KB) and `thumb` (a thumbnail of at most 256 px and 48 KB), both JPEG, PNG or WebP, as base64. The server reads the real type and size from the bytes. The app crops a square and sends 512 px and 128 px. **Limits**: 2 photos for a free account, 5 with Premium (`402 premium_required` when a free account is full but Premium would allow more; `409 limit_reached` at the Premium maximum). The first photo is shown as your picture. Photos are not end-to-end encrypted.',
+        body: jsonBody(obj({ image: { type: 'string', format: 'byte' }, thumb: { type: 'string', format: 'byte' } }, ['image', 'thumb'])),
+        responses: { 201: ok(ref('ProfilePhotos')), ...errors(400, 401, 402, 403, 409, 413, 415) },
+      }),
+    },
+    '/me/photos/{id}/main': { put: op(T.photo, 'Make a photo the one shown as my picture', { params: [idParam('id')], responses: { 200: ok(ref('ProfilePhotos')), ...errors(401, 404) } }) },
+    '/me/photos/{id}': { delete: op(T.photo, 'Remove one of my photos', { params: [idParam('id')], responses: { 200: ok(ref('ProfilePhotos')), ...errors(401, 404) } }) },
+    '/me/photo-privacy': {
+      put: op(T.photo, 'Who may see my photos', {
+        description: '`everyone`, `contacts` (people I chat with, the default) or `nobody`. Blocked people never see them. For someone under 18 `everyone` is applied as `contacts`.',
+        body: jsonBody(obj({ who: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] } }, ['who'])),
+        responses: { 200: ok(ref('ProfilePhotos')), ...errors(400, 401) },
+      }),
+    },
+    '/users/{username}/photos': {
+      get: op(T.photo, 'Someone\'s photos, as far as I may see them', {
+        description: 'An empty list when the person\'s privacy setting, a block, or the photo feature being off keeps you from seeing them. Download the pictures from `GET /media/{id}` with your token.',
+        params: [idParam('username')],
+        responses: { 200: ok(obj({ user: ref('User'), photos: arrayOf(obj({ id: { type: 'string' }, image: { type: 'string' }, thumb: { type: 'string' }, ts: { type: 'integer' } })), canReport: { type: 'boolean' }, reasons: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' } })) })), ...errors(401, 404) },
+      }),
+    },
+    '/users/{username}/photos/{id}/report': {
+      post: op(T.photo, 'Report a profile photo', {
+        description: '`reason`: `nudity`, `child_safety`, `harassment`, `violence`, `impersonation` or `other`. One report per person per photo (`409` again), at most 20 a day. **Three different people, or one `child_safety` report, hide the photo from everyone but its owner** until an administrator has looked (they can remove it or restore it).',
+        params: [idParam('username'), idParam('id')],
+        body: jsonBody(obj({ reason: { type: 'string', enum: ['nudity', 'child_safety', 'harassment', 'violence', 'impersonation', 'other'] }, detail: { type: 'string', maxLength: 300 } }, ['reason']), { reason: 'harassment' }),
+        responses: { 201: ok(obj({ reported: { type: 'boolean' }, hidden: { type: 'boolean' } })), ...errors(400, 401, 404, 409, 429) },
+      }),
+    },
     '/guardian/{token}': {
       get: op(T.guardian, 'The parent or guardian page: a child and what the guardian allows', {
         auth: false,
@@ -1246,6 +1290,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /conversations/{id}/location': 'shareLocation',
     'put /live-locations/{id}': 'updateLiveLocation',
     'delete /live-locations/{id}': 'stopLiveLocation',
+    'get /me/photos': 'listMyPhotos',
+    'post /me/photos': 'addProfilePhoto',
+    'put /me/photos/{id}/main': 'setMainProfilePhoto',
+    'delete /me/photos/{id}': 'deleteProfilePhoto',
+    'put /me/photo-privacy': 'setPhotoPrivacy',
+    'get /users/{username}/photos': 'getUserPhotos',
+    'post /users/{username}/photos/{id}/report': 'reportProfilePhoto',
     'get /guardian/{token}': 'getGuardianPage',
     'post /guardian/{token}/consent': 'guardianConsent',
     'put /guardian/{token}/controls': 'setGuardianControls',
@@ -1308,6 +1359,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       '',
       'Not covered: messages sent by the REST API without an envelope, business auto replies, status updates, names, times and who talks to whom. Calls are encrypted peer to peer by WebRTC.',
     ].join('\n'),
+    [T.photo]: 'Profile photos: 2 for a free account, 5 with Premium. The first is the picture; privacy is everyone, contacts or nobody (under 18: contacts at most); anyone may report a photo.',
     [T.guardian]: 'Under 18? A parent or guardian is mandatory: they get a private link, agree, and choose what the child can do (calls, location, being found by new people, public channels), or disable or delete the account. They never see messages.',
     [T.push]: 'Notifications on a person\'s devices for new messages and calls while the app is closed (Web Push). They carry no message text.',
     [T.chan]: 'Public one-to-many channels: owners and admins post, anyone can read and follow (not end-to-end encrypted)',

@@ -10,6 +10,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Voice and video calls**, 1:1 and **group calls** (up to 6 people, peer-to-peer WebRTC): ringing on all devices, accept/decline, mute, camera on/off, **hold**, call timer, join a group call that's already running, and call history in the chat (missed / declined / duration, tap to call back)
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
+- **Profile photos**: up to **2** for a free account and **5** with Premium; the first is your picture, shown in chat lists, headers, groups and calls (initials when there is none); you choose who sees them (everyone, my contacts, nobody); anyone can report a photo and administrators review reports
 - **Parental control for under-18s**: date of birth at sign-up; 8 to 17 needs a parent or guardian (name, relationship, mobile number or email), who agrees through a private link before the account opens and can then switch calls, location sharing, being found by new people and public channels on or off, or disable or delete the account
 - **Push notifications**: a notification on the device for a new message or an incoming call while the app is closed (Web Push; works in Chrome, Edge, Firefox and Safari, and on iPhone/iPad once VartiQ is added to the Home Screen). People choose what they get; notifications say who and what kind, never the message
 - **Location sharing**: share where you are once, or live for 15 minutes, 1 hour or 8 hours (end-to-end encrypted like a message; stops by itself and the position is erased)
@@ -251,6 +252,7 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 | Locked chats (Chat lock) | up to **3** | unlimited |
 | Hidden chats (Hide chat) | up to **1** | unlimited |
 | Badge | none | gold ★ next to the name |
+| Profile photos | up to **2** | up to **5** |
 | Parental controls (under-18 accounts): the parent or guardian changes calls, location sharing, being found by new people, public channels | safe defaults, cannot be changed | changeable at any time |
 
 Past a free limit, locking or hiding shows *"Premium required"* with the plans (API: `402 premium_required`). Everything else is the same on both. Profile → **Premium** shows the plan, how much of the free allowance you use, and **Upgrade / Extend**.
@@ -354,6 +356,18 @@ Everything people agree to, and their rights over their data, is built in. **The
 - **Deleting an account** (`POST /me/delete/code`, then `DELETE /me` with `{ requestId, code, confirmed: true }`): a popup explains what happens and needs a tick ("I understand that my account will be permanently disabled and my chats, media and personal data deleted…"), then a code sent by SMS. The account is **marked permanently disabled at once**: login stops, all sessions, API keys and webhooks are revoked, connections are closed, other people see "Deleted account", and the mobile number and email are released. **Chats, media and personal data are erased within 24 hours**: a sweeper runs every minute and does it about an hour after the request (`ACCOUNT_ERASE_DELAY_MS`, never more than 24 hours; the admin Overview warns if one is overdue). Erased: the messages and voice notes the person sent, status photos and product pictures, profile, name, number, email, keys and devices, statuses, channels and posts, products, developer keys and settings; they leave their groups (a group left with one person is deleted). **Kept, in an archive:** the account moves out of the live users into the `archivedUsers` table as a basic record marked `permanently_disabled`: username, registration date, when it was disabled and archived, the record of what they accepted, and any subscription or verification record. The archived username stays **reserved**, so a new account can never get it and never inherits the old chats, and other people's chats keep showing "Deleted account". Nothing in the live users table is left to clash with. **Registering again is allowed at once** with the same number: it creates a brand-new account (new username if the old one is taken, new registration date, none of the old data). Backups keep erased data for up to the days set in Settings → Legal.
 - **Admin:** the user view shows which version each person accepted and when; the user list can show deleted accounts.
 - **Not built, decide with your lawyer:** there is no age confirmation at sign-up (if ExamSuit students can be under 18, ask what the law requires, for example parental consent), a consent manager, data-breach reporting procedure, and the refund and liability wording in the Terms (shown as bracketed placeholders).
+
+## Profile photos
+
+Profile → **Profile photos** (or tap your big picture): add, remove, choose which is your picture, and who sees them.
+
+- **Limits**: **2** photos for a free account, **5** with Premium (Admin → Settings → Free account limits: *Profile photos (free account)* and *(Premium)*). A free account that is full gets *Premium required* (`402 premium_required`); at the Premium maximum it is `409 limit_reached`. If Premium ends, the photos stay and nothing more can be added until the number is below the free limit.
+- **Cropping and size**: the app crops each photo to a square (drag and zoom) and shrinks it on the device: a 512 px picture and a 128 px thumbnail, both JPEG. The server never trusts that: it reads the real type and size from the bytes (JPEG, PNG or WebP only; the picture at most 1024 px and 400 KB, the thumbnail at most 256 px and 48 KB) and refuses anything else (`415`, `413`, `400`).
+- **Who sees them**: *everyone*, *my contacts* (people I chat with, in a chat or a group; **the default**) or *nobody*. A blocked person never sees them. **Under 18**: the photo is only ever shown to people the child chats with (`everyone` is applied as `contacts`), never in search, and not at all while the account waits for its parent or guardian. Photos are downloaded from `GET /media/{id}` with the login token, and the same rule applies to the file as to the profile.
+- **Reporting**: anyone who can see a photo can report it (*nudity or sexual content, puts a child at risk, harassment or hate, violence, pretends to be someone else, something else*, with optional details). One report per person per photo and at most 20 a day. **Three different people, or one "puts a child at risk" report, hide the photo from everyone but its owner** until an administrator decides: Admin → *Channels & reports* → *Reported profile photos* shows the picture (only to administrators), who reported it and why, and offers *Looks fine* (restores it and clears the reports) or *Remove photo* (deletes the files and the reports; recorded in the audit log).
+- **Admin switch**: *Profile photos* in Features. Off: photos are hidden everywhere and cannot be added; removing always works.
+- **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
+- **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
 
 ## Parental control (under 18)
 
@@ -590,6 +604,7 @@ vartiq/
 │   ├── auth.js      # Sign-up and login with one-time codes
 │   ├── otp.js       # OTP codes: send, verify, limits, SMS/email delivery
 │   ├── translate.js # Translating received messages per chat (gateway)
+│   ├── photos.js    # Profile photos: what is accepted (real type and size), report reasons
 │   ├── guardian.js  # Age rules, parent or guardian: sign-up checks, private link, controls, their page
 │   ├── push.js      # Push notifications (Web Push, VAPID, allowed push services)
 │   ├── admin.js     # Admin dashboard API (/admin/api)
@@ -651,6 +666,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `messages:get`      | Load chat history                        |
 | `message:send`      | Send a message (`masked`, `clientId` for safe retries) |
 | `voice:send`        | Send a voice message (binary audio)      |
+| `photos:get` / `photo:upload` / `photo:main` / `photo:delete` / `photo:privacy` / `photos:user` / `photo:report` | Profile photos: mine, someone's, report |
 | `guardian:status` / `guardian:resend` / `guardian:contact` | A child's view of their parent or guardian: state, send the link again, fix their details |
 | `location:send` / `location:update` / `location:stop` | Share a location (once or live), move a live share, stop it |
 | `push:config` / `push:subscribe` / `push:unsubscribe` / `push:settings` / `push:test` | Notification settings and this device's subscription |
@@ -687,7 +703,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `call:hold`         | Put the call on hold / resume            |
 | `call:end`          | Leave / hang up                          |
 
-Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended), `guardian:update` (a parent or guardian agreed or changed what is allowed).
+Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended), `guardian:update` (a parent or guardian agreed or changed what is allowed), `photos:update` (my photos changed on another device, or one was hidden).
 
 Voice-message audio and status photos are downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
 

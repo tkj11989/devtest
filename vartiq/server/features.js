@@ -16,6 +16,7 @@ const FEATURES = [
   { id: 'calls', group: 'Messaging', label: 'Voice & video calls', description: 'Starting and joining calls.' },
   { id: 'callRecording', group: 'Messaging', label: 'Call recording', description: 'Asking to record a call. Recording only starts when everyone in the call agrees, and is saved on the requester\'s own device. Off: the Record button is hidden and requests are refused (stopping always works).' },
   { id: 'appearance', group: 'Social', label: 'Personalisation', description: 'Changing the colour theme, app icon and avatar shape (Premium options). Off: everyone sees the default look.' },
+  { id: 'profilePhotos', group: 'Social', label: 'Profile photos', description: 'Uploading and showing profile photos (2 for a free account, 5 with Premium by default). Off: photos are hidden everywhere and cannot be added; removing always works.' },
   { id: 'status', group: 'Social', label: 'Status updates', description: 'Posting, viewing and replying to status updates.' },
   { id: 'channels', group: 'Social', label: 'Public channels', description: 'Creating, finding, following and posting in channels.' },
   { id: 'profileViews', group: 'Social', label: 'Who viewed my profile', description: 'Recording and showing profile views.' },
@@ -39,7 +40,7 @@ const DEFAULT_SETTINGS = {
   // Everything is on, except the developer tools: API keys and webhooks are restricted
   // (web app and mobile) until an administrator switches them on.
   features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
-  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8 },
+  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5 },
   prices: {}, // plan id -> price override
   announcement: '',
   maintenance: { on: false, message: 'We are making improvements and will be back soon.' },
@@ -47,7 +48,7 @@ const DEFAULT_SETTINGS = {
   legal: { ...DEFAULT_LEGAL }, // company details printed in the Terms and Privacy Notice (Admin → Settings → Legal)
 };
 
-const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17] };
+const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10] };
 
 /** Merge a settings patch into `current`, validating everything. Returns the new settings and what changed. */
 function applySettings(current, patch) {
@@ -76,6 +77,7 @@ function applySettings(current, patch) {
       set(`limit ${k}`, next.limits, k, v);
     }
   }
+  if (next.limits.premiumProfilePhotos < next.limits.freeProfilePhotos) throw bad('limits.premiumProfilePhotos cannot be lower than freeProfilePhotos');
   if (patch.prices !== undefined) {
     for (const [plan, v] of Object.entries(patch.prices || {})) {
       if (!['daily', 'monthly', 'yearly'].includes(plan)) throw bad(`Unknown plan "${plan}"`);

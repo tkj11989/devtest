@@ -1398,6 +1398,33 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .consent-toggle span { flex: 1; min-width: 0; font-size: 14px; }
 .consent-links a, .legal-links a, .card-lite a, .gate-card a { color: var(--primary-text); }
 
+/* ---------- profile photos ---------- */
+.avatar { background-size: cover; background-position: center; }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; align-items: start; }
+.radio-row { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; cursor: pointer; }
+.radio-row input { margin-top: 3px; flex: none; }
+.radio-row span { min-width: 0; }
+.photo-tile { display: grid; gap: 4px; justify-items: center; }
+.photo-tile .pic { width: 96px; height: 96px; border-radius: 12px; background: var(--panel-2) center / cover no-repeat; border: 2px solid transparent; padding: 0; cursor: pointer; position: relative; }
+.photo-tile.main .pic { border-color: var(--primary); }
+.photo-tile .tag { font-size: 11px; color: var(--primary-text); font-weight: 600; }
+.photo-tile .tag.warn { color: var(--accent-text); }
+.photo-tile .acts { display: flex; gap: 8px; font-size: 12px; }
+.photo-add { width: 96px; height: 96px; border-radius: 12px; border: 2px dashed var(--border); background: none; color: var(--primary-text); font-size: 28px; cursor: pointer; }
+.photo-add:disabled { opacity: .5; cursor: default; }
+.avatar.xl.has-photo, .avatar.has-photo { color: transparent; }
+.crop-card canvas { width: 280px; height: 280px; border-radius: 12px; touch-action: none; cursor: grab; background: #000; align-self: center; }
+.crop-zoom { display: grid; gap: 4px; text-align: left; }
+.photo-viewer { position: fixed; inset: 0; z-index: 120; background: rgba(0, 0, 0, .92); display: grid; grid-template-rows: 1fr auto; justify-items: center; align-items: center; padding: 16px; }
+.photo-viewer.hidden { display: none; }
+.photo-viewer img { max-width: min(92vw, 640px); max-height: 74vh; border-radius: 8px; object-fit: contain; }
+.pv-close { position: absolute; top: 10px; right: 14px; font-size: 34px; color: #fff; background: none; border: 0; cursor: pointer; }
+.pv-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: 44px; color: #fff; background: rgba(255,255,255,.12); border: 0; border-radius: 50%; width: 48px; height: 48px; cursor: pointer; }
+.pv-nav.prev { left: 10px; } .pv-nav.next { right: 10px; }
+.pv-nav[hidden] { display: none; }
+.pv-bar { color: #fff; display: flex; gap: 14px; align-items: center; padding: 10px 0; }
+.pv-bar .link { color: #FFB27A; }
+
 /* ---------- parent or guardian ---------- */
 .guardian-off { display: none !important; }
 .guardian-box { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }

@@ -180,6 +180,7 @@ class Store {
         chatLockSet: !!u.chatLock,
         devices: (u.devices || []).map((d) => ({ id: d.id, name: d.name, publicKey: d.publicKey, createdAt: d.createdAt || null })),
         birthDate: u.birthDate || null,
+        profilePhotos: { privacy: this.photoPrivacy(username), photos: (u.photos || []).map((p) => ({ id: p.id, createdAt: p.ts, hidden: !!p.hidden, mime: this.data.media[p.mediaId]?.mime || null, data: (this.getMedia(p.mediaId, username)?.buffer || Buffer.alloc(0)).toString('base64') })) },
         parentOrGuardian: u.guardian ? { name: u.guardian.name || null, relationship: u.guardian.relationship || null, mobile: u.guardian.phone || null, email: u.guardian.email || null, agreedAt: u.guardian.consentedAt || null, controls: u.guardian.releasedAt ? null : this.guardianControls(username), endedAt: u.guardian.releasedAt || null } : null,
         pushNotifications: { preferences: this.pushPrefs(username), devices: (u.pushSubs || []).map((x) => ({ id: x.id, createdAt: x.createdAt, device: x.ua || null })) },
         passkeys: (u.passkeys || []).map((p) => ({ id: p.id, name: p.name || null, createdAt: p.createdAt || null })),
@@ -274,7 +275,7 @@ class Store {
         this.data.channelPosts[id] = posts.filter((p) => p.by !== username);
       }
     }
-    this.data.reports = this.data.reports.filter((r) => r.reporter !== username);
+    this.data.reports = this.data.reports.filter((r) => r.reporter !== username && r.owner !== username);
 
     for (const conv of [...this._convsOf(username)]) {
       const list = this.data.messages[conv.id] || [];
@@ -313,7 +314,7 @@ class Store {
       if (other.blocked?.includes(username)) other.blocked = other.blocked.filter((b) => b !== username);
       if (other.profileViews?.[username]) delete other.profileViews[username];
     }
-    for (const [id, meta] of Object.entries(this.data.media)) if (meta.publicBy === username) this.deleteMedia(id);
+    for (const [id, meta] of Object.entries(this.data.media)) if (meta.publicBy === username || meta.photoOf === username) this.deleteMedia(id);
 
     // The account leaves the live users and goes to the archive: a basic record that it existed, marked permanently
     // disabled, with no chats, media or personal data. Its username stays reserved there, so a new account can never
@@ -335,6 +336,178 @@ class Store {
       ...(u.guardian?.consentedAt ? { guardianConsent: { at: u.guardian.consentedAt, version: u.guardian.consentVersion || null } } : {}),
     };
     this._contactIdx = null;
+    this._save();
+  }
+
+  // ---------- profile photos ----------
+  //
+  // A person keeps a few photos (2 for a free account, 5 with Premium); the first is the one shown as their picture.
+  // Each is stored twice (a 512 px picture and a 128 px thumbnail) as media files. Photos are not end-to-end encrypted:
+  // other people (and, when a photo is reported, administrators) can see them. Who sees them is the owner's choice,
+  // and children's photos are only ever seen by people they already chat with.
+
+  static PHOTO_PRIVACY = ['everyone', 'contacts', 'nobody'];
+
+  /** Who may see my photos: `everyone`, `contacts` (people I chat with; the default) or `nobody`. */
+  photoPrivacy(username) {
+    const v = this.data.users[username]?.photoPrivacy;
+    return Store.PHOTO_PRIVACY.includes(v) ? v : 'contacts';
+  }
+
+  /** What is really applied: a child's photos are never shown beyond the people they chat with. */
+  effectivePhotoPrivacy(username) {
+    const v = this.photoPrivacy(username);
+    return v === 'everyone' && this.isMinor(username) ? 'contacts' : v;
+  }
+
+  setPhotoPrivacy(username, who) {
+    if (!Store.PHOTO_PRIVACY.includes(who)) throw Object.assign(new Error('who must be "everyone", "contacts" or "nobody"'), { status: 400, code: 'invalid_request' });
+    this.data.users[username].photoPrivacy = who;
+    this._save();
+    return who;
+  }
+
+  photosOf(username) {
+    return this.data.users[username]?.photos || [];
+  }
+
+  /** How many photos this person may keep: more with Premium. (If Premium ends, photos stay; only adding stops.) */
+  photoLimit(username) {
+    const l = this.getSettings().limits;
+    return this.isPremium(username) ? l.premiumProfilePhotos : l.freeProfilePhotos;
+  }
+
+  /** Do the two share a chat (a one-to-one chat or a group)? */
+  sharesChat(a, b) {
+    if (this.hasDirect(a, b)) return true;
+    return this._convsOf(a).some((c) => c.type === 'group' && c.members.includes(b));
+  }
+
+  /** May `viewer` see `owner`'s photos at all? */
+  canSeePhotos(viewer, owner) {
+    if (viewer === owner) return !!this.data.users[owner];
+    if (!this.featureOn('profilePhotos')) return false;
+    const u = this.data.users[owner];
+    if (!u || this.isClosed(owner) || this.guardianState(owner) === 'pending') return false;
+    if (viewer && this.blockedEither(owner, viewer)) return false;
+    const who = this.effectivePhotoPrivacy(owner);
+    if (who === 'nobody') return false;
+    if (who === 'everyone') return !!viewer;
+    return !!viewer && this.sharesChat(viewer, owner);
+  }
+
+  /** The photos `viewer` is shown (photos under review are only shown to their owner). */
+  visiblePhotos(owner, viewer) {
+    if (!this.canSeePhotos(viewer, owner)) return [];
+    return this.photosOf(owner).filter((p) => viewer === owner || !p.hidden);
+  }
+
+  /** The picture to show for `owner` to `viewer`: `{ id, thumb, count }` (media ids), or null. */
+  photoRef(owner, viewer) {
+    const list = this.visiblePhotos(owner, viewer);
+    return list.length ? { id: list[0].mediaId, thumb: list[0].thumbId, count: list.length } : null;
+  }
+
+  /** Add a photo (already checked): returns it. The caller checks the limit. */
+  addPhoto(username, { full, thumb, mime, thumbMime }) {
+    const u = this.data.users[username];
+    const id = crypto.randomBytes(6).toString('hex');
+    const mediaId = this.saveMedia({ photoOf: username, photoId: id }, full, mime);
+    const thumbId = this.saveMedia({ photoOf: username, photoId: id }, thumb, thumbMime);
+    const photo = { id, mediaId, thumbId, ts: Date.now() };
+    u.photos = [...(u.photos || []), photo];
+    this._save();
+    return photo;
+  }
+
+  /** Make this photo the one shown as the picture (first). */
+  setMainPhoto(username, id) {
+    const u = this.data.users[username];
+    const list = u.photos || [];
+    const photo = list.find((p) => p.id === id);
+    if (!photo) throw Object.assign(new Error('Photo not found'), { status: 404, code: 'not_found' });
+    u.photos = [photo, ...list.filter((p) => p.id !== id)];
+    this._save();
+  }
+
+  /** Remove a photo (by its owner, or an administrator) and everything reported about it. */
+  removePhoto(username, id) {
+    const u = this.data.users[username];
+    const photo = (u?.photos || []).find((p) => p.id === id);
+    if (!photo) throw Object.assign(new Error('Photo not found'), { status: 404, code: 'not_found' });
+    this.deleteMedia(photo.mediaId);
+    this.deleteMedia(photo.thumbId);
+    u.photos = u.photos.filter((p) => p.id !== id);
+    if (!u.photos.length) delete u.photos;
+    this.data.reports = this.data.reports.filter((r) => !(r.type === 'photo' && r.owner === username && r.photoId === id));
+    this._save();
+  }
+
+  /** The media file (picture or thumbnail) belongs to this photo? Used to serve it. */
+  photoOfMedia(meta) {
+    return meta.photoOf ? (this.data.users[meta.photoOf]?.photos || []).find((p) => p.id === meta.photoId) || null : null;
+  }
+
+  /**
+   * Report a photo. Returns `{ reported, hidden }`. Reports from `Photos.AUTO_HIDE_AT` different people, or one report that a
+   * child may be at risk, hide the photo from everyone but its owner until an administrator has looked.
+   */
+  reportPhoto(reporter, owner, id, reason, detail, photoRules) {
+    const bad = (status, code, message) => Object.assign(new Error(message), { status, code });
+    if (reporter === owner) throw bad(400, 'invalid_request', 'You cannot report your own photo');
+    const photo = this.visiblePhotos(owner, reporter).find((p) => p.id === id);
+    if (!photo) throw bad(404, 'not_found', 'Photo not found');
+    if (!photoRules.REASONS.some((r) => r.id === reason)) throw bad(400, 'invalid_request', 'Choose a reason');
+    const now = Date.now();
+    const mine = this.data.reports.filter((r) => r.type === 'photo' && r.reporter === reporter);
+    if (mine.some((r) => r.owner === owner && r.photoId === id)) throw bad(409, 'conflict', 'You already reported this photo');
+    if (mine.filter((r) => r.ts > now - 24 * 3600 * 1000).length >= photoRules.REPORTS_PER_DAY) throw bad(429, 'rate_limited', 'Too many reports today. Try again tomorrow.');
+    this.data.reports.push({ type: 'photo', owner, photoId: id, reporter, reason, detail: String(detail || '').trim().slice(0, 300), ts: now });
+    const people = new Set(this.data.reports.filter((r) => r.type === 'photo' && r.owner === owner && r.photoId === id).map((r) => r.reporter));
+    let hidden = false;
+    if (!photo.hidden && (people.size >= photoRules.AUTO_HIDE_AT || photoRules.URGENT.includes(reason))) {
+      photo.hidden = true;
+      photo.hiddenAt = now;
+      hidden = true;
+    }
+    this._save();
+    return { reported: true, hidden };
+  }
+
+  /** A photo's file for an administrator reviewing a report (bypasses the owner's privacy setting). */
+  photoFile(owner, id, size = 'thumb') {
+    const photo = this.photosOf(owner).find((p) => p.id === id);
+    const mediaId = photo && (size === 'full' ? photo.mediaId : photo.thumbId);
+    const meta = mediaId && this.data.media[mediaId];
+    if (!meta) return null;
+    const file = this.mediaDir ? path.join(this.mediaDir, path.basename(mediaId)) : null;
+    const buffer = file ? (fs.existsSync(file) ? fs.readFileSync(file) : null) : this.memoryMedia.get(mediaId);
+    return buffer ? { mime: meta.mime, buffer } : null;
+  }
+
+  /** Open photo reports, grouped by photo, newest first (for the dashboard). */
+  photoReports() {
+    const groups = new Map();
+    for (const r of this.data.reports) {
+      if (r.type !== 'photo') continue;
+      const key = `${r.owner}/${r.photoId}`;
+      if (!groups.has(key)) groups.set(key, { owner: r.owner, photoId: r.photoId, reports: [] });
+      groups.get(key).reports.push({ reporter: r.reporter, reason: r.reason, detail: r.detail, ts: r.ts });
+    }
+    return [...groups.values()]
+      .map((g) => ({ ...g, photo: (this.data.users[g.owner]?.photos || []).find((p) => p.id === g.photoId) || null, latest: Math.max(...g.reports.map((r) => r.ts)) }))
+      .filter((g) => g.photo)
+      .sort((a, b) => b.latest - a.latest)
+      .map(({ latest, ...g }) => ({ ...g, hidden: !!g.photo.hidden, minor: this.isMinor(g.owner) }));
+  }
+
+  /** An administrator looked and the photo is fine: the reports are cleared and the photo is shown again. */
+  dismissPhotoReports(owner, id) {
+    const photo = this.photosOf(owner).find((p) => p.id === id);
+    if (!photo) throw Object.assign(new Error('Photo not found'), { status: 404, code: 'not_found' });
+    this.data.reports = this.data.reports.filter((r) => !(r.type === 'photo' && r.owner === owner && r.photoId === id));
+    delete photo.hidden;
+    delete photo.hiddenAt;
     this._save();
   }
 
@@ -1836,6 +2009,10 @@ class Store {
   publicUserFor(username, viewer) {
     const u = this.publicUser(username);
     if (u && viewer && this.blockedEither(username, viewer)) u.lastSeen = null;
+    if (u && viewer && !u.deleted) {
+      const photo = this.photoRef(username, viewer); // only what this viewer may see
+      if (photo) u.photo = photo;
+    }
     return u;
   }
 
@@ -2275,7 +2452,7 @@ class Store {
       this.memoryMedia.set(id, buffer);
     }
     // Scope: a chat (voice message), a status, or `{ publicBy }` (catalogue images, visible to every signed-in person).
-    const where = typeof scope === 'string' ? { convId: scope } : scope.publicBy ? { publicBy: scope.publicBy } : { statusId: scope.statusId };
+    const where = typeof scope === 'string' ? { convId: scope } : scope.publicBy ? { publicBy: scope.publicBy } : scope.photoOf ? { photoOf: scope.photoOf, photoId: scope.photoId } : { statusId: scope.statusId };
     this.data.media[id] = { ...where, mime, size: buffer.length, createdAt: Date.now() };
     this._save();
     return id;
@@ -2290,11 +2467,14 @@ class Store {
   getMedia(id, username) {
     const meta = this.data.media[id];
     if (!meta) return null;
-    const allowed = meta.publicBy
-      ? true
-      : meta.statusId
-        ? this.canSeeStatus(this.data.statuses[meta.statusId], username)
-        : this.isMember(meta.convId, username);
+    const photo = meta.photoOf ? this.photoOfMedia(meta) : null;
+    const allowed = meta.photoOf
+      ? !!photo && this.canSeePhotos(username, meta.photoOf) && (username === meta.photoOf || !photo.hidden)
+      : meta.publicBy
+        ? true
+        : meta.statusId
+          ? this.canSeeStatus(this.data.statuses[meta.statusId], username)
+          : this.isMember(meta.convId, username);
     if (!allowed) return null;
     let buffer;
     if (this.mediaDir) {

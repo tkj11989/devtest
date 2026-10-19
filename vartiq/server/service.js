@@ -10,6 +10,7 @@ const { createWebAuthn } = require('./webauthn');
 const { FEATURES, versionLess } = require('./features');
 const appearance = require('./appearance');
 const guardianRules = require('./guardian');
+const photoRules = require('./photos');
 const BusinessHours = require('../public/business-hours.js');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -390,6 +391,28 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     return released;
   };
 
+  // ---------- profile photos ----------
+
+  /** My photos, the limits and who sees them. `main` is the one shown as my picture. */
+  const photosView = (me) => {
+    const lim = store.getSettings().limits;
+    return {
+      photos: store.photosOf(me).map((p, i) => ({ id: p.id, image: p.mediaId, thumb: p.thumbId, ts: p.ts, main: i === 0, hidden: !!p.hidden })),
+      limit: store.photoLimit(me),
+      freeLimit: lim.freeProfilePhotos,
+      premiumLimit: lim.premiumProfilePhotos,
+      premium: store.isPremium(me),
+      privacy: store.photoPrivacy(me),
+      appliedPrivacy: store.effectivePhotoPrivacy(me),
+      minor: store.isMinor(me),
+      reasons: photoRules.REASONS,
+    };
+  };
+  const photosChanged = (me) => {
+    announceProfile(me);
+    io.to(userRoom(me)).emit('photos:update', photosView(me));
+  };
+
   // ---------- location sharing ----------
 
   /** A position from an app that does not encrypt: checked and rounded to about 10 cm. */
@@ -567,7 +590,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
   const actions = {
     me(me) {
       return {
-        user: store.publicUser(me),
+        user: store.publicUserFor(me, me),
         iceServers: typeof iceServers === 'function' ? iceServers(me) : iceServers,
         blocked: store.blockedList(me),
         defaultDisappear: store.defaultDisappear(me),
@@ -1103,6 +1126,90 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     },
 
 
+    // ----- profile photos -----
+
+    photos(me) {
+      return photosView(me);
+    },
+
+    /** Add a photo: `image` (512 px) and `thumb` (128 px) as bytes or base64. 2 photos for a free account, 5 with Premium. */
+    uploadPhoto(me, { image, thumb } = {}) {
+      const have = store.photosOf(me).length;
+      if (have >= store.photoLimit(me)) {
+        const lim = store.getSettings().limits;
+        if (!store.isPremium(me) && have < lim.premiumProfilePhotos) {
+          throw new ApiError(402, 'premium_required', `A free account can keep ${lim.freeProfilePhotos} profile photos. Premium allows ${lim.premiumProfilePhotos}.`);
+        }
+        throw new ApiError(409, 'limit_reached', `You can keep up to ${store.photoLimit(me)} profile photos. Remove one to add another.`);
+      }
+      let checked;
+      try {
+        checked = photoRules.check({ image, thumb });
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      store.addPhoto(me, checked);
+      photosChanged(me);
+      return photosView(me);
+    },
+
+    /** Make a photo the one shown as my picture. */
+    setMainPhoto(me, { id }) {
+      try {
+        store.setMainPhoto(me, String(id || ''));
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      photosChanged(me);
+      return photosView(me);
+    },
+
+    deletePhoto(me, { id }) {
+      try {
+        store.removePhoto(me, String(id || ''));
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      photosChanged(me);
+      return photosView(me);
+    },
+
+    /** Who may see my photos: `everyone`, `contacts` (people I chat with) or `nobody`. */
+    setPhotoPrivacy(me, { who }) {
+      try {
+        store.setPhotoPrivacy(me, who);
+      } catch (err) {
+        throw new ApiError(400, 'invalid_request', err.message);
+      }
+      photosChanged(me);
+      return photosView(me);
+    },
+
+    /** Someone's photos, as far as I may see them (an empty list when I may not). */
+    userPhotos(me, { username }) {
+      const u = String(username || '').toLowerCase();
+      if (!store.publicUser(u)) throw new ApiError(404, 'not_found', 'User not found');
+      return {
+        user: userView(u, me),
+        photos: store.visiblePhotos(u, me).map((p) => ({ id: p.id, image: p.mediaId, thumb: p.thumbId, ts: p.ts })),
+        canReport: u !== me,
+        reasons: photoRules.REASONS,
+      };
+    },
+
+    /** Report a photo. Three people, or one report that a child may be at risk, hide it until an administrator has looked. */
+    reportPhoto(me, { username, id, reason, detail }) {
+      const owner = String(username || '').toLowerCase();
+      let result;
+      try {
+        result = store.reportPhoto(me, owner, String(id || ''), String(reason || ''), detail, photoRules);
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      if (result.hidden) photosChanged(owner);
+      return result;
+    },
+
     // ----- parent or guardian (a child's own view) -----
 
     guardianStatus(me) {
@@ -1522,7 +1629,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
 
   /** Tell my devices and the people I chat with that my profile changed. */
   function announceProfile(me) {
-    const user = store.publicUser(me);
+    const user = store.publicUserFor(me, me);
     notify(me, 'user:updated', { user: { ...user, online: isOnline(me) } });
     for (const p of peersOf(me)) notify(p, 'user:updated', { user: userView(me, p) });
     return user;
@@ -1581,6 +1688,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     catalogue: 'catalogue', saveProduct: 'catalogue', deleteProduct: 'catalogue', setProductImage: 'catalogue', removeProductImage: 'catalogue', setCatalogueCurrency: 'catalogue',
     subscriptionCheckout: 'premium',
     kycStart: 'verification',
+    uploadPhoto: 'profilePhotos', setMainPhoto: 'profilePhotos',
     pushSubscribe: 'push', pushTest: 'push',
     sendLocation: 'location', updateLocation: 'location',
   };
@@ -1669,6 +1777,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     expireSubscriptions,
     eraseDueAccounts,
     releaseGuardians,
+    refreshPhotos: photosChanged,
     guardianPortal,
     GUARDIAN_EXEMPT,
     forgetUnlocks,
