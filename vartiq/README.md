@@ -271,14 +271,25 @@ PUBLIC_URL=https://vartiq.prayuktech.com
 ```
 
 1. In the Razorpay Dashboard add a **webhook**: URL `https://vartiq.prayuktech.com/webhooks/razorpay`, the secret above, and events **`payment_link.paid`** and **`refund.processed`** (optionally `payment.failed`, which is ignored).
-2. A purchase creates an order (saved with the person's account, kept 7 days) and a payment link whose `reference_id` is the order id (it starts with the username). The person pays on Razorpay's page and returns to `/premium/return`.
+2. A purchase creates an order (saved with the person's account, kept 7 days) and a payment link whose `reference_id` is the order id (it starts with the username). The person pays on Razorpay's page and returns to `/premium/return/razorpay`.
 3. **Premium switches on only when Razorpay says the payment was received**, by any of: the signed webhook (works even if the app was closed), the signed return address (we also ask Razorpay's API before trusting it), or the *I have paid* button (the server asks Razorpay). The app shows **"Payment received"** at once (Socket.IO `payment:received`; the waiting dialog closes by itself) and the person's other devices update.
 4. **Every payment counts once**, however many of those arrive (it is recorded by Razorpay's payment id), and the amount and currency must match the order exactly (otherwise nothing is switched on and the mismatch is logged). A signature that does not verify is refused (`400`).
 5. **Refunds**: a *full* refund processed in Razorpay takes back exactly the period that payment bought (never below today; the app is told); a partial refund is recorded and keeps Premium.
 6. **Receipts and records**: Profile → Premium → *Payments* lists the person's payments (date, plan, amount, Razorpay payment id). Admin → **Payments** lists everything received with totals (last 30 days, all time; refunds deducted). The payment record (amount, date, plan, payment id) is kept for accounting even after an account is deleted, without name or contact details, and is included in *Download my data*.
 7. Test first with `rzp_test_…` keys (Razorpay's test mode takes test UPI and cards). Overview shows *razorpay (test mode)*. Live mode needs your Razorpay account activated (KYC) and Payment Links enabled.
 
-Without the three variables the older generic relay (below) is used, or subscriptions are unavailable. Prices are taken as GST-inclusive; add invoicing separately if you need GST invoices.
+### Changing the payment vendor later
+
+Razorpay is one **payment provider** plugged into a small interface (`server/payment-providers.js`); the rest of the app (plans, orders, receipts, the admin Payments page, the "Payment received" message) never mentions a vendor. To move to another vendor:
+
+1. Write one file like `server/razorpay.js` that returns an object with `id`, `label`, `testMode`, `webhookConfigured` and five functions: `createCheckout` (make the payment page), `status` (ask the vendor whether an order was paid), `verifyWebhook` (check its signature), `parseWebhook` (turn its notification into `paid` / `refund` / `ignored`), `verifyReturn` (check the address the person comes back to). Amounts come back in the smallest unit (`amountMinor`, paise for INR).
+2. Add one line for it to `registry` in `selectProvider`, and set `PAYMENT_PROVIDER=<its id>` (without it the first configured provider is used: Razorpay, then the generic relay, then the sandbox).
+3. Point the vendor's webhook at `https://…/webhooks/<id>` and let it send people back to `/premium/return/<id>` (both addresses are derived from the provider's `id`).
+4. Change **Admin → Settings → Legal → Payment provider named in the Privacy Notice** (or `LEGAL_PAYMENT_PROVIDER`) so the notice names the new vendor.
+
+Orders and receipts already store which vendor took each payment (`provider`), so old Razorpay receipts stay valid after a switch. `test/payment-provider.test.js` runs the whole flow against a made-up second vendor to prove nothing else needs to change.
+
+Without any provider configured the older generic relay (below) is used, or subscriptions are unavailable. Prices are taken as GST-inclusive; add invoicing separately if you need GST invoices.
 
 
 **When Premium ends**, the ★ goes away and no *more* chats can be locked or hidden beyond the free limits. Chats that are already locked or hidden **stay protected** (they are never silently exposed); removing locks or unhiding is always allowed, and renewing Premium restores adding more.

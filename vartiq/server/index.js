@@ -18,8 +18,8 @@ const { createAuth } = require('./auth');
 const { createAdminRouter } = require('./admin');
 const { createKyc, createKycGateway } = require('./kyc');
 const { createTranslator, createTranslateGateway } = require('./translate');
-const { createPayments, createPaymentGateway, plansFromEnv } = require('./payments');
-const { createRazorpay } = require('./razorpay');
+const { createPayments, plansFromEnv } = require('./payments');
+const { selectProvider } = require('./payment-providers');
 
 // STUN/TURN servers handed to browsers for WebRTC. Override with a JSON array,
 // e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'
@@ -197,6 +197,7 @@ function createApp({
   kyc: kycOptions = {},
   payments: paymentOptions = {},
   razorpay: razorpayOptions = {},
+  paymentProvider = undefined,
   admin: adminOptions = {},
   translate: translateOptions = {},
   push: pushOptions = {},
@@ -229,9 +230,9 @@ function createApp({
   const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
   const payments = createPayments({
     store,
-    gateway: createPaymentGateway(),
-    razorpay: createRazorpay(razorpayOptions), // RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET (null without keys)
-    sandbox: process.env.PAYMENTS_SANDBOX === '1',
+    // Who takes the money: PAYMENT_PROVIDER, or the first configured one (Razorpay: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
+    // RAZORPAY_WEBHOOK_SECRET). Pass `paymentProvider` to use another one (see payment-providers.js).
+    provider: paymentProvider !== undefined ? paymentProvider : selectProvider({ razorpay: razorpayOptions }),
     publicUrl,
     onPaid: (e) => service.paymentReceived(e),
     onRefund: (e) => service.paymentRefunded(e),
@@ -279,7 +280,7 @@ function createApp({
     integrations: () => ({
       otp: process.env.OTP_WEBHOOK_URL ? 'gateway' : 'console',
       kyc: kyc.available ? (kyc.sandbox ? 'sandbox' : 'live') : 'off',
-      payments: !payments.available ? 'off' : payments.provider === 'razorpay' ? (payments.razorpay.testMode ? 'razorpay (test mode)' : 'razorpay') : payments.sandbox ? 'sandbox' : 'live',
+      payments: !payments.available ? 'off' : payments.sandbox ? 'sandbox' : `${payments.providerId}${payments.provider.testMode ? ' (test mode)' : ''}`,
       translation: translator.available ? (translator.sandbox ? 'sandbox' : 'live') : 'off',
     }),
     ...(adminOptions.router || {}),
@@ -307,47 +308,52 @@ function createApp({
   // Swagger UI is served from node_modules so the docs work without internet access.
   app.use('/api/docs/assets', express.static(require('swagger-ui-dist').getAbsoluteFSPath(), { maxAge: '7d' }));
 
-  // ---------- Razorpay: "payment received" ----------
+  // ---------- payment provider: "payment received" ----------
 
-  // Razorpay tells us a payment link was paid (or a payment refunded), signed with RAZORPAY_WEBHOOK_SECRET. It needs the raw
-  // body to check the signature. Anything that does not verify is refused; duplicates are harmless (each payment counts once).
-  app.post('/webhooks/razorpay', express.raw({ type: () => true, limit: '200kb' }), (req, res) => {
-    const rz = payments.razorpay;
-    if (!rz?.webhookConfigured) return res.status(503).json({ error: { code: 'not_configured', message: 'Razorpay webhooks are not set up' } });
+  // The provider (Razorpay today) tells us a payment was received, or refunded, in a signed notification to POST /webhooks/<id>.
+  // It needs the raw body to check the signature. Anything that does not verify is refused; repeats are harmless (each payment
+  // counts once). Nothing here names a vendor: the provider object does the vendor-specific parts.
+  app.post('/webhooks/:provider', express.raw({ type: () => true, limit: '200kb' }), (req, res) => {
+    const pv = payments.provider;
+    if (!pv || pv.id !== req.params.provider) return res.status(404).json({ error: { code: 'not_found', message: 'Not found' } });
+    if (!pv.webhookConfigured) return res.status(503).json({ error: { code: 'not_configured', message: `${pv.label} webhooks are not set up` } });
     const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    if (!rz.verifyWebhook(raw, req.get('x-razorpay-signature'))) return res.status(400).json({ error: { code: 'bad_signature', message: 'Signature does not match' } });
+    if (!pv.verifyWebhook(raw, req.headers)) return res.status(400).json({ error: { code: 'bad_signature', message: 'Signature does not match' } });
     let event;
     try {
-      event = rz.parseEvent(JSON.parse(raw.toString('utf8')));
+      event = pv.parseWebhook(JSON.parse(raw.toString('utf8')));
     } catch {
       return res.status(400).json({ error: { code: 'invalid_request', message: 'Not JSON' } });
     }
     let outcome = { status: 'ignored' };
-    if (event.kind === 'paid' && (!event.status || ['captured', 'paid'].includes(event.status))) outcome = payments.receive(event);
-    else if (event.kind === 'refund' && event.done) outcome = payments.refund(event);
+    if (event.kind === 'paid') outcome = payments.receive(event);
+    else if (event.kind === 'refund') outcome = payments.refund(event);
     return res.json({ ok: true, status: outcome.status });
   });
 
-  // Where Razorpay sends the person after paying (the address is signed by Razorpay; we also ask Razorpay before trusting it).
-  app.get('/premium/return', async (req, res) => {
+  // Where the provider sends the person after paying. The address is checked by the provider's own signature, and we also ask the
+  // provider whether the order was paid before trusting it.
+  const paymentReturn = async (req, res) => {
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
     const page = (status, title, text) => res.status(status).type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title><style>body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#F1F5FB;color:#0B1A33}main{max-width:420px;margin:16px;background:#fff;border-radius:14px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08);text-align:center}h1{font-size:22px}@media(prefers-color-scheme:dark){body{background:#07101F;color:#E6EDF7}main{background:#0C1730}}</style></head><body><main><h1>${title}</h1><p>${text}</p><p><a href="/">Back to VartiQ</a></p></main></body></html>`);
-    const rz = payments.razorpay;
-    const q = req.query;
-    if (!rz || !rz.verifyReturn(q)) return page(400, 'This link is not valid', 'We could not check this payment. If you paid, open VartiQ: your Premium switches on as soon as Razorpay confirms.');
-    if (q.razorpay_payment_link_status !== 'paid') return page(200, 'Payment not completed', 'No money was taken. Go back to VartiQ and try again when you are ready.');
-    const reference = String(q.razorpay_payment_link_reference_id || '');
-    const user = reference.slice(0, reference.lastIndexOf('.'));
-    const order = user && store.orderOf(user, reference);
-    if (!order) return page(200, 'Payment received', 'Thank you. Open VartiQ: your Premium is switched on as soon as Razorpay confirms.');
+    const pv = payments.provider;
+    if (req.params.provider && pv?.id !== req.params.provider) return page(404, 'Not found', 'This page does not exist.');
+    const r = pv && pv.verifyReturn(req.query);
+    if (!r?.valid) return page(400, 'This link is not valid', 'We could not check this payment. If you paid, open VartiQ: your Premium switches on as soon as the payment is confirmed.');
+    if (!r.paid) return page(200, 'Payment not completed', 'No money was taken. Go back to VartiQ and try again when you are ready.');
+    const user = r.reference.slice(0, r.reference.lastIndexOf('.'));
+    const order = user && store.orderOf(user, r.reference);
+    if (!order) return page(200, 'Payment received', 'Thank you. Open VartiQ: your Premium is switched on as soon as the payment is confirmed.');
     try {
-      const st = await rz.linkStatus(order.providerRef);
-      if (st.paid) payments.receive({ reference, paymentId: st.paymentId || q.razorpay_payment_id, amountPaise: st.amountPaise, currency: st.currency, method: st.method });
+      const st = await pv.status({ providerRef: order.providerRef, reference: r.reference, amount: order.amount, currency: order.currency });
+      if (st.paid) payments.receive({ reference: r.reference, paymentId: st.paymentId || r.paymentId, amountMinor: st.amountMinor, currency: st.currency, method: st.method });
     } catch (err) {
-      console.error('Razorpay return check failed:', err.message); // the webhook will still arrive
+      console.error(`${pv.label} return check failed:`, err.message); // the webhook will still arrive
     }
     return page(200, 'Payment received', 'Thank you! Your Premium is on. You can close this page and go back to VartiQ.');
-  });
+  };
+  app.get('/premium/return/:provider', paymentReturn);
+  app.get('/premium/return', paymentReturn); // the first address we used, kept so links already sent keep working
 
   app.use(express.json({ limit: '50kb' }));
 

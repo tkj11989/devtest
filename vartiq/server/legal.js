@@ -25,12 +25,13 @@ const DEFAULT_LEGAL = {
   city: '',
   hosting: '',
   providers: '',
+  paymentProvider: '',
   backupDays: 30,
   responseDays: 15,
   requireForLegacy: false,
 };
 
-const FIELD_LIMITS = { brand: 60, company: 120, address: 300, contactEmail: 120, grievanceName: 80, grievanceEmail: 120, grievancePhone: 30, city: 60, hosting: 120, providers: 500 };
+const FIELD_LIMITS = { brand: 60, company: 120, address: 300, contactEmail: 120, grievanceName: 80, grievanceEmail: 120, grievancePhone: 30, city: 60, hosting: 120, providers: 500, paymentProvider: 60 };
 
 /** Company details to print: settings first, then LEGAL_* environment variables, then a visible placeholder. */
 function details(settings = {}, env = process.env) {
@@ -47,6 +48,7 @@ function details(settings = {}, env = process.env) {
     city: pick('city', 'LEGAL_CITY', '[City]'),
     hosting: pick('hosting', 'LEGAL_HOSTING', '[hosting location]'),
     providers: s.providers || env.LEGAL_PROVIDERS || '',
+    paymentProvider: s.paymentProvider || env.LEGAL_PAYMENT_PROVIDER || 'Razorpay', // change it with the payment vendor
     backupDays: s.backupDays || 30,
     responseDays: s.responseDays || 15,
     configured: !!((s.company || env.LEGAL_COMPANY) && (s.address || env.LEGAL_ADDRESS) && (s.grievanceName || env.LEGAL_GRIEVANCE_NAME) && (s.grievanceEmail || env.LEGAL_GRIEVANCE_EMAIL)),
@@ -118,7 +120,7 @@ function privacyNotice() {
           ['A location you choose to share: coordinates and how accurate they are. For a live location, only the latest position while you are sharing', 'To show it to the people in the chat you shared it with. We never read your location in the background or when you are not sharing', 'Only when you tap Share location'],
           ['Your settings: theme, translation languages per chat, blocked people, privacy options, language', 'To keep the app the way you set it on all your devices', 'When you change them'],
           ['Verification status (yes or no and the date)', 'To show the Verified badge. We do NOT store your ID number or any ID details (see section 4)', 'After you verify'],
-          ['Premium subscription: plan, period, and for each payment the amount, date, and the payment provider\'s payment number (a receipt)', 'To give you Premium features, show your receipts, and keep accounting records. Card, UPI and bank details go to the payment provider (Razorpay) and never reach us', 'When you buy Premium'],
+          ['Premium subscription: plan, period, and for each payment the amount, date, and the payment provider\'s payment number (a receipt)', 'To give you Premium features, show your receipts, and keep accounting records. Card, UPI and bank details go to the payment provider ({paymentProvider}) and never reach us', 'When you buy Premium'],
           ['Reports you make about a channel (reporter, channel, reason)', 'To review reports and keep the service safe', 'When you report something'],
           ['Technical and security data: IP address and request details processed by our hosting and network providers; one-time login codes (kept for a few minutes, only as a hash)', 'To deliver the service, prevent abuse and keep it secure', 'Whenever you use the app'],
         ],
@@ -153,7 +155,7 @@ function privacyNotice() {
         'Other users: what the app is designed to show them: your name, "about" line, whether you are online and when you were last seen (you can limit this), your business profile, public channel posts, status updates, and messages you send to them.',
         'Service providers (data processors) who work for us under contract: a text-message and email provider (to send login codes); a cloud hosting and network provider, including a content delivery and security provider such as Cloudflare if we use one; a database provider; a relay (TURN) provider that helps voice and video calls connect when a direct connection is not possible. Call audio and video are encrypted in transit.',
         'An identity verification provider, only if you choose to verify. Your ID number is sent to it once to confirm it, together with the one-time code. {brand} does not store your ID number or any ID details; we keep only that you are verified and when.',
-        'Razorpay (our payment provider), only if you buy Premium. You pay on Razorpay\'s own page, which handles your card, UPI or bank details; we receive a confirmation with the amount and a payment number, and nothing else about how you paid except the kind of method (for example UPI or card).',
+        '{paymentProvider} (our payment provider), only if you buy Premium. You pay on its own page, which handles your card, UPI or bank details; we receive a confirmation with the amount and a payment number, and nothing else about how you paid except the kind of method (for example UPI or card).',
         'The push services of browser makers (Google, Mozilla, Apple, Microsoft), only if you turn notifications on. Notifications pass through the push service of your browser. It can see that a notification was sent to your device and when, but a notification carries no message text.',
         'A map service, only if you tap "Open in map" on a location someone shared: your browser or map app opens with that position, and the map service you use can then see it. {brand} itself loads no maps.',
         'A parent or guardian, if you are under 18: they see your name and username, can switch calls, location sharing, being found by new people and public channels on or off, and can disable or delete your account. They cannot read your messages, which are end-to-end encrypted.',

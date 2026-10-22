@@ -361,6 +361,7 @@
       text('contactEmail', 'Contact email'), text('city', 'City for legal disputes (courts)'),
       text('grievanceName', 'Grievance Officer name'), text('grievanceEmail', 'Grievance Officer email'),
       text('grievancePhone', 'Grievance Officer phone (optional)'), text('hosting', 'Where the servers are', 'e.g. India (Mumbai)'),
+      text('paymentProvider', 'Payment provider named in the Privacy Notice', 'Razorpay'),
     ];
     const days = (k, label) => { const i = h('input', { type: 'number', min: 1, max: 365, value: L[k], disabled: !isSuper(), 'aria-label': label }); i.dataset.k = k; return [label, i]; };
     const nums = [days('backupDays', 'Days deleted data may stay in backups'), days('responseDays', 'Days to answer a rights request')];
@@ -374,7 +375,7 @@
     }, 'Legal details saved. The Terms and Privacy Notice pages are updated.');
     return h('div', { class: 'card' }, h('h3', {}, 'Legal: Terms of Use and Privacy Notice'),
       h('p', { class: 'muted' }, 'These details are printed in the Terms of Use and Privacy Notice that people accept when they sign up. Have your lawyer review those texts and these details before launch. ', h('a', { href: '/legal/privacy', target: '_blank', rel: 'noopener' }, 'Privacy Notice'), ' · ', h('a', { href: '/legal/terms', target: '_blank', rel: 'noopener' }, 'Terms of Use')),
-      ...[0, 2, 4, 6].map((n) => h('div', { class: 'row' }, ...fields.slice(n, n + 2).map(([label, i]) => h('label', {}, label, i)))),
+      ...[0, 2, 4, 6, 8].map((n) => h('div', { class: 'row' }, ...fields.slice(n, n + 2).map(([label, i]) => h('label', {}, label, i)))),
       h('div', { class: 'row' }, ...nums.map(([label, i]) => h('label', {}, label, i))),
       h('div', { class: 'switch-row' }, h('div', { class: 't' }, h('strong', {}, 'Ask older accounts to accept too'), h('span', {}, 'Accounts created before consent was added are blocked until they accept. Off by default.')), h('span', { class: 'switch' }, legacy, h('span', { class: 'track' }))),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: save }, 'Save legal details')));

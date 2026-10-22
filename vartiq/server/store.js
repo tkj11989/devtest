@@ -180,7 +180,7 @@ class Store {
         chatLockSet: !!u.chatLock,
         devices: (u.devices || []).map((d) => ({ id: d.id, name: d.name, publicKey: d.publicKey, createdAt: d.createdAt || null })),
         birthDate: u.birthDate || null,
-        payments: (u.payments || []).map((p) => ({ id: p.id, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, refunded: p.refundedPaise ? p.refundedPaise / 100 : 0 })),
+        payments: (u.payments || []).map((p) => ({ id: p.id, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, refunded: p.refundedMinor ? p.refundedMinor / 100 : 0 })),
         profilePhotos: { privacy: this.photoPrivacy(username), photos: (u.photos || []).map((p) => ({ id: p.id, createdAt: p.ts, hidden: !!p.hidden, mime: this.data.media[p.mediaId]?.mime || null, data: (this.getMedia(p.mediaId, username)?.buffer || Buffer.alloc(0)).toString('base64') })) },
         parentOrGuardian: u.guardian ? { name: u.guardian.name || null, relationship: u.guardian.relationship || null, mobile: u.guardian.phone || null, email: u.guardian.email || null, agreedAt: u.guardian.consentedAt || null, controls: u.guardian.releasedAt ? null : this.guardianControls(username), endedAt: u.guardian.releasedAt || null } : null,
         pushNotifications: { preferences: this.pushPrefs(username), devices: (u.pushSubs || []).map((x) => ({ id: x.id, createdAt: x.createdAt, device: x.ua || null })) },
@@ -397,12 +397,12 @@ class Store {
   }
 
   /** The payment service refunded (part of) a payment. Returns the ledger entry, or null when unknown. */
-  recordRefund(paymentId, refundPaise) {
+  recordRefund(paymentId, refundMinor) {
     const username = this.paymentOwner(paymentId);
     const u = username && this.data.users[username];
     const entry = u && (u.payments || []).find((p) => p.id === paymentId);
     if (!entry) return null;
-    entry.refundedPaise = Math.max(entry.refundedPaise || 0, refundPaise);
+    entry.refundedMinor = Math.max(entry.refundedMinor || 0, refundMinor);
     entry.refundedAt = Date.now();
     this._save();
     return { username, entry };

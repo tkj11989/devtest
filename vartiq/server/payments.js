@@ -5,15 +5,12 @@ const crypto = require('crypto');
 /**
  * Premium subscriptions: daily, monthly, 3 months, 6 months or yearly, paid in advance (no auto-renewal).
  *
- * VartiQ never handles card or bank details. Paying happens on the payment provider's own
- * page; the server only creates an order, then asks the provider whether it was paid before
- * switching Premium on (nothing the browser says is trusted).
+ * VartiQ never handles card, UPI or bank details. Paying happens on the payment provider's own page; the server creates an
+ * order, and switches Premium on only when the provider itself says the payment was received (a signed notification, a signed
+ * return address, or the server asking the provider): nothing the browser says is trusted.
  *
- * Gateway contract (any provider behind a small relay: Razorpay, Stripe, PayU, Cashfree…):
- * `POST $PAYMENT_WEBHOOK_URL` with JSON, `Authorization: Bearer $PAYMENT_WEBHOOK_TOKEN` when set:
- *   { action: "create", reference, plan, amount, currency, user } -> { paymentUrl }
- *   { action: "status", reference }                                -> { paid: true | false }
- * `PAYMENTS_SANDBOX=1` pretends every order is paid (development only: it gives Premium away).
+ * Who takes the money is a provider (payment-providers.js; Razorpay today). This file never mentions a vendor, so changing
+ * vendor does not change it.
  */
 
 const DEFAULT_PLANS = {
@@ -49,17 +46,19 @@ function addPeriod(from, period) {
 
 /**
  * Options:
- *   razorpay   a client from razorpay.js (Payment Links): preferred when set
- *   gateway    otherwise, the generic relay described above
- *   sandbox    development only: every order counts as paid
+ *   provider   who takes the payment (see payment-providers.js). `gateway` (a relay function) or `sandbox: true` are shortcuts
+ *              that wrap themselves as a provider
  *   onPaid     ({ user, entry }) called once for every payment received (the app tells the person "Payment received")
  *   onRefund   ({ user, entry, revoked }) when a payment is refunded
  *   publicUrl  where the app lives, for the address Razorpay sends people back to
  */
-function createPayments({ store, gateway = null, razorpay = null, sandbox = false, plans = DEFAULT_PLANS, currency = 'INR', ordersPerHour = 10, orderTtlMs = 60 * 60 * 1000, onPaid = () => {}, onRefund = () => {}, publicUrl = process.env.PUBLIC_URL } = {}) {
+function createPayments({ store, provider = null, gateway = null, sandbox = false, plans = DEFAULT_PLANS, currency = 'INR', ordersPerHour = 10, orderTtlMs = 60 * 60 * 1000, onPaid = () => {}, onRefund = () => {}, publicUrl = process.env.PUBLIC_URL } = {}) {
   const attempts = new Map(); // user -> [timestamps]
-  const available = !!(razorpay || gateway || sandbox);
-  const provider = razorpay ? 'razorpay' : gateway ? 'gateway' : 'sandbox';
+  if (!provider) {
+    const pp = require('./payment-providers');
+    provider = gateway ? pp.relayProvider(gateway) : sandbox ? pp.sandboxProvider() : null;
+  }
+  const available = !!provider;
 
   const sweep = setInterval(() => {
     const now = Date.now();
@@ -100,26 +99,21 @@ function createPayments({ store, gateway = null, razorpay = null, sandbox = fals
     let paymentUrl = null;
     let providerRef = null;
     try {
-      if (razorpay) {
-        const base = require('./guardian').baseUrl(publicUrl, origin);
-        ({ paymentUrl, providerRef } = await razorpay.createLink({
-          reference, amount: price, currency, user, plan: planId,
-          description: `VartiQ Premium: ${plans[planId].label}`,
-          callbackUrl: base ? `${base}/premium/return` : undefined,
-          expireBy: now + orderTtlMs,
-        }));
-      } else if (gateway) {
-        ({ paymentUrl } = await gateway({ action: 'create', reference, plan: planId, amount: price, currency, user }));
-        if (!paymentUrl) throw new Error('no paymentUrl');
-      }
+      const base = require('./guardian').baseUrl(publicUrl, origin);
+      ({ paymentUrl, providerRef } = await provider.createCheckout({
+        reference, amount: price, currency, user, plan: planId,
+        description: `VartiQ Premium: ${plans[planId].label}`,
+        returnUrl: base ? `${base}/premium/return/${provider.id}` : undefined,
+        expireBy: now + orderTtlMs,
+      }));
     } catch (err) {
-      console.error('Payment gateway create failed:', err.message);
+      console.error(`${provider.label} could not create the payment:`, err.message);
       throw new PaymentError(502, 'payment_gateway_failed', 'The payment service could not start the payment. Try again shortly.');
     }
     recent.push(now);
     attempts.set(user, recent);
-    store.addOrder(user, reference, { plan: planId, amount: price, currency, provider, ...(providerRef ? { providerRef } : {}) });
-    return { orderId: reference, plan: planId, amount: price, currency, paymentUrl, provider, sandbox: provider === 'sandbox' };
+    store.addOrder(user, reference, { plan: planId, amount: price, currency, provider: provider.id, ...(providerRef ? { providerRef } : {}) });
+    return { orderId: reference, plan: planId, amount: price, currency, paymentUrl, provider: provider.id, providerLabel: provider.label, sandbox: !!provider.sandbox };
   }
 
   /**
@@ -127,7 +121,7 @@ function createPayments({ store, gateway = null, razorpay = null, sandbox = fals
    * once per payment. Returns `{ status, user }`: `activated`, `duplicate` (already recorded), `unknown` (not an order of
    * ours), or `mismatch` (the amount or currency is not what the order was for: nothing is switched on).
    */
-  function receive({ reference, paymentId, amountPaise, currency: cur, method = null }) {
+  function receive({ reference, paymentId, amountMinor, currency: cur, method = null }) {
     const user = ownerOf(reference);
     const order = user && store.orderOf(user, reference);
     if (!order) return { status: 'unknown' };
@@ -136,15 +130,15 @@ function createPayments({ store, gateway = null, razorpay = null, sandbox = fals
       console.warn(`Order ${reference} was already paid; ignoring payment ${paymentId} (refund it in Razorpay if the person paid twice)`);
       return { status: 'duplicate', user };
     }
-    if (Number(amountPaise) !== Math.round(order.amount * 100) || String(cur || '').toUpperCase() !== order.currency) {
-      console.error(`Payment ${paymentId} for order ${reference} does not match it (${amountPaise} ${cur} vs ${order.amount} ${order.currency}); not activated`);
+    if (Number(amountMinor) !== Math.round(order.amount * 100) || String(cur || '').toUpperCase() !== order.currency) {
+      console.error(`Payment ${paymentId} for order ${reference} does not match it (${amountMinor} ${cur} vs ${order.amount} ${order.currency}); not activated`);
       return { status: 'mismatch', user };
     }
     const sub = store.subscriptionOf(user);
     const periodStart = Math.max(Date.now(), sub?.expiresAt || 0); // buying while Premium extends it
     const periodEnd = addPeriod(periodStart, plans[order.plan].period);
     store.activateSubscription(user, { plan: order.plan, expiresAt: periodEnd });
-    const entry = { id: paymentId || `${provider}_${reference}`, reference, plan: order.plan, amount: order.amount, currency: order.currency, at: Date.now(), method, provider: order.provider, periodStart, periodEnd };
+    const entry = { id: paymentId || `${provider.id}_${reference}`, reference, plan: order.plan, amount: order.amount, currency: order.currency, at: Date.now(), method, provider: order.provider, periodStart, periodEnd };
     store.recordPayment(user, entry, reference);
     try {
       onPaid({ user, entry });
@@ -161,37 +155,25 @@ function createPayments({ store, gateway = null, razorpay = null, sandbox = fals
     if (!order) throw new PaymentError(404, 'not_found', 'Order not found or expired. Start again.');
     if (order.paidAt) return store.subscriptionOf(user); // the payment service already told us
     let info;
-    if (razorpay) {
-      try {
-        info = await razorpay.linkStatus(order.providerRef);
-      } catch (err) {
-        console.error('Razorpay status failed:', err.message);
-        throw new PaymentError(502, 'payment_gateway_failed', 'The payment service is not answering. Try again.');
-      }
-    } else if (gateway) {
-      try {
-        const r = await gateway({ action: 'status', reference });
-        info = { paid: !!r.paid, paymentId: r.paymentId || null, amountPaise: Math.round(order.amount * 100), currency: order.currency };
-      } catch (err) {
-        console.error('Payment gateway status failed:', err.message);
-        throw new PaymentError(502, 'payment_gateway_failed', 'The payment service is not answering. Try again.');
-      }
-    } else {
-      info = { paid: true, paymentId: null, amountPaise: Math.round(order.amount * 100), currency: order.currency }; // sandbox
+    try {
+      info = await provider.status({ providerRef: order.providerRef, reference, amount: order.amount, currency: order.currency });
+    } catch (err) {
+      console.error(`${provider.label} status failed:`, err.message);
+      throw new PaymentError(502, 'payment_gateway_failed', 'The payment service is not answering. Try again.');
     }
     if (!info.paid) throw new PaymentError(402, 'payment_pending', 'Payment not received yet. Finish paying, then confirm again.');
-    const result = receive({ reference, paymentId: info.paymentId, amountPaise: info.amountPaise, currency: info.currency, method: info.method });
+    const result = receive({ reference, paymentId: info.paymentId, amountMinor: info.amountMinor, currency: info.currency, method: info.method });
     if (result.status === 'mismatch') throw new PaymentError(409, 'payment_mismatch', 'The payment does not match this order. Contact support.');
     return store.subscriptionOf(user);
   }
 
   /** The payment service refunded (part of) a payment. A full refund takes back the period it bought (never below today). */
-  function refund({ paymentId, refundPaise }) {
-    const found = store.recordRefund(String(paymentId), Number(refundPaise) || 0);
+  function refund({ paymentId, refundMinor }) {
+    const found = store.recordRefund(String(paymentId), Number(refundMinor) || 0);
     if (!found) return { status: 'unknown' };
     const { username, entry } = found;
     let revoked = false;
-    if (!entry.revoked && entry.refundedPaise >= Math.round(entry.amount * 100)) {
+    if (!entry.revoked && entry.refundedMinor >= Math.round(entry.amount * 100)) {
       const sub = store.subscriptionOf(username);
       if (sub) store.activateSubscription(username, { plan: sub.plan, expiresAt: Math.max(Date.now(), sub.expiresAt - (entry.periodEnd - entry.periodStart)) });
       entry.revoked = true;
@@ -206,24 +188,7 @@ function createPayments({ store, gateway = null, razorpay = null, sandbox = fals
     return { status: 'refunded', user: username, revoked };
   }
 
-  return { available, provider, sandbox: provider === 'sandbox' && sandbox, razorpay, listPlans, checkout, confirm, receive, refund, stop: () => clearInterval(sweep), PaymentError };
-}
-
-function createPaymentGateway(env = process.env) {
-  if (!env.PAYMENT_WEBHOOK_URL) return null;
-  return async (body) => {
-    const res = await fetch(env.PAYMENT_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(env.PAYMENT_WEBHOOK_TOKEN ? { Authorization: `Bearer ${env.PAYMENT_WEBHOOK_TOKEN}` } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`gateway answered ${res.status}`);
-    return res.json();
-  };
+  return { available, provider, providerId: provider?.id || null, sandbox: !!provider?.sandbox, listPlans, checkout, confirm, receive, refund, stop: () => clearInterval(sweep), PaymentError };
 }
 
 /** Plan prices from the environment, e.g. PLAN_PRICES='{"daily":19,"monthly":149,"yearly":1499}'. */
@@ -238,4 +203,4 @@ function plansFromEnv(env = process.env) {
   }
 }
 
-module.exports = { createPayments, createPaymentGateway, plansFromEnv, addPeriod, PaymentError, DEFAULT_PLANS };
+module.exports = { createPayments, createPaymentGateway: require('./payment-providers').createPaymentGateway, plansFromEnv, addPeriod, PaymentError, DEFAULT_PLANS };

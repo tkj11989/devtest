@@ -4617,7 +4617,7 @@
       title: 'Upgrade to Premium',
       text: `Unlimited locked chats and hidden chats, up to 5 profile photos (free accounts: 2), a Premium badge${state.guardian ? ', and your parent or guardian can then change your parental controls' : ''}. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.`,
       fields: [{ name: 'plan', label: 'Plan', options: info.plans.map((p) => [p.id, planLabel(p)]) }],
-      submit: info.provider === 'razorpay' ? 'Pay with Razorpay' : 'Continue to payment',
+      submit: info.providerLabel && info.provider !== 'sandbox' && info.provider !== 'relay' ? `Pay with ${info.providerLabel}` : 'Continue to payment',
       onSubmit: async (v) => {
         // Open the payment tab straight from the tap (browsers block tabs opened after a wait), then point it at the payment page.
         const tab = info.provider === 'sandbox' ? null : window.open('', '_blank');
@@ -4637,7 +4637,7 @@
       title: order.sandbox ? 'Pay (sandbox)' : 'Complete your payment',
       text: order.sandbox
         ? 'Sandbox: no real payment is taken.'
-        : `Pay on the ${order.provider === 'razorpay' ? 'Razorpay' : 'payment'} page that opened (UPI, cards, netbanking and wallets). Your card and bank details never reach VartiQ.\n\nPremium switches on by itself as soon as the payment is received. If it does not, tap "I have paid".`,
+        : `Pay on the ${order.providerLabel || 'payment'} page that opened. Your card and bank details never reach VartiQ.\n\nPremium switches on by itself as soon as the payment is received. If it does not, tap "I have paid".`,
       fields: [],
       submit: order.sandbox ? 'Pay (test)' : 'I have paid',
       onSubmit: async () => { state.sub = await emit('subscription:confirm', { orderId: order.orderId }); },

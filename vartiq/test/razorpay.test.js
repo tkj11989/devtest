@@ -50,10 +50,10 @@ async function fakeRazorpay(t) {
     requests,
     behaviour,
     links,
-    pay(id, { paymentId = `pay_${id.replace('plink_', 'T')}`, amountPaise, method = 'upi' } = {}) {
+    pay(id, { paymentId = `pay_${id.replace('plink_', 'T')}`, amountMinor, method = 'upi' } = {}) {
       const l = links.get(id);
       l.status = 'paid';
-      l.amount_paid = amountPaise ?? l.amount;
+      l.amount_paid = amountMinor ?? l.amount;
       l.payments = [{ payment_id: paymentId, status: 'captured', amount: l.amount_paid, method }];
       return paymentId;
     },
@@ -102,14 +102,14 @@ async function setup(t, { publicUrl = 'https://vartiq.example', store = new Stor
   return { store, app, rz, api, client, webhook, admin, base };
 }
 
-const paidEvent = ({ reference, linkId = 'plink_1', paymentId, amountPaise, currency = 'INR', status = 'captured' }) => ({
+const paidEvent = ({ reference, linkId = 'plink_1', paymentId, amountMinor, currency = 'INR', status = 'captured' }) => ({
   event: 'payment_link.paid',
   payload: {
-    payment_link: { entity: { id: linkId, reference_id: reference, amount: amountPaise, amount_paid: amountPaise, currency, status: 'paid' } },
-    payment: { entity: { id: paymentId, amount: amountPaise, currency, status, method: 'upi', notes: { reference } } },
+    payment_link: { entity: { id: linkId, reference_id: reference, amount: amountMinor, amount_paid: amountMinor, currency, status: 'paid' } },
+    payment: { entity: { id: paymentId, amount: amountMinor, currency, status, method: 'upi', notes: { reference } } },
   },
 });
-const refundEvent = ({ paymentId, amountPaise, event = 'refund.processed' }) => ({ event, payload: { refund: { entity: { id: 'rfnd_1', payment_id: paymentId, amount: amountPaise } } } });
+const refundEvent = ({ paymentId, amountMinor, event = 'refund.processed' }) => ({ event, payload: { refund: { entity: { id: 'rfnd_1', payment_id: paymentId, amount: amountMinor } } } });
 const buy = (env, token, plan = 'monthly') => env.api('POST', '/me/subscription/checkout', token, { plan });
 
 test('checkout creates a Razorpay payment link with the right amount, reference and return address', async (t) => {
@@ -128,7 +128,7 @@ test('checkout creates a Razorpay payment link with the right amount, reference 
   assert.strictEqual(req.body.currency, 'INR');
   assert.strictEqual(req.body.reference_id, res.body.orderId);
   assert.strictEqual(req.body.accept_partial, false);
-  assert.strictEqual(req.body.callback_url, 'https://vartiq.example/premium/return');
+  assert.strictEqual(req.body.callback_url, 'https://vartiq.example/premium/return/razorpay');
   assert.deepStrictEqual(req.body.notify, { sms: false, email: false }, 'Razorpay does not message the person');
   assert.strictEqual(req.body.notes.user, 'alice');
   assert.ok(req.body.expire_by > Date.now() / 1000 && req.body.expire_by < Date.now() / 1000 + 3700);
@@ -169,7 +169,7 @@ test('"payment received": a signed webhook switches Premium on once, even if sen
 
   const received = once(sock, 'payment:received');
   const updated = once(sock, 'subscription:update');
-  const res = await env.webhook(paidEvent({ reference: order.orderId, paymentId, amountPaise: 9900 }));
+  const res = await env.webhook(paidEvent({ reference: order.orderId, paymentId, amountMinor: 9900 }));
   assert.deepStrictEqual([res.status, res.body.status], [200, 'activated']);
   const got = await received;
   assert.strictEqual(got.payment.id, paymentId);
@@ -181,7 +181,7 @@ test('"payment received": a signed webhook switches Premium on once, even if sen
   assert.ok(until > Date.now() + 27 * 86400000 && until < Date.now() + 32 * 86400000, 'a month');
 
   // Razorpay retries webhooks: nothing more happens.
-  const again = await env.webhook(paidEvent({ reference: order.orderId, paymentId, amountPaise: 9900 }));
+  const again = await env.webhook(paidEvent({ reference: order.orderId, paymentId, amountMinor: 9900 }));
   assert.deepStrictEqual([again.status, again.body.status], [200, 'duplicate']);
   assert.strictEqual(env.store.subscriptionOf('alice').expiresAt, until, 'Premium was not extended again');
   assert.strictEqual(env.store.paymentsOf('alice').length, 1);
@@ -199,7 +199,7 @@ test('the webhook only trusts Razorpay: signature, amount, currency and a known 
   const env = await setup(t);
   const a = env.store.register('alice', 'pass');
   const order = (await buy(env, a.token, 'monthly')).body;
-  const good = paidEvent({ reference: order.orderId, paymentId: 'pay_1', amountPaise: 9900 });
+  const good = paidEvent({ reference: order.orderId, paymentId: 'pay_1', amountMinor: 9900 });
 
   assert.strictEqual((await env.webhook(good, { secret: 'not-the-secret' })).status, 400, 'wrong signature');
   const noSig = await fetch(`${env.base}/webhooks/razorpay`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(good) });
@@ -207,11 +207,11 @@ test('the webhook only trusts Razorpay: signature, amount, currency and a known 
   assert.strictEqual((await env.webhook(null, { raw: 'not json at all' })).status, 400, 'signed, but not JSON');
   assert.strictEqual(env.store.isPremium('alice'), false, 'nothing switched on yet');
 
-  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_2', amountPaise: 100 }))).body.status, 'mismatch', 'paid less than the plan costs');
-  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_3', amountPaise: 9900, currency: 'USD' }))).body.status, 'mismatch', 'wrong currency');
-  assert.strictEqual((await env.webhook(paidEvent({ reference: 'alice.deadbeef0000', paymentId: 'pay_4', amountPaise: 9900 }))).body.status, 'unknown', 'not our order');
-  assert.strictEqual((await env.webhook(paidEvent({ reference: 'ghost.deadbeef0000', paymentId: 'pay_5', amountPaise: 9900 }))).body.status, 'unknown', 'not our user');
-  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_6', amountPaise: 9900, status: 'failed' }))).body.status, 'ignored', 'a payment that did not go through');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_2', amountMinor: 100 }))).body.status, 'mismatch', 'paid less than the plan costs');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_3', amountMinor: 9900, currency: 'USD' }))).body.status, 'mismatch', 'wrong currency');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: 'alice.deadbeef0000', paymentId: 'pay_4', amountMinor: 9900 }))).body.status, 'unknown', 'not our order');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: 'ghost.deadbeef0000', paymentId: 'pay_5', amountMinor: 9900 }))).body.status, 'unknown', 'not our user');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_6', amountMinor: 9900, status: 'failed' }))).body.status, 'ignored', 'a payment that did not go through');
   assert.strictEqual((await env.webhook({ event: 'payment.failed', payload: {} })).body.status, 'ignored');
   assert.strictEqual(env.store.isPremium('alice'), false, 'none of those switched Premium on');
   assert.strictEqual(env.store.paymentsOf('alice').length, 0);
@@ -219,7 +219,7 @@ test('the webhook only trusts Razorpay: signature, amount, currency and a known 
   assert.strictEqual((await env.webhook(good)).body.status, 'activated');
   assert.strictEqual(env.store.isPremium('alice'), true);
   // The same order cannot be paid for twice: a second payment on it is not credited.
-  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_7', amountPaise: 9900 }))).body.status, 'duplicate');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId: 'pay_7', amountMinor: 9900 }))).body.status, 'duplicate');
   assert.strictEqual(env.store.paymentsOf('alice').length, 1);
 
   // Without a webhook secret the endpoint is closed.
@@ -237,7 +237,7 @@ test('"I have paid": the server asks Razorpay; a later webhook changes nothing',
   assert.deepStrictEqual([pending.status, pending.body.error.code], [402, 'payment_pending'], 'Razorpay says not paid');
   assert.strictEqual(env.store.isPremium('alice'), false);
 
-  const paymentId = env.rz.pay('plink_1', { amountPaise: 27900 });
+  const paymentId = env.rz.pay('plink_1', { amountMinor: 27900 });
   const done = await confirm();
   assert.strictEqual(done.status, 200, JSON.stringify(done.body));
   assert.strictEqual(done.body.premium, true);
@@ -246,7 +246,7 @@ test('"I have paid": the server asks Razorpay; a later webhook changes nothing',
   assert.ok(until > Date.now() + 88 * 86400000, 'three months');
 
   assert.strictEqual((await confirm()).status, 200, 'asking again is harmless');
-  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId, amountPaise: 27900 }))).body.status, 'duplicate');
+  assert.strictEqual((await env.webhook(paidEvent({ reference: order.orderId, paymentId, amountMinor: 27900 }))).body.status, 'duplicate');
   assert.strictEqual(env.store.subscriptionOf('alice').expiresAt, until);
   assert.strictEqual(env.store.paymentsOf('alice').length, 1);
 
@@ -263,10 +263,10 @@ test('buying again extends Premium from where it ends', async (t) => {
   const env = await setup(t);
   const a = env.store.register('alice', 'pass');
   const first = (await buy(env, a.token, 'monthly')).body;
-  await env.webhook(paidEvent({ reference: first.orderId, linkId: 'plink_1', paymentId: env.rz.pay('plink_1'), amountPaise: 9900 }));
+  await env.webhook(paidEvent({ reference: first.orderId, linkId: 'plink_1', paymentId: env.rz.pay('plink_1'), amountMinor: 9900 }));
   const end1 = env.store.subscriptionOf('alice').expiresAt;
   const second = (await buy(env, a.token, 'yearly')).body;
-  await env.webhook(paidEvent({ reference: second.orderId, linkId: 'plink_2', paymentId: env.rz.pay('plink_2'), amountPaise: 99900 }));
+  await env.webhook(paidEvent({ reference: second.orderId, linkId: 'plink_2', paymentId: env.rz.pay('plink_2'), amountMinor: 99900 }));
   const end2 = env.store.subscriptionOf('alice').expiresAt;
   assert.ok(end2 > end1 + 360 * 86400000, 'a year on top of the month');
   assert.strictEqual(env.store.paymentsOf('alice').length, 2);
@@ -319,30 +319,30 @@ test('refunds: a full refund takes back what it bought, a partial one does not',
   const sock = await env.client(a.token);
   const o1 = (await buy(env, a.token, 'monthly')).body;
   const p1 = env.rz.pay('plink_1');
-  await env.webhook(paidEvent({ reference: o1.orderId, paymentId: p1, amountPaise: 9900 }));
+  await env.webhook(paidEvent({ reference: o1.orderId, paymentId: p1, amountMinor: 9900 }));
   const o2 = (await buy(env, a.token, 'monthly')).body;
   const p2 = env.rz.pay('plink_2');
-  await env.webhook(paidEvent({ reference: o2.orderId, linkId: 'plink_2', paymentId: p2, amountPaise: 9900 }));
+  await env.webhook(paidEvent({ reference: o2.orderId, linkId: 'plink_2', paymentId: p2, amountMinor: 9900 }));
   const twoMonths = env.store.subscriptionOf('alice').expiresAt;
 
-  assert.strictEqual((await env.webhook(refundEvent({ paymentId: p2, amountPaise: 5000 }))).body.status, 'refunded');
+  assert.strictEqual((await env.webhook(refundEvent({ paymentId: p2, amountMinor: 5000 }))).body.status, 'refunded');
   assert.strictEqual(env.store.subscriptionOf('alice').expiresAt, twoMonths, 'a part refund keeps Premium');
-  assert.strictEqual(env.store.paymentsOf('alice')[1].refundedPaise, 5000);
+  assert.strictEqual(env.store.paymentsOf('alice')[1].refundedMinor, 5000);
 
   const heard = once(sock, 'payment:refunded');
-  const full = await env.webhook(refundEvent({ paymentId: p2, amountPaise: 9900 }));
+  const full = await env.webhook(refundEvent({ paymentId: p2, amountMinor: 9900 }));
   assert.strictEqual(full.body.status, 'refunded');
   assert.strictEqual((await heard).revoked, true);
   const oneMonth = env.store.subscriptionOf('alice').expiresAt;
   assert.ok(Math.abs((twoMonths - oneMonth) - (env.store.paymentsOf('alice')[1].periodEnd - env.store.paymentsOf('alice')[1].periodStart)) < 1000, 'exactly that purchase is taken back');
   assert.strictEqual(env.store.isPremium('alice'), true, 'the first month is still there');
-  await env.webhook(refundEvent({ paymentId: p2, amountPaise: 9900 }));
+  await env.webhook(refundEvent({ paymentId: p2, amountMinor: 9900 }));
   assert.strictEqual(env.store.subscriptionOf('alice').expiresAt, oneMonth, 'only once');
 
-  await env.webhook(refundEvent({ paymentId: p1, amountPaise: 9900 }));
+  await env.webhook(refundEvent({ paymentId: p1, amountMinor: 9900 }));
   assert.strictEqual(env.store.isPremium('alice'), false, 'refund both and Premium is over');
-  assert.strictEqual((await env.webhook(refundEvent({ paymentId: 'pay_unknown', amountPaise: 1 }))).body.status, 'unknown');
-  assert.strictEqual((await env.webhook(refundEvent({ paymentId: p1, amountPaise: 9900, event: 'refund.created' }))).body.status, 'ignored', 'only a processed refund counts');
+  assert.strictEqual((await env.webhook(refundEvent({ paymentId: 'pay_unknown', amountMinor: 1 }))).body.status, 'unknown');
+  assert.strictEqual((await env.webhook(refundEvent({ paymentId: p1, amountMinor: 9900, event: 'refund.created' }))).body.status, 'ignored', 'only a processed refund counts');
   assert.strictEqual((await env.api('GET', '/me/payments', a.token)).body.payments[0].refunded, 99);
 });
 
@@ -355,7 +355,7 @@ test('an order and its payment survive a restart; the record is kept after the a
   // The server restarts while the person is on Razorpay's page: the data comes back from storage.
   const restarted = new Store({ file: null, initialData: JSON.parse(JSON.stringify(env.store.data)) });
   const env2 = await setup(t, { store: restarted });
-  assert.strictEqual((await env2.webhook(paidEvent({ reference: order.orderId, paymentId, amountPaise: 9900 }))).body.status, 'activated', 'the payment still finds its order');
+  assert.strictEqual((await env2.webhook(paidEvent({ reference: order.orderId, paymentId, amountMinor: 9900 }))).body.status, 'activated', 'the payment still finds its order');
   assert.strictEqual(restarted.isPremium('alice'), true);
 
   // Dashboard and data download.
@@ -376,7 +376,7 @@ test('an order and its payment survive a restart; the record is kept after the a
   assert.deepStrictEqual(after.totals.INR, { all: 99, last30Days: 99, count: 1 });
   assert.ok(!JSON.stringify(restarted.data.archivedUsers.alice).includes('+91'));
   // A retried webhook after deletion is harmless.
-  assert.strictEqual((await env2.webhook(paidEvent({ reference: order.orderId, paymentId, amountPaise: 9900 }))).status, 200);
+  assert.strictEqual((await env2.webhook(paidEvent({ reference: order.orderId, paymentId, amountMinor: 9900 }))).status, 200);
 });
 
 test('the dashboard shows Razorpay and the plans can be switched and priced', async (t) => {

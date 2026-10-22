@@ -234,12 +234,13 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       plans: payments ? payments.listPlans() : [],
       available: !!payments?.available,
       sandbox: !!payments?.sandbox,
-      provider: payments?.provider || null,
+      provider: payments?.providerId || null,
+      providerLabel: payments?.provider?.label || null,
       payments: store.paymentsOf(me).slice(-5).reverse().map(publicPayment),
     };
   };
   /** A payment as the person sees it (their receipt). */
-  const publicPayment = (p) => ({ id: p.id, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, ...(p.refundedPaise ? { refunded: p.refundedPaise / 100 } : {}) });
+  const publicPayment = (p) => ({ id: p.id, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, ...(p.refundedMinor ? { refunded: p.refundedMinor / 100 } : {}) });
 
   /** Tell people their Premium ended (called every minute): their badge goes away. */
   let lastSweep = Date.now();

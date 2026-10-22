@@ -3,7 +3,8 @@
 const crypto = require('crypto');
 
 /**
- * Razorpay, directly: no relay needed.
+ * Razorpay as a payment provider (the interface is described in payment-providers.js; another vendor is another file like
+ * this one). No relay needed.
  *
  * VartiQ never sees a card, UPI or bank detail. For each purchase it creates a Razorpay **Payment Link** (a payment page
  * hosted by Razorpay, with UPI, cards, netbanking and wallets), sends the person there, and switches Premium on only
@@ -29,12 +30,13 @@ const same = (a, b) => {
 };
 
 function createRazorpay({
-  keyId = process.env.RAZORPAY_KEY_ID,
-  keySecret = process.env.RAZORPAY_KEY_SECRET,
-  webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET,
-  apiBase = process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com',
+  keyId,
+  keySecret,
+  webhookSecret,
+  apiBase,
   fetchImpl = fetch,
 } = {}) {
+  apiBase ||= 'https://api.razorpay.com';
   if (!keyId || !keySecret) return null;
   const auth = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`;
 
@@ -50,13 +52,15 @@ function createRazorpay({
     return data;
   }
 
+  // The payment provider interface (see payment-providers.js): the rest of the app only uses these.
   return {
-    keyId,
+    id: 'razorpay',
+    label: 'Razorpay',
     testMode: String(keyId).startsWith('rzp_test_'),
     webhookConfigured: !!webhookSecret,
 
-    /** A payment page for `amount` rupees. `reference` comes back on every notification so we know whose it is. */
-    async createLink({ reference, amount, currency, description, user, plan, callbackUrl, expireBy }) {
+    /** A payment page for `amount` (major units, e.g. rupees). `reference` comes back on every notification. */
+    async createCheckout({ reference, amount, currency, description, user, plan, returnUrl, expireBy }) {
       const link = await api('POST', '/payment_links', {
         amount: Math.round(amount * 100), // paise
         currency,
@@ -67,48 +71,50 @@ function createRazorpay({
         reminder_enable: false,
         notes: { user, plan, reference },
         ...(expireBy ? { expire_by: Math.floor(expireBy / 1000) } : {}),
-        ...(callbackUrl ? { callback_url: callbackUrl, callback_method: 'get' } : {}),
+        ...(returnUrl ? { callback_url: returnUrl, callback_method: 'get' } : {}),
       });
       if (!link?.id || !link.short_url) throw new Error('Razorpay did not return a payment link');
       return { providerRef: link.id, paymentUrl: link.short_url };
     },
 
-    /** Has this link been paid? `{ paid, paymentId, amountPaise, currency, status }` (asked of Razorpay itself). */
-    async linkStatus(providerRef) {
+    /** Ask Razorpay itself whether the order was paid: `{ paid, paymentId, amountMinor, currency, method }`. */
+    async status({ providerRef }) {
       const link = await api('GET', `/payment_links/${encodeURIComponent(providerRef)}`);
       const captured = (link.payments || []).find((p) => p.status === 'captured' || p.status === 'authorized') || null;
       const paid = link.status === 'paid' && Number(link.amount_paid) > 0;
-      return { paid, status: link.status, paymentId: captured?.payment_id || null, amountPaise: Number(link.amount_paid) || 0, currency: link.currency, method: captured?.method || null };
+      return { paid, paymentId: captured?.payment_id || null, amountMinor: Number(link.amount_paid) || 0, currency: link.currency, method: captured?.method || null };
     },
 
     /** Is this webhook really from Razorpay? (HMAC-SHA256 of the raw body, header `X-Razorpay-Signature`.) */
-    verifyWebhook(rawBody, signature) {
+    verifyWebhook(rawBody, headers = {}) {
+      const signature = headers['x-razorpay-signature'];
       return !!webhookSecret && !!signature && same(hmac(webhookSecret, rawBody), signature);
     },
 
-    /** The address Razorpay sends the person back to carries a signature: `plink_id|reference_id|status|payment_id`. */
-    verifyReturn(q = {}) {
-      const data = `${q.razorpay_payment_link_id}|${q.razorpay_payment_link_reference_id}|${q.razorpay_payment_link_status}|${q.razorpay_payment_id}`;
-      return !!q.razorpay_signature && same(hmac(keySecret, data), q.razorpay_signature);
-    },
-
-    /**
-     * Turn a webhook body into what we act on: `{ kind: 'paid' | 'refund' | 'ignored', ... }`.
-     * paid: `{ reference, paymentId, amountPaise, currency, method }`; refund: `{ paymentId, refundPaise }`.
-     */
-    parseEvent(body) {
+    /** What a webhook says: `{ kind: 'paid', reference, paymentId, amountMinor, currency, method }`, `{ kind: 'refund', paymentId, refundMinor }`, or `{ kind: 'ignored' }`. */
+    parseWebhook(body) {
       const ev = body?.event;
       const p = body?.payload || {};
       if (ev === 'payment_link.paid') {
         const link = p.payment_link?.entity || {};
         const pay = p.payment?.entity || {};
-        return { kind: 'paid', reference: link.reference_id, paymentId: pay.id, amountPaise: Number(pay.amount ?? link.amount_paid), currency: pay.currency || link.currency, method: pay.method || null, status: pay.status || link.status };
+        const ok = !pay.status || ['captured', 'paid'].includes(pay.status);
+        return ok
+          ? { kind: 'paid', reference: link.reference_id, paymentId: pay.id, amountMinor: Number(pay.amount ?? link.amount_paid), currency: pay.currency || link.currency, method: pay.method || null }
+          : { kind: 'ignored', event: ev };
       }
-      if (ev === 'refund.processed' || ev === 'refund.created') {
+      if (ev === 'refund.processed') {
         const r = p.refund?.entity || {};
-        return { kind: 'refund', paymentId: r.payment_id || p.payment?.entity?.id, refundPaise: Number(r.amount), done: ev === 'refund.processed' };
+        return { kind: 'refund', paymentId: r.payment_id || p.payment?.entity?.id, refundMinor: Number(r.amount) };
       }
       return { kind: 'ignored', event: ev };
+    },
+
+    /** The address the person comes back to carries a signature: `plink_id|reference_id|status|payment_id`. */
+    verifyReturn(q = {}) {
+      const data = `${q.razorpay_payment_link_id}|${q.razorpay_payment_link_reference_id}|${q.razorpay_payment_link_status}|${q.razorpay_payment_id}`;
+      const valid = !!q.razorpay_signature && same(hmac(keySecret, data), q.razorpay_signature);
+      return { valid, paid: valid && q.razorpay_payment_link_status === 'paid', reference: String(q.razorpay_payment_link_reference_id || ''), paymentId: q.razorpay_payment_id || null };
     },
   };
 }

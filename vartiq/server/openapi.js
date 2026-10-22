@@ -303,7 +303,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       limits: obj({ free: obj({ chatLocks: { type: 'integer' }, hiddenChats: { type: 'integer' } }), premium: { const: 'unlimited' } }),
       usage: obj({ chatLocks: { type: 'integer' }, hiddenChats: { type: 'integer' } }),
       plans: arrayOf(obj({ id: { type: 'string', enum: ['daily', 'monthly', 'quarterly', 'halfyearly', 'yearly'] }, label: { type: 'string' }, price: { type: 'number' }, currency: { type: 'string' }, months: { type: ['integer', 'null'] }, perMonth: { type: ['number', 'null'], description: 'price per month' }, savePct: { type: 'integer', description: 'saving compared with paying monthly' } })),
-      provider: { type: ['string', 'null'], enum: ['razorpay', 'gateway', 'sandbox', null], description: 'who takes the payment' },
+      provider: { type: ['string', 'null'], description: 'who takes the payment (`razorpay`, `relay`, `sandbox`, …)' },
+      providerLabel: { type: ['string', 'null'], description: 'its name for people, e.g. Razorpay' },
       payments: arrayOf(ref('PaymentReceipt')),
       available: { type: 'boolean', description: 'payments are configured on this server' },
       sandbox: { type: 'boolean', description: 'development stand-in: orders are marked paid without payment' },
@@ -666,7 +667,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.me, 'Start paying for a plan', {
         description: 'Creates an order and returns the provider\'s `paymentUrl`: with **Razorpay** this is a Razorpay payment page (UPI, cards, netbanking, wallets); open it so the person can pay (card and bank details never touch VartiQ). `paymentUrl` is null in the sandbox, where no real payment is taken. Premium switches on when Razorpay reports the payment received (a signed webhook, even if the app was closed), or when you call `POST /me/subscription/confirm`; the Socket.IO events `subscription:update` and `payment:received` tell open apps at once. Each payment counts once. The order id is the reference printed on the Razorpay page.',
         body: jsonBody(obj({ plan: { type: 'string', enum: ['daily', 'monthly', 'quarterly', 'halfyearly', 'yearly'] } }, ['plan']), { plan: 'monthly' }),
-        responses: { 200: ok(obj({ orderId: { type: 'string' }, plan: { type: 'string' }, amount: { type: 'number' }, currency: { type: 'string' }, paymentUrl: { type: ['string', 'null'] }, provider: { type: 'string', enum: ['razorpay', 'gateway', 'sandbox'] }, sandbox: { type: 'boolean' } }, ['orderId', 'plan', 'amount', 'currency'])), ...errors(400, 401, 429, 502, 503) },
+        responses: { 200: ok(obj({ orderId: { type: 'string' }, plan: { type: 'string' }, amount: { type: 'number' }, currency: { type: 'string' }, paymentUrl: { type: ['string', 'null'] }, provider: { type: 'string' }, providerLabel: { type: 'string' }, sandbox: { type: 'boolean' } }, ['orderId', 'plan', 'amount', 'currency'])), ...errors(400, 401, 429, 502, 503) },
       }),
     },
     '/me/payments': {
