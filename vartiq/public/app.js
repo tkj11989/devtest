@@ -1276,6 +1276,8 @@
       if (!$('#panel-appearance').classList.contains('hidden')) renderAppearance();
     });
     // My Premium started or ended (maybe on another device).
+    socket.on('payment:received', (e) => paymentReceivedHook(e));
+    socket.on('payment:refunded', (e) => toast(`A refund of ${money({ currency: e.payment.currency, price: e.payment.refunded || e.payment.amount })} was processed${e.revoked ? ', so that Premium period was taken back' : ''}.`));
     socket.on('subscription:update', (sub) => {
       state.sub = sub;
       if (state.me) state.me.premium = !!sub.premium;
@@ -4614,26 +4616,65 @@
     const chosen = await dialog({
       title: 'Upgrade to Premium',
       text: `Unlimited locked chats and hidden chats, up to 5 profile photos (free accounts: 2), a Premium badge${state.guardian ? ', and your parent or guardian can then change your parental controls' : ''}. Paid in advance for the period you choose; it does not renew by itself, and buying again extends it.`,
-      fields: [{ name: 'plan', label: 'Plan', options: info.plans.map((p) => [p.id, `${p.label} · ${money(p)}`]) }],
-      submit: 'Continue to payment',
-      onSubmit: async (v) => { order = await emit('subscription:checkout', { plan: v.plan }); },
+      fields: [{ name: 'plan', label: 'Plan', options: info.plans.map((p) => [p.id, planLabel(p)]) }],
+      submit: info.provider === 'razorpay' ? 'Pay with Razorpay' : 'Continue to payment',
+      onSubmit: async (v) => {
+        // Open the payment tab straight from the tap (browsers block tabs opened after a wait), then point it at the payment page.
+        const tab = info.provider === 'sandbox' ? null : window.open('', '_blank');
+        try {
+          order = await emit('subscription:checkout', { plan: v.plan });
+        } catch (err) {
+          tab?.close();
+          throw err;
+        }
+        if (tab && order.paymentUrl) tab.location.href = order.paymentUrl;
+        else tab?.close();
+      },
     });
     if (!chosen || !order) return;
-    if (order.paymentUrl) window.open(order.paymentUrl, '_blank', 'noopener');
+    state.awaitingPayment = order.orderId;
     const paid = await dialog({
       title: order.sandbox ? 'Pay (sandbox)' : 'Complete your payment',
       text: order.sandbox
         ? 'Sandbox: no real payment is taken.'
-        : `Finish paying on the payment page that opened (${order.paymentUrl}). Then tap "I have paid". Your card details never reach VartiQ.`,
+        : `Pay on the ${order.provider === 'razorpay' ? 'Razorpay' : 'payment'} page that opened (UPI, cards, netbanking and wallets). Your card and bank details never reach VartiQ.\n\nPremium switches on by itself as soon as the payment is received. If it does not, tap "I have paid".`,
       fields: [],
       submit: order.sandbox ? 'Pay (test)' : 'I have paid',
       onSubmit: async () => { state.sub = await emit('subscription:confirm', { orderId: order.orderId }); },
     });
+    state.awaitingPayment = null;
     if (paid) {
       renderPremiumRow();
       toast('You are Premium ★');
     }
   }
+
+  /** "Monthly · ₹99", with what a longer plan saves. */
+  function planLabel(p) {
+    const per = p.months > 1 && p.perMonth ? ` · ${money({ currency: p.currency, price: Math.round(p.perMonth) })}/month` : '';
+    return `${p.label} · ${money(p)}${per}${p.savePct ? ` · save ${p.savePct}%` : ''}`;
+  }
+
+  // Razorpay (or our check) says the payment arrived, even if this app was in the background or closed the payment tab.
+  const paymentReceivedHook = (e) => {
+    toast(`Payment received: ${money({ currency: e.payment.currency, price: e.payment.amount })}. Premium is on until ${new Date(e.subscription.expiresAt).toLocaleDateString([], { dateStyle: 'medium' })}.`);
+    if (state.awaitingPayment && !$('#modal').classList.contains('hidden')) {
+      state.awaitingPayment = null;
+      $('#modal-cancel').click(); // the waiting dialog is done
+    }
+  };
+
+  $('#btn-payments').addEventListener('click', async () => {
+    try {
+      const { payments } = await emit('payments:history');
+      const lines = payments.length
+        ? payments.map((p) => `${new Date(p.at).toLocaleDateString([], { dateStyle: 'medium' })} · ${money({ currency: p.currency, price: p.amount })} · ${p.plan}${p.refunded ? ` · refunded ${money({ currency: p.currency, price: p.refunded })}` : ''}\nReceipt ${p.id}`).join('\n\n')
+        : 'No payments yet.';
+      await dialog({ title: 'My payments', text: lines, fields: [], submit: 'Close', onSubmit: async () => {} });
+    } catch (err) {
+      toast(err.message);
+    }
+  });
   $('#btn-premium').addEventListener('click', upgradeDialog);
 
   // ---------- verified badge (KYC) ----------

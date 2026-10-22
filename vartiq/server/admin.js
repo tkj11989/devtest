@@ -198,6 +198,24 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     return undefined;
   }));
 
+  // ---------- payments received ----------
+
+  router.get('/payments', auth, run(() => {
+    const list = store.allPayments(500);
+    const now = Date.now();
+    const sum = (rows) => rows.reduce((t, p) => t + p.amount - (p.refundedPaise || 0) / 100, 0);
+    const totals = {};
+    for (const p of store.allPayments(100000)) {
+      const t = (totals[p.currency] ||= { all: 0, last30Days: 0, count: 0 });
+      const net = p.amount - (p.refundedPaise || 0) / 100;
+      t.all += net;
+      t.count += 1;
+      if (p.at > now - 30 * 86400000) t.last30Days += net;
+    }
+    for (const t of Object.values(totals)) { t.all = Math.round(t.all * 100) / 100; t.last30Days = Math.round(t.last30Days * 100) / 100; }
+    return { payments: list.map((p) => ({ id: p.id, user: p.username, deleted: !!p.deleted, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, method: p.method || null, provider: p.provider || null, refunded: p.refundedPaise ? p.refundedPaise / 100 : 0 })), totals, shown: sum(list) };
+  }));
+
   // ---------- reported profile photos ----------
 
   const photoReportView = (g) => ({

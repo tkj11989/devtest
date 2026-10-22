@@ -228,14 +228,18 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       plan: premium ? sub.plan : null,
       expiresAt: sub?.expiresAt || null,
       expired: !!sub && !premium,
-      perks: ['Unlimited locked and hidden chats', 'Call recording', 'Colour themes', 'Custom app icons and avatar shapes'],
+      perks: ['Unlimited locked and hidden chats', 'Up to 5 profile photos (free accounts: 2)', 'Call recording', 'Colour themes', 'Custom app icons and avatar shapes'],
       limits: { free: { chatLocks: store.getSettings().limits.freeChatLocks, hiddenChats: store.getSettings().limits.freeHiddenChats }, premium: 'unlimited' },
       usage: { chatLocks: store.lockedChats(me).length, hiddenChats: store.hiddenChats(me).length },
       plans: payments ? payments.listPlans() : [],
       available: !!payments?.available,
       sandbox: !!payments?.sandbox,
+      provider: payments?.provider || null,
+      payments: store.paymentsOf(me).slice(-5).reverse().map(publicPayment),
     };
   };
+  /** A payment as the person sees it (their receipt). */
+  const publicPayment = (p) => ({ id: p.id, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, ...(p.refundedPaise ? { refunded: p.refundedPaise / 100 } : {}) });
 
   /** Tell people their Premium ended (called every minute): their badge goes away. */
   let lastSweep = Date.now();
@@ -835,9 +839,14 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     },
 
     /** Start paying for a plan ('daily' | 'monthly' | 'yearly'). Returns where to pay. */
-    async subscriptionCheckout(me, { plan }) {
+    async subscriptionCheckout(me, { plan }, ctx) {
       if (!payments) throw new ApiError(503, 'payments_unavailable', 'Subscriptions are not available right now');
-      return payments.checkout(me, plan);
+      return payments.checkout(me, plan, { origin: ctx?.origin });
+    },
+
+    /** My payments received (receipts), newest first. */
+    paymentHistory(me) {
+      return { payments: store.paymentsOf(me).slice().reverse().map(publicPayment) };
     },
 
     /** After paying: the server asks the payment service, and switches Premium on when it was paid. */
@@ -1778,6 +1787,21 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     eraseDueAccounts,
     releaseGuardians,
     refreshPhotos: photosChanged,
+    /** Razorpay (or the relay) told us a payment arrived: Premium is on, tell every open app of the person. */
+    paymentReceived({ user, entry }) {
+      const view = subscriptionView(user);
+      announceProfile(user);
+      io.to(userRoom(user)).emit('subscription:update', view);
+      io.to(userRoom(user)).emit('appearance:update', appearance.effective(store.prefsOf(user), true));
+      io.to(userRoom(user)).emit('payment:received', { payment: publicPayment(entry), subscription: view });
+    },
+    paymentRefunded({ user, entry, revoked }) {
+      const view = subscriptionView(user);
+      announceProfile(user);
+      io.to(userRoom(user)).emit('subscription:update', view);
+      io.to(userRoom(user)).emit('appearance:update', appearance.effective(store.prefsOf(user), store.isPremium(user)));
+      io.to(userRoom(user)).emit('payment:refunded', { payment: publicPayment(entry), revoked });
+    },
     guardianPortal,
     GUARDIAN_EXEMPT,
     forgetUnlocks,

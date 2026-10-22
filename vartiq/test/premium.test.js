@@ -74,7 +74,7 @@ test('free accounts: 3 locked chats and 1 hidden chat, then Premium is required'
 
   const sub = (await api('GET', '/me/subscription', { token: alice.token })).body;
   assert.deepStrictEqual([sub.premium, sub.plan, sub.usage, sub.limits.free], [false, null, { chatLocks: 2, hiddenChats: 1 }, { chatLocks: 3, hiddenChats: 1 }]);
-  assert.deepStrictEqual(sub.plans.map((p) => [p.id, p.currency]), [['daily', 'INR'], ['monthly', 'INR'], ['yearly', 'INR']]);
+  assert.deepStrictEqual(sub.plans.map((p) => [p.id, p.currency]), [['daily', 'INR'], ['monthly', 'INR'], ['quarterly', 'INR'], ['halfyearly', 'INR'], ['yearly', 'INR']]);
 });
 
 test('premium (sandbox payment): unlimited, badge for everyone, plans stack', async (t) => {
@@ -160,7 +160,7 @@ test('payment gateway: unpaid orders, one-time orders, other users, failures, un
   const bob = store.register('bob', 'pass');
 
   const order = (await api('POST', '/me/subscription/checkout', { token: alice.token, body: { plan: 'monthly' } })).body;
-  assert.deepStrictEqual([order.paymentUrl.startsWith('https://pay.example/ord_'), order.sandbox, order.amount], [true, false, 99]);
+  assert.deepStrictEqual([order.paymentUrl.startsWith('https://pay.example/alice.'), order.sandbox, order.amount], [true, false, 99]);
   assert.deepStrictEqual(created[0], { action: 'create', reference: order.orderId, plan: 'monthly', amount: 99, currency: 'INR', user: 'alice' });
   const confirm = (token, orderId) => api('POST', '/me/subscription/confirm', { token, body: { orderId } });
 
@@ -170,7 +170,9 @@ test('payment gateway: unpaid orders, one-time orders, other users, failures, un
   paid.add(order.orderId);
   assert.strictEqual((await confirm(bob.token, order.orderId)).status, 404, "someone else's order");
   assert.strictEqual((await confirm(alice.token, order.orderId)).body.premium, true);
-  assert.strictEqual((await confirm(alice.token, order.orderId)).status, 404, 'a paid order works once');
+  const expiry = store.subscriptionOf('alice').expiresAt;
+  assert.strictEqual((await confirm(alice.token, order.orderId)).status, 200, 'asking again is fine (the payment may already have been reported)');
+  assert.strictEqual(store.subscriptionOf('alice').expiresAt, expiry, 'but a paid order extends Premium once');
 
   down = true;
   assert.strictEqual((await api('POST', '/me/subscription/checkout', { token: bob.token, body: { plan: 'daily' } })).body.error.code, 'payment_gateway_failed');

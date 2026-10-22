@@ -31,6 +31,7 @@ const FEATURES = [
 ];
 
 const { DEFAULT_LEGAL, FIELD_LIMITS } = require('./legal');
+const PLAN_IDS = Object.keys(require('./payments').DEFAULT_PLANS);
 const IDS = FEATURES.map((f) => f.id);
 /** Features an administrator has to switch on. */
 const OFF_BY_DEFAULT = ['developerApi'];
@@ -42,6 +43,7 @@ const DEFAULT_SETTINGS = {
   features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
   limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5 },
   prices: {}, // plan id -> price override
+  disabledPlans: [], // plans nobody can buy right now
   announcement: '',
   maintenance: { on: false, message: 'We are making improvements and will be back soon.' },
   minClientVersion: '',
@@ -80,7 +82,7 @@ function applySettings(current, patch) {
   if (next.limits.premiumProfilePhotos < next.limits.freeProfilePhotos) throw bad('limits.premiumProfilePhotos cannot be lower than freeProfilePhotos');
   if (patch.prices !== undefined) {
     for (const [plan, v] of Object.entries(patch.prices || {})) {
-      if (!['daily', 'monthly', 'yearly'].includes(plan)) throw bad(`Unknown plan "${plan}"`);
+      if (!PLAN_IDS.includes(plan)) throw bad(`Unknown plan "${plan}"`);
       if (v === null) {
         if (plan in next.prices) {
           changes.push(`price ${plan}: ${next.prices[plan]} → default`);
@@ -91,6 +93,12 @@ function applySettings(current, patch) {
       if (typeof v !== 'number' || !(v > 0) || v > 1e7 || Math.abs(v * 100 - Math.round(v * 100)) > 1e-6) throw bad(`prices.${plan} must be a positive amount with at most 2 decimals`);
       set(`price ${plan}`, next.prices, plan, v);
     }
+  }
+  if (patch.disabledPlans !== undefined) {
+    const list = patch.disabledPlans;
+    if (!Array.isArray(list) || list.some((p) => !PLAN_IDS.includes(p))) throw bad(`disabledPlans must be a list of plan ids (${PLAN_IDS.join(', ')})`);
+    if (new Set(list).size >= PLAN_IDS.length) throw bad('At least one plan must stay available');
+    set('disabled plans', next, 'disabledPlans', [...new Set(list)].sort());
   }
   if (patch.announcement !== undefined) {
     if (typeof patch.announcement !== 'string' || patch.announcement.length > 300) throw bad('announcement must be text of up to 300 characters');

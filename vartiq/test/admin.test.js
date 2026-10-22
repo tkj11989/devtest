@@ -364,7 +364,7 @@ test('moderation of channels and reports; settings: limits and prices; audit log
 
   // Prices: override, then back to default.
   await admin('PUT', '/settings', { token, body: { prices: { monthly: 149.5 } } });
-  assert.deepStrictEqual((await api('GET', '/me/subscription', { token: fan.token })).body.plans.map((p) => [p.id, p.price]), [['daily', 9], ['monthly', 149.5], ['yearly', 999]]);
+  assert.deepStrictEqual((await api('GET', '/me/subscription', { token: fan.token })).body.plans.map((p) => [p.id, p.price]), [['daily', 9], ['monthly', 149.5], ['quarterly', 279], ['halfyearly', 529], ['yearly', 999]]);
   const order = (await api('POST', '/me/subscription/checkout', { token: fan.token, body: { plan: 'monthly' } })).body;
   assert.strictEqual(order.amount, 149.5);
   await admin('PUT', '/settings', { token, body: { prices: { monthly: null } } });

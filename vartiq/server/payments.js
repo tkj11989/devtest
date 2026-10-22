@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 
 /**
- * Premium subscriptions: daily, monthly or yearly, paid in advance (no auto-renewal).
+ * Premium subscriptions: daily, monthly, 3 months, 6 months or yearly, paid in advance (no auto-renewal).
  *
  * VartiQ never handles card or bank details. Paying happens on the payment provider's own
  * page; the server only creates an order, then asks the provider whether it was paid before
@@ -18,8 +18,10 @@ const crypto = require('crypto');
 
 const DEFAULT_PLANS = {
   daily: { label: 'Daily', price: 9, period: { days: 1 } },
-  monthly: { label: 'Monthly', price: 99, period: { months: 1 } },
-  yearly: { label: 'Yearly', price: 999, period: { years: 1 } },
+  monthly: { label: 'Monthly', price: 99, period: { months: 1 }, months: 1 },
+  quarterly: { label: '3 months', price: 279, period: { months: 3 }, months: 3 },
+  halfyearly: { label: '6 months', price: 529, period: { months: 6 }, months: 6 },
+  yearly: { label: 'Yearly', price: 999, period: { years: 1 }, months: 12 },
 };
 
 class PaymentError extends Error {
@@ -45,68 +47,166 @@ function addPeriod(from, period) {
   return d.getTime();
 }
 
-function createPayments({ store, gateway = null, sandbox = false, plans = DEFAULT_PLANS, currency = 'INR', ordersPerHour = 10, orderTtlMs = 60 * 60 * 1000 } = {}) {
-  const orders = new Map(); // reference -> { user, plan, amount, expiresAt }
+/**
+ * Options:
+ *   razorpay   a client from razorpay.js (Payment Links): preferred when set
+ *   gateway    otherwise, the generic relay described above
+ *   sandbox    development only: every order counts as paid
+ *   onPaid     ({ user, entry }) called once for every payment received (the app tells the person "Payment received")
+ *   onRefund   ({ user, entry, revoked }) when a payment is refunded
+ *   publicUrl  where the app lives, for the address Razorpay sends people back to
+ */
+function createPayments({ store, gateway = null, razorpay = null, sandbox = false, plans = DEFAULT_PLANS, currency = 'INR', ordersPerHour = 10, orderTtlMs = 60 * 60 * 1000, onPaid = () => {}, onRefund = () => {}, publicUrl = process.env.PUBLIC_URL } = {}) {
   const attempts = new Map(); // user -> [timestamps]
-  const available = !!(gateway || sandbox);
+  const available = !!(razorpay || gateway || sandbox);
+  const provider = razorpay ? 'razorpay' : gateway ? 'gateway' : 'sandbox';
 
   const sweep = setInterval(() => {
     const now = Date.now();
-    for (const [ref, o] of orders) if (o.expiresAt <= now) orders.delete(ref);
-  }, 60 * 1000);
+    for (const [u, list] of attempts) {
+      const recent = list.filter((t) => t > now - 60 * 60 * 1000);
+      if (recent.length) attempts.set(u, recent);
+      else attempts.delete(u);
+    }
+  }, 5 * 60 * 1000);
   sweep.unref();
 
-  const listPlans = () => Object.entries(plans).map(([id, p]) => ({ id, label: p.label, price: store.getSettings().prices[id] ?? p.price, currency }));
+  const priceOf = (id) => store.getSettings().prices[id] ?? plans[id].price;
+  const enabled = (id) => !!plans[id] && !(store.getSettings().disabledPlans || []).includes(id);
 
-  async function checkout(user, planId) {
+  /** The plans people can buy now, with what they save compared with paying monthly. */
+  const listPlans = () => {
+    const monthly = plans.monthly ? priceOf('monthly') : null;
+    return Object.entries(plans).filter(([id]) => enabled(id)).map(([id, p]) => {
+      const price = priceOf(id);
+      const perMonth = p.months ? Math.round((price / p.months) * 100) / 100 : null;
+      const savePct = perMonth && monthly && p.months > 1 ? Math.max(0, Math.round((1 - perMonth / monthly) * 100)) : 0;
+      return { id, label: p.label, price, currency, months: p.months || null, perMonth, savePct };
+    });
+  };
+
+  const ownerOf = (reference) => String(reference || '').slice(0, String(reference || '').lastIndexOf('.'));
+
+  async function checkout(user, planId, { origin } = {}) {
     if (!available) throw new PaymentError(503, 'payments_unavailable', 'Subscriptions are not available right now');
-    const base = plans[planId];
-    // Administrators can override a plan's price.
-    const plan = base && { ...base, price: store.getSettings().prices[planId] ?? base.price };
-    if (!plan) throw new PaymentError(400, 'invalid_request', `plan must be one of: ${Object.keys(plans).join(', ')}`);
+    if (!plans[planId]) throw new PaymentError(400, 'invalid_request', `plan must be one of: ${Object.keys(plans).join(', ')}`);
+    if (!enabled(planId)) throw new PaymentError(400, 'plan_unavailable', 'That plan is not available right now');
+    const price = priceOf(planId);
     const now = Date.now();
     const recent = (attempts.get(user) || []).filter((t) => t > now - 60 * 60 * 1000);
     if (recent.length >= ordersPerHour) throw new PaymentError(429, 'rate_limited', 'Too many payment attempts. Try again later.');
-    const reference = `ord_${crypto.randomBytes(12).toString('hex')}`;
+    // The reference starts with the username, so a payment notification finds its owner at once (Razorpay allows 40 characters).
+    const reference = `${user}.${crypto.randomBytes(6).toString('hex')}`;
     let paymentUrl = null;
-    if (gateway) {
-      try {
-        ({ paymentUrl } = await gateway({ action: 'create', reference, plan: planId, amount: plan.price, currency, user }));
-      } catch (err) {
-        console.error('Payment gateway create failed:', err.message);
-        throw new PaymentError(502, 'payment_gateway_failed', 'The payment service could not start the payment. Try again shortly.');
+    let providerRef = null;
+    try {
+      if (razorpay) {
+        const base = require('./guardian').baseUrl(publicUrl, origin);
+        ({ paymentUrl, providerRef } = await razorpay.createLink({
+          reference, amount: price, currency, user, plan: planId,
+          description: `VartiQ Premium: ${plans[planId].label}`,
+          callbackUrl: base ? `${base}/premium/return` : undefined,
+          expireBy: now + orderTtlMs,
+        }));
+      } else if (gateway) {
+        ({ paymentUrl } = await gateway({ action: 'create', reference, plan: planId, amount: price, currency, user }));
+        if (!paymentUrl) throw new Error('no paymentUrl');
       }
-      if (!paymentUrl) throw new PaymentError(502, 'payment_gateway_failed', 'The payment service did not answer correctly');
+    } catch (err) {
+      console.error('Payment gateway create failed:', err.message);
+      throw new PaymentError(502, 'payment_gateway_failed', 'The payment service could not start the payment. Try again shortly.');
     }
     recent.push(now);
     attempts.set(user, recent);
-    orders.set(reference, { user, plan: planId, amount: plan.price, expiresAt: now + orderTtlMs });
-    return { orderId: reference, plan: planId, amount: plan.price, currency, paymentUrl, sandbox: !gateway };
+    store.addOrder(user, reference, { plan: planId, amount: price, currency, provider, ...(providerRef ? { providerRef } : {}) });
+    return { orderId: reference, plan: planId, amount: price, currency, paymentUrl, provider, sandbox: provider === 'sandbox' };
   }
 
-  /** Ask the provider whether the order was paid; if so, switch Premium on (once per order). */
+  /**
+   * A payment was received (from the payment service's webhook, its return address, or our own check). Switches Premium on
+   * once per payment. Returns `{ status, user }`: `activated`, `duplicate` (already recorded), `unknown` (not an order of
+   * ours), or `mismatch` (the amount or currency is not what the order was for: nothing is switched on).
+   */
+  function receive({ reference, paymentId, amountPaise, currency: cur, method = null }) {
+    const user = ownerOf(reference);
+    const order = user && store.orderOf(user, reference);
+    if (!order) return { status: 'unknown' };
+    if (paymentId && store.paymentOwner(paymentId)) return { status: 'duplicate', user };
+    if (order.paidAt) {
+      console.warn(`Order ${reference} was already paid; ignoring payment ${paymentId} (refund it in Razorpay if the person paid twice)`);
+      return { status: 'duplicate', user };
+    }
+    if (Number(amountPaise) !== Math.round(order.amount * 100) || String(cur || '').toUpperCase() !== order.currency) {
+      console.error(`Payment ${paymentId} for order ${reference} does not match it (${amountPaise} ${cur} vs ${order.amount} ${order.currency}); not activated`);
+      return { status: 'mismatch', user };
+    }
+    const sub = store.subscriptionOf(user);
+    const periodStart = Math.max(Date.now(), sub?.expiresAt || 0); // buying while Premium extends it
+    const periodEnd = addPeriod(periodStart, plans[order.plan].period);
+    store.activateSubscription(user, { plan: order.plan, expiresAt: periodEnd });
+    const entry = { id: paymentId || `${provider}_${reference}`, reference, plan: order.plan, amount: order.amount, currency: order.currency, at: Date.now(), method, provider: order.provider, periodStart, periodEnd };
+    store.recordPayment(user, entry, reference);
+    try {
+      onPaid({ user, entry });
+    } catch (err) {
+      console.error('onPaid failed:', err.message);
+    }
+    return { status: 'activated', user, entry };
+  }
+
+  /** The person says they paid: ask the payment service itself. Switches Premium on when it was (once per order). */
   async function confirm(user, orderId) {
-    const order = orders.get(String(orderId || ''));
-    if (!order || order.user !== user) throw new PaymentError(404, 'not_found', 'Order not found or expired. Start again.');
-    let paid;
-    if (gateway) {
+    const reference = String(orderId || '');
+    const order = ownerOf(reference) === user && store.orderOf(user, reference);
+    if (!order) throw new PaymentError(404, 'not_found', 'Order not found or expired. Start again.');
+    if (order.paidAt) return store.subscriptionOf(user); // the payment service already told us
+    let info;
+    if (razorpay) {
       try {
-        ({ paid } = await gateway({ action: 'status', reference: orderId }));
+        info = await razorpay.linkStatus(order.providerRef);
+      } catch (err) {
+        console.error('Razorpay status failed:', err.message);
+        throw new PaymentError(502, 'payment_gateway_failed', 'The payment service is not answering. Try again.');
+      }
+    } else if (gateway) {
+      try {
+        const r = await gateway({ action: 'status', reference });
+        info = { paid: !!r.paid, paymentId: r.paymentId || null, amountPaise: Math.round(order.amount * 100), currency: order.currency };
       } catch (err) {
         console.error('Payment gateway status failed:', err.message);
         throw new PaymentError(502, 'payment_gateway_failed', 'The payment service is not answering. Try again.');
       }
     } else {
-      paid = true; // sandbox
+      info = { paid: true, paymentId: null, amountPaise: Math.round(order.amount * 100), currency: order.currency }; // sandbox
     }
-    if (!paid) throw new PaymentError(402, 'payment_pending', 'Payment not received yet. Finish paying, then confirm again.');
-    orders.delete(orderId); // a paid order is used once
-    const current = store.subscriptionOf(user);
-    const base = Math.max(Date.now(), current?.expiresAt || 0); // buying while Premium extends it
-    return store.activateSubscription(user, { plan: order.plan, expiresAt: addPeriod(base, plans[order.plan].period) });
+    if (!info.paid) throw new PaymentError(402, 'payment_pending', 'Payment not received yet. Finish paying, then confirm again.');
+    const result = receive({ reference, paymentId: info.paymentId, amountPaise: info.amountPaise, currency: info.currency, method: info.method });
+    if (result.status === 'mismatch') throw new PaymentError(409, 'payment_mismatch', 'The payment does not match this order. Contact support.');
+    return store.subscriptionOf(user);
   }
 
-  return { available, sandbox: !gateway && sandbox, listPlans, checkout, confirm, stop: () => clearInterval(sweep), PaymentError };
+  /** The payment service refunded (part of) a payment. A full refund takes back the period it bought (never below today). */
+  function refund({ paymentId, refundPaise }) {
+    const found = store.recordRefund(String(paymentId), Number(refundPaise) || 0);
+    if (!found) return { status: 'unknown' };
+    const { username, entry } = found;
+    let revoked = false;
+    if (!entry.revoked && entry.refundedPaise >= Math.round(entry.amount * 100)) {
+      const sub = store.subscriptionOf(username);
+      if (sub) store.activateSubscription(username, { plan: sub.plan, expiresAt: Math.max(Date.now(), sub.expiresAt - (entry.periodEnd - entry.periodStart)) });
+      entry.revoked = true;
+      store._save();
+      revoked = true;
+    }
+    try {
+      onRefund({ user: username, entry, revoked });
+    } catch (err) {
+      console.error('onRefund failed:', err.message);
+    }
+    return { status: 'refunded', user: username, revoked };
+  }
+
+  return { available, provider, sandbox: provider === 'sandbox' && sandbox, razorpay, listPlans, checkout, confirm, receive, refund, stop: () => clearInterval(sweep), PaymentError };
 }
 
 function createPaymentGateway(env = process.env) {

@@ -85,7 +85,26 @@
 
   // ---------- pages ----------
 
-  const pages = { overview, users, channels, features, settings, audit, admins };
+  /** Payments received (Razorpay), newest first, with what came in. */
+  async function payments() {
+    const { payments: list, totals } = await api('GET', '/payments');
+    const tile = (label, n) => h('div', { class: 'tile' }, h('div', { class: 'n' }, typeof n === 'number' ? fmt.n(n) : n), h('div', { class: 'l' }, label));
+    const money = (cur, v) => { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(v); } catch { return `${cur} ${v}`; } };
+    const cur = Object.keys(totals);
+    return h('div', {},
+      head('Payments received', h('button', { class: 'btn small', onclick: route }, 'Refresh')),
+      h('div', { class: 'grid' },
+        ...(cur.length ? cur.flatMap((c) => [tile(`Received, last 30 days (${c})`, money(c, totals[c].last30Days)), tile(`Received, all time (${c})`, money(c, totals[c].all)), tile('Payments', totals[c].count)]) : [tile('Payments', 0)])),
+      h('p', { class: 'muted' }, 'Every payment Razorpay reported as received, after its signature and amount were checked. Refunds are deducted. Figures include accounts that were later deleted (the payment record is kept for accounting).'),
+      h('div', { class: 'card tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Received', 'Person', 'Plan', 'Amount', 'Premium until', 'Payment id', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, list.map((p) => h('tr', {},
+          h('td', {}, fmt.date(p.at)), h('td', {}, p.deleted ? h('span', { class: 'muted' }, `@${p.user} (deleted)`) : h('a', { href: `#users` , onclick: () => { userFilter.q = p.user; } }, `@${p.user}`)),
+          h('td', {}, p.plan), h('td', {}, money(p.currency, p.amount)), h('td', {}, fmt.date(p.periodEnd)), h('td', { class: 'wrap' }, p.id),
+          h('td', {}, p.refunded ? h('span', { class: 'tag bad' }, `Refunded ${money(p.currency, p.refunded)}`) : p.method ? h('span', { class: 'tag' }, p.method) : null))))),
+        !list.length && h('p', { class: 'muted' }, 'No payments yet.')));
+  }
+
+  const pages = { overview, users, channels, payments, features, settings, audit, admins };
 
   async function route() {
     const page = (location.hash.replace('#', '') || 'overview').split('/')[0];
@@ -367,7 +386,9 @@
     const num = (v, min) => h('input', { type: 'number', min, value: v, disabled: !isSuper() });
     const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1), minAge = num(s.limits.minAge, 5), freePhotos = num(s.limits.freeProfilePhotos, 1), premiumPhotos = num(s.limits.premiumProfilePhotos, 1);
     const price = (id) => h('input', { type: 'number', min: 1, step: '0.01', placeholder: 'default', value: s.prices[id] ?? '', disabled: !isSuper() });
-    const prices = { daily: price('daily'), monthly: price('monthly'), yearly: price('yearly') };
+    const PLANS = [['daily', 'Daily'], ['monthly', 'Monthly'], ['quarterly', '3 months'], ['halfyearly', '6 months'], ['yearly', 'Yearly']];
+    const prices = Object.fromEntries(PLANS.map(([id]) => [id, price(id)]));
+    const planOn = Object.fromEntries(PLANS.map(([id]) => [id, h('input', { type: 'checkbox', checked: !(s.disabledPlans || []).includes(id), disabled: !isSuper(), 'aria-label': `Sell the ${id} plan` })]));
     return h('div', {},
       head('Settings'),
       !isSuper() && h('p', { class: 'muted' }, 'Only a super admin can change these.'),
@@ -379,10 +400,12 @@
         h('div', { class: 'row' }, h('label', {}, 'Youngest age allowed to sign up (5 to 17; under 18 needs a parent or guardian)', minAge)),
         h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value), minAge: Number(minAge.value), freeProfilePhotos: Number(freePhotos.value), premiumProfilePhotos: Number(premiumPhotos.value) } }, 'Limits saved') }, 'Save limits'))),
       legalCard(s),
-      h('div', { class: 'card' }, h('h3', {}, 'Premium prices'),
+      h('div', { class: 'card' }, h('h3', {}, 'Premium plans and prices'),
         h('p', { class: 'muted' }, 'Leave a field empty to use the default price. Changes apply to new purchases.'),
-        h('div', { class: 'row' }, h('label', {}, 'Daily', prices.daily), h('label', {}, 'Monthly', prices.monthly), h('label', {}, 'Yearly', prices.yearly)),
-        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ prices: Object.fromEntries(Object.entries(prices).map(([k, el]) => [k, el.value === '' ? null : Number(el.value)])) }, 'Prices saved') }, 'Save prices'))));
+        h('div', { class: 'row' }, ...PLANS.map(([id, label]) => h('label', {}, label, prices[id], h('span', { class: 'muted' }, h('label', {}, planOn[id], ' on sale')))))
+        ,
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ prices: Object.fromEntries(Object.entries(prices).map(([k, el]) => [k, el.value === '' ? null : Number(el.value)])), disabledPlans: PLANS.map(([id]) => id).filter((id) => !planOn[id].checked) }, 'Plans saved') }, 'Save plans')),
+        h('p', { class: 'muted' }, 'Payments are taken by Razorpay (see Overview for whether it is connected, and Payments for what was received).')));
   }
 
   // --- audit ---

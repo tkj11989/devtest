@@ -180,6 +180,7 @@ class Store {
         chatLockSet: !!u.chatLock,
         devices: (u.devices || []).map((d) => ({ id: d.id, name: d.name, publicKey: d.publicKey, createdAt: d.createdAt || null })),
         birthDate: u.birthDate || null,
+        payments: (u.payments || []).map((p) => ({ id: p.id, plan: p.plan, amount: p.amount, currency: p.currency, at: p.at, periodEnd: p.periodEnd, refunded: p.refundedPaise ? p.refundedPaise / 100 : 0 })),
         profilePhotos: { privacy: this.photoPrivacy(username), photos: (u.photos || []).map((p) => ({ id: p.id, createdAt: p.ts, hidden: !!p.hidden, mime: this.data.media[p.mediaId]?.mime || null, data: (this.getMedia(p.mediaId, username)?.buffer || Buffer.alloc(0)).toString('base64') })) },
         parentOrGuardian: u.guardian ? { name: u.guardian.name || null, relationship: u.guardian.relationship || null, mobile: u.guardian.phone || null, email: u.guardian.email || null, agreedAt: u.guardian.consentedAt || null, controls: u.guardian.releasedAt ? null : this.guardianControls(username), endedAt: u.guardian.releasedAt || null } : null,
         pushNotifications: { preferences: this.pushPrefs(username), devices: (u.pushSubs || []).map((x) => ({ id: x.id, createdAt: x.createdAt, device: x.ua || null })) },
@@ -333,10 +334,86 @@ class Store {
       ...(u.consent ? { consent: u.consent } : {}),
       ...(u.subscription ? { subscription: u.subscription } : {}),
       ...(u.verifiedAt ? { verifiedAt: u.verifiedAt } : {}),
+      ...(u.payments?.length ? { payments: u.payments } : {}), // the record of payments is kept for accounting
       ...(u.guardian?.consentedAt ? { guardianConsent: { at: u.guardian.consentedAt, version: u.guardian.consentVersion || null } } : {}),
     };
     this._contactIdx = null;
     this._save();
+  }
+
+  // ---------- payments (Premium orders and the record of payments received) ----------
+  //
+  // An order is saved when someone starts paying, so a payment that arrives after a restart (or after the person closed the
+  // app) is still matched to them. A payment received is written to the person's ledger once, whatever number of times the
+  // payment service reports it. The ledger is also kept, without personal details, after an account is deleted (accounting).
+
+  static ORDER_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+  static ORDER_MAX = 20;
+
+  addOrder(username, reference, order) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const now = Date.now();
+    const orders = Object.fromEntries(Object.entries(u.orders || {}).filter(([, o]) => now - o.createdAt < Store.ORDER_KEEP_MS));
+    orders[reference] = { ...order, createdAt: now };
+    const keep = Object.entries(orders).sort((a, b) => b[1].createdAt - a[1].createdAt).slice(0, Store.ORDER_MAX);
+    u.orders = Object.fromEntries(keep);
+    this._save();
+  }
+
+  orderOf(username, reference) {
+    return this.data.users[username]?.orders?.[reference] || null;
+  }
+
+  paymentsOf(username) {
+    return this.data.users[username]?.payments || this.data.archivedUsers[username]?.payments || [];
+  }
+
+  _paymentIndex() {
+    if (!this._payIdx) {
+      this._payIdx = new Map();
+      for (const u of [...Object.values(this.data.users), ...Object.values(this.data.archivedUsers)]) {
+        for (const p of u.payments || []) this._payIdx.set(p.id, u.username);
+      }
+    }
+    return this._payIdx;
+  }
+
+  /** Who a payment (by the payment service's id) was recorded for, or null. */
+  paymentOwner(paymentId) {
+    return this._paymentIndex().get(String(paymentId)) || null;
+  }
+
+  /** Write a payment received to the person's ledger (once per payment id) and mark its order paid. */
+  recordPayment(username, entry, reference) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    if (this.paymentOwner(entry.id)) return false;
+    u.payments = [...(u.payments || []), entry];
+    this._paymentIndex().set(entry.id, username);
+    if (reference && u.orders?.[reference]) u.orders[reference].paidAt = entry.at;
+    this._save();
+    return true;
+  }
+
+  /** The payment service refunded (part of) a payment. Returns the ledger entry, or null when unknown. */
+  recordRefund(paymentId, refundPaise) {
+    const username = this.paymentOwner(paymentId);
+    const u = username && this.data.users[username];
+    const entry = u && (u.payments || []).find((p) => p.id === paymentId);
+    if (!entry) return null;
+    entry.refundedPaise = Math.max(entry.refundedPaise || 0, refundPaise);
+    entry.refundedAt = Date.now();
+    this._save();
+    return { username, entry };
+  }
+
+  /** Every payment received, newest first, for the dashboard (people who deleted their account appear without a name). */
+  allPayments(limit = 500) {
+    const out = [];
+    for (const u of Object.values(this.data.users)) for (const p of u.payments || []) out.push({ ...p, username: u.username });
+    for (const u of Object.values(this.data.archivedUsers)) for (const p of u.payments || []) out.push({ ...p, username: u.username, deleted: true });
+    return out.sort((a, b) => b.at - a.at).slice(0, limit);
   }
 
   // ---------- profile photos ----------

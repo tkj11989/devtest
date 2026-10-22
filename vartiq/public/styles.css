@@ -1398,6 +1398,9 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .consent-toggle span { flex: 1; min-width: 0; font-size: 14px; }
 .consent-links a, .legal-links a, .card-lite a, .gate-card a { color: var(--primary-text); }
 
+#modal-text { white-space: pre-line; }
+#btn-payments.hidden { display: none; }
+
 /* ---------- profile photos ---------- */
 .avatar { background-size: cover; background-position: center; }
 .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; align-items: start; }

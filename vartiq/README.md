@@ -257,11 +257,33 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 
 Past a free limit, locking or hiding shows *"Premium required"* with the plans (API: `402 premium_required`). Everything else is the same on both. Profile → **Premium** shows the plan, how much of the free allowance you use, and **Upgrade / Extend**.
 
-**Plans: Daily, Monthly (a calendar month) and Yearly**, paid in advance. They do not renew by themselves; buying again while Premium **extends** it from the current end. Default prices (INR): 9 / 99 / 999; set your own with `PLAN_PRICES='{"daily":19,"monthly":149,"yearly":1499}'` and `PLAN_CURRENCY`. Only the plan and its dates are stored on the account: no card or bank details are ever handled by VartiQ.
+**Plans: Daily, Monthly, 3 months, 6 months and Yearly** (calendar months), paid in advance. They do not renew by themselves; buying again while Premium **extends** it from the current end. Default prices (INR): 9 / 99 / 279 / 529 / 999; longer plans show what they save compared with paying monthly. Administrators set prices and switch plans on or off in Admin → Settings → *Premium plans and prices* (at least one stays on); `PLAN_PRICES='{"daily":19,"monthly":149,"quarterly":399,"halfyearly":749,"yearly":1499}'` and `PLAN_CURRENCY` set the starting values. No card, UPI or bank details are ever handled by VartiQ.
+
+### Payments with Razorpay ("payment received")
+
+Set three variables from your Razorpay account and VartiQ takes payments with **Razorpay Payment Links** (a payment page hosted by Razorpay: UPI, cards, netbanking, wallets); no relay is needed:
+
+```
+RAZORPAY_KEY_ID=rzp_live_…            # Dashboard → Account & Settings → API keys (rzp_test_… for test mode)
+RAZORPAY_KEY_SECRET=…
+RAZORPAY_WEBHOOK_SECRET=…              # a secret you choose when you add the webhook below
+PUBLIC_URL=https://vartiq.prayuktech.com
+```
+
+1. In the Razorpay Dashboard add a **webhook**: URL `https://vartiq.prayuktech.com/webhooks/razorpay`, the secret above, and events **`payment_link.paid`** and **`refund.processed`** (optionally `payment.failed`, which is ignored).
+2. A purchase creates an order (saved with the person's account, kept 7 days) and a payment link whose `reference_id` is the order id (it starts with the username). The person pays on Razorpay's page and returns to `/premium/return`.
+3. **Premium switches on only when Razorpay says the payment was received**, by any of: the signed webhook (works even if the app was closed), the signed return address (we also ask Razorpay's API before trusting it), or the *I have paid* button (the server asks Razorpay). The app shows **"Payment received"** at once (Socket.IO `payment:received`; the waiting dialog closes by itself) and the person's other devices update.
+4. **Every payment counts once**, however many of those arrive (it is recorded by Razorpay's payment id), and the amount and currency must match the order exactly (otherwise nothing is switched on and the mismatch is logged). A signature that does not verify is refused (`400`).
+5. **Refunds**: a *full* refund processed in Razorpay takes back exactly the period that payment bought (never below today; the app is told); a partial refund is recorded and keeps Premium.
+6. **Receipts and records**: Profile → Premium → *Payments* lists the person's payments (date, plan, amount, Razorpay payment id). Admin → **Payments** lists everything received with totals (last 30 days, all time; refunds deducted). The payment record (amount, date, plan, payment id) is kept for accounting even after an account is deleted, without name or contact details, and is included in *Download my data*.
+7. Test first with `rzp_test_…` keys (Razorpay's test mode takes test UPI and cards). Overview shows *razorpay (test mode)*. Live mode needs your Razorpay account activated (KYC) and Payment Links enabled.
+
+Without the three variables the older generic relay (below) is used, or subscriptions are unavailable. Prices are taken as GST-inclusive; add invoicing separately if you need GST invoices.
+
 
 **When Premium ends**, the ★ goes away and no *more* chats can be locked or hidden beyond the free limits. Chats that are already locked or hidden **stay protected** (they are never silently exposed); removing locks or unhiding is always allowed, and renewing Premium restores adding more.
 
-**Payments** need a provider behind a small relay (Razorpay, Stripe, PayU, Cashfree…). Set `PAYMENT_WEBHOOK_URL` (and `PAYMENT_WEBHOOK_TOKEN`) and VartiQ POSTs JSON to it:
+**Other providers** (Stripe, PayU, Cashfree…) can be used through a small relay when Razorpay is not configured. Set `PAYMENT_WEBHOOK_URL` (and `PAYMENT_WEBHOOK_TOKEN`) and VartiQ POSTs JSON to it:
 
 ```
 { "action": "create", "reference": "ord_…", "plan": "monthly", "amount": 99, "currency": "INR", "user": "alice" }  ->  { "paymentUrl": "https://…" }
@@ -270,7 +292,7 @@ Past a free limit, locking or hiding shows *"Premium required"* with the plans (
 
 The person pays on the provider's page; then the **server** asks the provider whether the order was paid before switching Premium on (nothing the browser says is trusted, and each order works once). Without `PAYMENT_WEBHOOK_URL`, subscriptions are **unavailable**. For development, `PAYMENTS_SANDBOX=1` marks every order paid: **never use it in production, it gives Premium away.**
 
-API: `GET /me/subscription`, `POST /me/subscription/checkout`, `POST /me/subscription/confirm`; `user.premium` appears wherever users are returned. Socket: `subscription:status`, `subscription:checkout`, `subscription:confirm`; server → client `subscription:update`.
+API: `GET /me/subscription`, `POST /me/subscription/checkout`, `POST /me/subscription/confirm`, `GET /me/payments` (receipts); `POST /webhooks/razorpay` (Razorpay only); server → client `payment:received`, `payment:refunded`; `user.premium` appears wherever users are returned. Socket: `subscription:status`, `subscription:checkout`, `subscription:confirm`; server → client `subscription:update`.
 
 ## Premium personalisation and call recording
 
