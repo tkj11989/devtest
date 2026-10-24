@@ -1,7 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Platform } from 'react-native';
-import { setAuthToken, setUnauthorizedHandler } from './api';
+import { api, setAuthToken, setUnauthorizedHandler, type User } from './api';
 
 const KEY = 'sports-space.session';
 
@@ -12,12 +12,14 @@ const storage = {
   clear: () => (Platform.OS === 'web' ? Promise.resolve(globalThis.localStorage?.removeItem(KEY)) : SecureStore.deleteItemAsync(KEY)),
 };
 
-type Session = { token: string; phone: string };
+type Session = { token: string; user: User };
 type AuthState = {
   session: Session | null;
+  user: User | null;
   loading: boolean;
   signIn: (s: Session) => Promise<void>;
   signOut: () => Promise<void>;
+  setUser: (u: User) => void;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -38,6 +40,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await storage.set(JSON.stringify(s));
   }, []);
 
+  const setUser = useCallback((user: User) => {
+    setSession((s) => {
+      if (!s) return s;
+      const next = { ...s, user };
+      storage.set(JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     setUnauthorizedHandler(signOut);
     storage
@@ -45,14 +56,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((raw) => {
         if (!raw) return;
         const s = JSON.parse(raw) as Session;
+        if (!s.user) return; // session saved by an older app version
         setAuthToken(s.token);
         setSession(s);
+        // Refresh profile in the background (name, favorites, owner flag).
+        api<User>('/me').then(setUser, () => {});
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [signOut]);
+  }, [signOut, setUser]);
 
-  const value = useMemo(() => ({ session, loading, signIn, signOut }), [session, loading, signIn, signOut]);
+  const value = useMemo(
+    () => ({ session, user: session?.user ?? null, loading, signIn, signOut, setUser }),
+    [session, loading, signIn, signOut, setUser],
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

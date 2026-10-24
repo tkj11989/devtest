@@ -2,16 +2,32 @@
 
 A mobile app for booking sports spaces (cricket turfs/nets, football, badminton, tennis, basketball…) by the hour.
 
-| Step | Screen | What happens |
+**Players**
+
+| # | Screen | What it does |
 |---|---|---|
-| 1 | **Login** | Enter a 10-digit mobile number → 6-digit **OTP by SMS** → verified, session stored securely on device |
-| 2 | **Sport selection** | Grid of sports with venue counts |
-| 3 | **Space selection** | Venues for that sport with location, hours and hourly price |
-| 4 | **Date selection** | Next 14 days in a horizontal date strip |
-| 5 | **Slot booking** | Hourly slots: available / booked / past; live re-check on focus |
-| 6 | **Payment method** | **Pay Online** (UPI / Card / Net Banking, slot held for 10 min) or **Pay at Venue** (offline, confirmed instantly) |
-| 7 | **Intimation** | Booking-confirmation **SMS** to the user + in-app confirmation screen with Booking ID |
-| — | **My Bookings** | History with status, payment status and cancellation (cancellation SMS too) |
+| — | **Login** | 10-digit mobile number → 6-digit **OTP by SMS** → name (first login only). Session stored securely on device |
+| 1 | **Home** | City picker, notifications, search, promo banners, **sport selection**, Near Me / Turf / Stadium / Indoor shortcuts, Popular Grounds |
+| 2 | **Ground Listing** | Search by name or area, filter chips (Near Me, Turf, Stadium, Indoor, Floodlight), rating, price per hour, favourites |
+| 3 | **Ground Details** | Photo carousel, rating & reviews, distance, amenities, Overview / Photos / Reviews tabs, Book Now |
+| 4 | **Select Date & Slot** | Month calendar (today + 30 days) and a grid of hourly slots; booked slots greyed out |
+| 5 | **Booking Summary** | Date, time, price, **Apply Coupon** (`FIRST100`, `PLAY10`), booking amount + ₹50 platform fee = total |
+| 6 | **Payment** | **Online**: UPI, Credit/Debit Card, Net Banking, Wallet (slot held 10 min). **Offline**: Pay at Venue (confirmed instantly) |
+| 7 | **Booking Confirmation** | Booking ID, date, time, amount, Paid / Pay at Venue badge, **SMS intimation** notice, View Booking, Share |
+| 8 | **My Bookings** | Upcoming / Past / Cancelled tabs |
+| 9 | **Ticket** | Booking details with a **QR code** to show at the venue; share; cancel (refund for online payments) |
+| 10 | **Profile** | Name & phone, My Bookings, My Payments, My Favorites, Notifications, Help & Support, Logout |
+
+**Stadium owners** (any number set as a ground's owner; the demo data uses `9000000001`, or set `OWNER_PHONE`)
+
+| # | Screen | What it does |
+|---|---|---|
+| 11 | **Stadium Dashboard** | Total bookings, revenue, upcoming, completed; today's bookings; tap a Pending (pay-at-venue) booking to mark cash collected |
+| 12 | **Manage Slots** | Pick a ground and date; switch slots on/off for that date; add slots, edit prices, delete slots |
+
+Every booking confirmation or cancellation is sent by **SMS** and saved as an in-app **notification**.
+
+Venue photos are drawn as floodlit-ground illustrations for each sport (`mobile/src/components/GroundArt.tsx`) until venues upload real photos.
 
 ```
 backend/   Node.js + Express REST API (OTP, catalog, slots, bookings, payments, SMS)
@@ -56,28 +72,38 @@ Copy `backend/.env.example` to set these as environment variables.
 - **Data:** the API uses an in-memory store, optionally mirrored to a JSON file (`DB_FILE`).
   Replace `backend/src/store.js` with a real database (PostgreSQL, MongoDB…) for production,
   and enforce one active booking per space/date/hour with a unique constraint.
-- Venues and sports are seeded in `backend/src/seed.js`.
+- Cities, sports, grounds, reviews and coupons are seeded in `backend/src/seed.js`. The platform fee is `PLATFORM_FEE` (default ₹50).
 
 ## API
 
-All `/bookings` and `/payments` routes need `Authorization: Bearer <token>`.
+All `/me`, `/notifications`, `/bookings`, `/payments` and `/owner` routes need `Authorization: Bearer <token>`.
 
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
 | POST | `/auth/send-otp` | `{ phone }` | 30 s resend cooldown, OTP valid for 5 min |
 | POST | `/auth/verify-otp` | `{ phone, otp }` | Returns `{ token, user }`; max 5 attempts |
-| GET | `/sports` | | |
-| GET | `/sports/:sportId/spaces` | | |
-| GET | `/spaces/:spaceId/slots` | `?date=YYYY-MM-DD` | Today up to 30 days ahead |
-| POST | `/bookings` | `{ spaceId, date, startHour, paymentMethod: "OFFLINE" \| "ONLINE" }` | Offline → confirmed + SMS. Online → slot held, returns `order` |
+| GET/PATCH | `/me` | `{ name }` | Profile; `isOwner` flag |
+| PUT | `/me/favorites/:groundId` | `{ favorite }` | |
+| GET | `/notifications`, POST `/notifications/read` | | In-app copies of booking SMS |
+| GET | `/cities`, `/sports?city=`, `/coupons` | | |
+| GET | `/grounds` | `?city&sport&type&floodlights=1&favorites=1&q&lat&lng&sort=distance\|price` | Sorted by rating by default |
+| GET | `/grounds/:id` | `?lat&lng` | Details + reviews |
+| GET | `/grounds/:id/slots` | `?date=YYYY-MM-DD` | Today up to 30 days ahead |
+| POST | `/bookings/quote` | `{ groundId, date, startHour, couponCode? }` | Amount, platform fee, discount, total |
+| POST | `/bookings` | `{ groundId, date, startHour, couponCode?, paymentMethod: "OFFLINE" \| "ONLINE", paymentChannel?: "UPI" \| "CARD" \| "NETBANKING" \| "WALLET" }` | Offline → confirmed + SMS. Online → slot held, returns `order` |
 | POST | `/bookings/:id/pay` | `{ paymentId, signature }` | Verifies the signature, confirms the booking, sends SMS |
 | POST | `/bookings/:id/cancel` | | Frees the slot and sends an SMS |
 | GET | `/bookings`, `/bookings/:id` | | The user's own bookings |
 | POST | `/payments/mock-checkout` | `{ orderId, outcome? }` | Test gateway (mock provider only) |
+| GET | `/owner/grounds`, `/owner/dashboard?groundId=` | | Owner only |
+| POST | `/owner/bookings/:id/collect` | | Mark a pay-at-venue booking paid |
+| GET/POST | `/owner/grounds/:id/slots` | `?date=` / `{ startHour, price }` | List with on/off state / add slot |
+| PATCH/DELETE | `/owner/grounds/:id/slots/:hour` | `{ price }` | Edit price / delete slot |
+| PUT | `/owner/grounds/:id/slots/:hour/availability` | `{ date, enabled }` | Switch a slot off/on for one date |
 
 ## Tests
 
 ```bash
-cd backend && npm test        # API tests: OTP, slots, offline/online booking, holds, cancel, auth
+cd backend && npm test        # API tests: OTP, catalog filters, favorites, coupons, booking, holds, cancel, owner tools
 cd mobile && npm run typecheck
 ```

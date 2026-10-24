@@ -1,37 +1,59 @@
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Redirect, router } from 'expo-router';
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, Card, ErrorBanner, Row } from '../components/ui';
-import { api, ApiError, type Booking, type Order, type PaymentMethod } from '../lib/api';
+import { api, ApiError, type Booking, type Order, type PaymentChannel } from '../lib/api';
 import { useBookingDraft } from '../lib/booking';
-import { prettyDate, rupees } from '../lib/format';
-import { colors, radius } from '../lib/theme';
+import { errorMessage, rupees } from '../lib/format';
+import { colors } from '../lib/theme';
 
-const METHODS: { id: PaymentMethod; title: string; subtitle: string; icon: string }[] = [
-  { id: 'ONLINE', title: 'Pay Online', subtitle: 'UPI, Card, Net Banking — instant confirmation', icon: '💳' },
-  { id: 'OFFLINE', title: 'Pay at Venue', subtitle: 'Cash / UPI at the counter before you play', icon: '🏟️' },
+type Mci = ComponentProps<typeof MaterialCommunityIcons>['name'];
+const ONLINE: { id: PaymentChannel; label: string; icon: Mci; color: string }[] = [
+  { id: 'UPI', label: 'UPI (Google Pay, PhonePe, etc.)', icon: 'contactless-payment-circle', color: '#5F259F' },
+  { id: 'CARD', label: 'Credit / Debit Card', icon: 'credit-card-outline', color: colors.text },
+  { id: 'NETBANKING', label: 'Net Banking', icon: 'bank-outline', color: colors.text },
+  { id: 'WALLET', label: 'Wallet (Paytm, Amazon Pay, etc.)', icon: 'wallet-outline', color: colors.text },
 ];
 
 export default function Payment() {
-  const { draft } = useBookingDraft();
-  const [method, setMethod] = useState<PaymentMethod>('ONLINE');
+  const { draft, update } = useBookingDraft();
+  const insets = useSafeAreaInsets();
+  const [channel, setChannel] = useState<PaymentChannel>(draft.channel ?? 'UPI');
+  const [details, setDetails] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { sport, space, date, slot } = draft;
+  const { ground, date, slot, quote } = draft;
 
-  if (!sport || !space || !date || !slot) return <Redirect href="/" />;
+  if (!ground || !date || !slot || !quote) return <Redirect href="/" />;
+  const offline = channel === 'VENUE';
 
-  async function confirm() {
+  async function pay() {
     setLoading(true);
     setError(null);
+    update({ channel });
     try {
       const res = await api<{ booking: Booking; order?: Order }>('/bookings', {
-        body: { spaceId: space!.id, date, startHour: slot!.startHour, paymentMethod: method },
+        body: {
+          groundId: ground!.id,
+          date,
+          startHour: slot!.startHour,
+          couponCode: quote!.couponCode ?? undefined,
+          paymentMethod: offline ? 'OFFLINE' : 'ONLINE',
+          paymentChannel: offline ? undefined : channel,
+        },
       });
       if (res.order) {
         router.push({
           pathname: '/checkout',
-          params: { bookingId: res.booking.id, orderId: res.order.orderId, amount: res.order.amount, holdExpiresAt: res.booking.holdExpiresAt ?? '' },
+          params: {
+            bookingId: res.booking.id,
+            orderId: res.order.orderId,
+            amount: res.order.amount,
+            channel,
+            holdExpiresAt: res.booking.holdExpiresAt ?? '',
+          },
         });
       } else {
         router.dismissAll();
@@ -39,10 +61,9 @@ export default function Payment() {
       }
     } catch (e) {
       if (e instanceof ApiError && e.code === 'SLOT_UNAVAILABLE') {
-        Alert.alert('Slot just got booked', e.message, [{ text: 'Pick another slot', onPress: () => router.back() }]);
-      } else {
-        setError(e instanceof Error ? e.message : String(e));
+        Alert.alert('Slot just got booked', e.message, [{ text: 'Pick another slot', onPress: () => router.dismissTo('/select-slot') }]);
       }
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -52,74 +73,91 @@ export default function Payment() {
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
         <Card>
-          <Text style={styles.cardTitle}>Booking summary</Text>
-          <Row label="Sport" value={`${sport.icon} ${sport.name}`} />
-          <Row label="Venue" value={space.name} />
-          <Row label="Location" value={space.location} />
-          <Row label="Date" value={prettyDate(date)} />
-          <Row label="Slot" value={slot.label} />
-          <View style={styles.divider} />
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.total}>{rupees(slot.price)}</Text>
+          <Text style={styles.muted}>Amount to Pay</Text>
+          <View style={styles.amountRow}>
+            <Text style={styles.amount}>{rupees(quote.total)}</Text>
+            <Pressable style={styles.details} onPress={() => setDetails((d) => !d)} hitSlop={8}>
+              <Text style={styles.detailsText}>View Details</Text>
+              <Ionicons name={details ? 'chevron-up' : 'chevron-down'} size={16} color={colors.primary} />
+            </Pressable>
           </View>
+          {details && (
+            <View style={styles.breakdown}>
+              <Row label="Booking Amount" value={rupees(quote.amount)} />
+              <Row label="Platform Fee" value={rupees(quote.platformFee)} />
+              {quote.discount > 0 && <Row label={`Coupon (${quote.couponCode})`} value={`– ${rupees(quote.discount)}`} valueStyle={{ color: colors.primary }} />}
+            </View>
+          )}
         </Card>
 
-        <Text style={styles.section}>Payment method</Text>
-        {METHODS.map((m) => {
-          const active = m.id === method;
-          return (
-            <Pressable
-              key={m.id}
-              accessibilityRole="radio"
-              accessibilityState={{ checked: active }}
-              onPress={() => setMethod(m.id)}
-              style={[styles.method, active && styles.methodActive]}
-            >
-              <Text style={{ fontSize: 26 }}>{m.icon}</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.methodTitle}>{m.title}</Text>
-                <Text style={styles.methodSub}>{m.subtitle}</Text>
-              </View>
-              <View style={[styles.radio, active && styles.radioActive]}>{active && <View style={styles.radioDot} />}</View>
-            </Pressable>
-          );
-        })}
-        {method === 'OFFLINE' && (
-          <Text style={styles.note}>Your slot is confirmed right away. Please pay {rupees(slot.price)} at the venue before your game.</Text>
+        <Text style={styles.section}>Select Payment Method</Text>
+        <Card style={{ paddingVertical: 4 }}>
+          {ONLINE.map((m, i) => (
+            <Method key={m.id} icon={m.icon} iconColor={m.color} label={m.label} active={channel === m.id} onPress={() => setChannel(m.id)} last={i === ONLINE.length - 1} />
+          ))}
+        </Card>
+
+        <Text style={styles.section}>Pay Offline</Text>
+        <Card style={{ paddingVertical: 4 }}>
+          <Method
+            icon="cash-multiple"
+            iconColor={colors.primary}
+            label="Pay at Venue"
+            sub="Pay by cash or UPI at the ground before you play"
+            active={offline}
+            onPress={() => setChannel('VENUE')}
+            last
+          />
+        </Card>
+        {offline && (
+          <Text style={styles.note}>Your slot is confirmed right away. Please pay {rupees(quote.total)} at the venue counter.</Text>
         )}
         <ErrorBanner message={error} />
       </ScrollView>
-      <View style={styles.footer}>
-        <Button title={method === 'ONLINE' ? `Pay ${rupees(slot.price)}` : 'Confirm Booking'} onPress={confirm} loading={loading} />
+
+      <View style={[styles.footer, { paddingBottom: 12 + insets.bottom }]}>
+        <Button title={offline ? 'Confirm Booking' : `Pay ${rupees(quote.total)}`} onPress={pay} loading={loading} />
+        <View style={styles.secure}>
+          <Ionicons name="shield-checkmark" size={15} color={colors.primary} />
+          <Text style={styles.muted}>100% Secure Payment</Text>
+        </View>
       </View>
     </View>
   );
 }
 
+function Method({ icon, iconColor, label, sub, active, onPress, last }: { icon: Mci; iconColor: string; label: string; sub?: string; active: boolean; onPress: () => void; last?: boolean }) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ checked: active }}
+      onPress={onPress}
+      style={[styles.method, !last && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
+    >
+      <MaterialCommunityIcons name={icon} size={26} color={iconColor} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.methodLabel}>{label}</Text>
+        {sub && <Text style={[styles.muted, { marginTop: 2 }]}>{sub}</Text>}
+      </View>
+      <View style={[styles.radio, active && styles.radioActive]}>{active && <View style={styles.radioDot} />}</View>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  cardTitle: { fontSize: 16, fontWeight: '800', color: colors.text, marginBottom: 8 },
-  divider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  totalLabel: { fontSize: 16, fontWeight: '700', color: colors.text },
-  total: { fontSize: 22, fontWeight: '800', color: colors.primary },
-  section: { fontSize: 16, fontWeight: '700', color: colors.text },
-  method: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 16,
-    borderRadius: radius,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  methodActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  methodTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
-  methodSub: { color: colors.muted, fontSize: 13, marginTop: 2 },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  muted: { color: colors.muted, fontSize: 13 },
+  amountRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  amount: { fontSize: 30, fontWeight: '800', color: colors.text },
+  details: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  detailsText: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+  breakdown: { marginTop: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6 },
+  section: { fontSize: 16, fontWeight: '800', color: colors.text, marginBottom: -4 },
+  method: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
+  methodLabel: { fontSize: 14, fontWeight: '600', color: colors.text },
+  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#C6CEC9', alignItems: 'center', justifyContent: 'center' },
   radioActive: { borderColor: colors.primary },
   radioDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: colors.primary },
   note: { color: colors.warning, backgroundColor: colors.warningSoft, padding: 12, borderRadius: 10 },
-  footer: { padding: 16, backgroundColor: colors.card, borderTopWidth: 1, borderColor: colors.border },
+  footer: { paddingHorizontal: 16, paddingTop: 12, backgroundColor: '#fff', borderTopWidth: 1, borderColor: colors.border, gap: 10 },
+  secure: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
 });

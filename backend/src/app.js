@@ -17,8 +17,10 @@ function createApp(store = createStore(config.dbFile)) {
     }),
   );
   app.use('/auth', require('./routes/auth')(store));
-  app.use('/', require('./routes/catalog')(store));
-  app.use('/bookings', require('./routes/bookings')(store));
+  app.use('/', require('./routes/grounds').groundRoutes(store));
+  app.use('/', require('./routes/me').meRoutes(store));
+  app.use('/bookings', require('./routes/bookings').bookingRoutes(store));
+  app.use('/owner', require('./routes/owner').ownerRoutes(store));
   app.use('/payments', require('./routes/payments')(store));
 
   app.use((_req, _res, next) => next(new ApiError(404, 'NOT_FOUND', 'Not found')));

@@ -55,34 +55,70 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   return data as T;
 }
 
-export type Sport = { id: string; name: string; icon: string; spaceCount: number };
-export type Space = {
+export function qs(params: Record<string, string | number | undefined | null | false>) {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== false)
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
+export type User = { phone: string; name: string; favorites: string[]; isOwner: boolean };
+export type City = { id: string; name: string; state: string; lat: number; lng: number };
+export type Sport = { id: string; name: string; icon: string; groundCount: number };
+export type GroundType = 'Turf' | 'Stadium' | 'Indoor';
+export type Ground = {
   id: string;
   sportId: string;
+  type: GroundType;
   name: string;
-  location: string;
-  pricePerSlot: number;
-  openHour: number;
-  closeHour: number;
+  city: string;
+  cityName: string;
+  state: string;
+  area: string;
+  lat: number;
+  lng: number;
+  rating: number;
+  reviewCount: number;
+  floodlights: boolean;
+  amenities: string[];
+  about: string;
+  pricePerHour: number;
+  distanceKm: number | null;
+  isFavorite: boolean;
 };
-export type Slot = { startHour: number; label: string; price: number; status: 'AVAILABLE' | 'BOOKED' | 'PAST' };
+export type Review = { id: string; name: string; rating: number; comment: string; date: string };
+export type GroundDetails = Ground & { sport: Sport; reviews: Review[] };
+export type SlotStatus = 'AVAILABLE' | 'BOOKED' | 'PAST' | 'BLOCKED';
+export type Slot = { startHour: number; label: string; price: number; status: SlotStatus };
+export type Quote = { amount: number; platformFee: number; discount: number; couponCode: string | null; total: number };
+export type Coupon = { code: string; description: string };
 export type PaymentMethod = 'OFFLINE' | 'ONLINE';
-export type Booking = {
+export type PaymentChannel = 'UPI' | 'CARD' | 'NETBANKING' | 'WALLET' | 'VENUE';
+export type Booking = Quote & {
   id: string;
   code: string;
   phone: string;
+  customerName: string;
+  sportId: string;
   sportName: string;
-  spaceName: string;
-  location: string;
+  groundId: string;
+  groundName: string;
+  groundType: GroundType;
+  area: string;
+  cityName: string;
   date: string;
   startHour: number;
   slotLabel: string;
-  amount: number;
   paymentMethod: PaymentMethod;
-  paymentStatus: 'PENDING' | 'PAID' | 'PAY_AT_VENUE';
+  paymentChannel: PaymentChannel;
+  paymentStatus: 'PENDING' | 'PAID' | 'PAY_AT_VENUE' | 'REFUND_INITIATED';
   status: 'PENDING_PAYMENT' | 'CONFIRMED' | 'CANCELLED' | 'FAILED';
   smsStatus: 'PENDING' | 'SENT' | 'FAILED';
+  started?: boolean;
   orderId?: string;
   holdExpiresAt?: string;
+  createdAt: string;
+  paidAt?: string;
 };
 export type Order = { provider: 'mock' | 'razorpay'; orderId: string; amount: number; currency: string; keyId?: string };
+export type AppNotification = { id: string; bookingId?: string; title: string; message: string; read: boolean; createdAt: string };

@@ -4,7 +4,18 @@ const seed = require('./seed');
 // Tiny persistence layer: an in-memory object, optionally mirrored to a JSON
 // file. Swap for a real database in production.
 function createStore(file) {
-  let data = { sports: seed.sports, spaces: seed.spaces, users: [], bookings: [] };
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  let data = {
+    sports: seed.sports,
+    cities: seed.cities,
+    grounds: clone(seed.grounds), // owners edit slot templates
+    reviews: seed.reviews,
+    coupons: seed.coupons,
+    blockedSlots: [], // { groundId, date, startHour }
+    users: [],
+    bookings: [],
+    notifications: [],
+  };
   if (file && fs.existsSync(file)) {
     data = { ...data, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
   }

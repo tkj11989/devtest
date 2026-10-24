@@ -1,8 +1,15 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import type { Slot, Space, Sport } from './api';
+import type { Ground, PaymentChannel, Quote, Slot } from './api';
 
-// The selections made while walking through the booking flow.
-export type Draft = { sport?: Sport; space?: Space; date?: string; slot?: Slot };
+// Selections made while walking through the booking flow.
+export type Draft = {
+  ground?: Ground;
+  date?: string;
+  slot?: Slot;
+  couponCode?: string;
+  quote?: Quote;
+  channel?: PaymentChannel;
+};
 
 type DraftState = { draft: Draft; update: (patch: Partial<Draft>) => void; reset: () => void };
 

@@ -13,28 +13,31 @@ function isActive(booking, now = Date.now()) {
   return false;
 }
 
-function getSlots(store, space, date, now = Date.now()) {
-  const taken = new Set(
+const slotLabel = (h) => `${formatHour(h)} - ${formatHour(h + 1)}`;
+
+// Every slot in the ground's template for a date, with its status:
+// AVAILABLE | BOOKED | PAST | BLOCKED (switched off by the owner).
+function getSlots(store, ground, date, now = Date.now()) {
+  const bookings = new Map(
     store.data.bookings
-      .filter((b) => b.spaceId === space.id && b.date === date && isActive(b, now))
-      .map((b) => b.startHour),
+      .filter((b) => b.groundId === ground.id && b.date === date && isActive(b, now))
+      .map((b) => [b.startHour, b]),
+  );
+  const blocked = new Set(
+    store.data.blockedSlots.filter((s) => s.groundId === ground.id && s.date === date).map((s) => s.startHour),
   );
   const isToday = date === todayLocal(now);
   const currentHour = localNow(now).getUTCHours();
 
-  const slots = [];
-  for (let h = space.openHour; h < space.closeHour; h++) {
-    let status = 'AVAILABLE';
-    if (taken.has(h)) status = 'BOOKED';
-    else if (isToday && h <= currentHour) status = 'PAST';
-    slots.push({
-      startHour: h,
-      label: `${formatHour(h)} - ${formatHour(h + 1)}`,
-      price: space.pricePerSlot,
-      status,
+  return [...ground.slots]
+    .sort((a, b) => a.startHour - b.startHour)
+    .map(({ startHour, price }) => {
+      let status = 'AVAILABLE';
+      if (bookings.has(startHour)) status = 'BOOKED';
+      else if (isToday && startHour <= currentHour) status = 'PAST';
+      else if (blocked.has(startHour)) status = 'BLOCKED';
+      return { startHour, label: slotLabel(startHour), price, status, booking: bookings.get(startHour) };
     });
-  }
-  return slots;
 }
 
-module.exports = { getSlots, isActive, MAX_ADVANCE_DAYS };
+module.exports = { getSlots, isActive, slotLabel, MAX_ADVANCE_DAYS };

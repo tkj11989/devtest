@@ -4,6 +4,7 @@ const otp = require('../services/otp');
 const { sendSms } = require('../services/sms');
 const { signToken } = require('../auth');
 const { ApiError } = require('../errors');
+const { publicUser } = require('./me');
 
 const PHONE_RE = /^[6-9]\d{9}$/; // Indian 10-digit mobile
 
@@ -47,11 +48,11 @@ module.exports = function authRoutes(store) {
 
     let user = store.data.users.find((u) => u.phone === phone);
     if (!user) {
-      user = { phone, createdAt: new Date().toISOString() };
+      user = { phone, name: '', favorites: [], createdAt: new Date().toISOString() };
       store.data.users.push(user);
       store.save();
     }
-    res.json({ token: signToken(phone), user });
+    res.json({ token: signToken(phone), user: publicUser(store, user) });
   });
 
   return router;

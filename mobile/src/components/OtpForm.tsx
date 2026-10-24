@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Button, ErrorBanner } from './ui';
-import { api, ApiError } from '../lib/api';
-import { useAuth } from '../lib/auth';
+import { api, ApiError, type User } from '../lib/api';
 import { maskPhone } from '../lib/format';
 import { colors } from '../lib/theme';
 
 const LENGTH = 6;
 
-type Props = { phone: string; resendIn: number; devOtp?: string; onChangeNumber: () => void };
+type Props = {
+  phone: string;
+  resendIn: number;
+  devOtp?: string;
+  onChangeNumber: () => void;
+  onVerified: (token: string, user: User) => Promise<void> | void;
+};
 
-export function OtpForm({ phone, resendIn, onChangeNumber, ...props }: Props) {
-  const { signIn } = useAuth();
+export function OtpForm({ phone, resendIn, onChangeNumber, onVerified, ...props }: Props) {
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const [code, setCode] = useState('');
   const [devOtp, setDevOtp] = useState(props.devOtp || '');
@@ -31,9 +35,8 @@ export function OtpForm({ phone, resendIn, onChangeNumber, ...props }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await api<{ token: string; user: { phone: string } }>('/auth/verify-otp', { body: { phone, otp: value } });
-      // Signing in flips the auth guard in _layout, which navigates to home.
-      await signIn({ token: res.token, phone: res.user.phone });
+      const res = await api<{ token: string; user: User }>('/auth/verify-otp', { body: { phone, otp: value } });
+      await onVerified(res.token, res.user);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setCode('');
@@ -110,8 +113,8 @@ export function OtpForm({ phone, resendIn, onChangeNumber, ...props }: Props) {
 }
 
 const styles = StyleSheet.create({
-  title: { fontSize: 22, fontWeight: '800', color: colors.text },
-  subtitle: { color: colors.muted, marginTop: 6, marginBottom: 28 },
+  title: { fontSize: 20, fontWeight: '800', color: colors.text },
+  subtitle: { color: colors.muted, marginTop: 6, marginBottom: 24 },
   boxes: { flexDirection: 'row', justifyContent: 'space-between' },
   box: {
     width: 48,

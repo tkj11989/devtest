@@ -14,6 +14,8 @@ const config = {
   // How long an unpaid online booking holds its slot before it is released.
   paymentHoldMs: Number(process.env.PAYMENT_HOLD_MS) || 10 * 60 * 1000,
 
+  platformFee: Number(process.env.PLATFORM_FEE ?? 50),
+
   timezoneOffsetMinutes: Number(process.env.TZ_OFFSET_MINUTES ?? 330), // IST default
 
   // console | twilio | msg91
