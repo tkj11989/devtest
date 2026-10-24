@@ -35,7 +35,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl = process.env.PUBLIC_URL, accountEraseDelayMs = 60 * 60 * 1000 }) {
+function createService({ store, io, isOnline, linking, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl = process.env.PUBLIC_URL, accountEraseDelayMs = 60 * 60 * 1000 }) {
   const userRoom = (u) => `user:${u}`;
 
   /** A feature that sends data to an outside service only works once the person has agreed to that (code `consent_<id>`). */
@@ -390,6 +390,11 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
   })();
 
   /** Children who turned 18 are released from their guardian's controls (run regularly). Tells their apps. */
+  const rotatePhotos = () => {
+    const changed = store.rotatePhotos();
+    for (const u of changed) photosChanged(u);
+    return changed;
+  };
   const releaseGuardians = () => {
     const released = store.releaseGuardians();
     for (const u of released) guardianChanged(u);
@@ -411,6 +416,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       appliedPrivacy: store.effectivePhotoPrivacy(me),
       minor: store.isMinor(me),
       reasons: photoRules.REASONS,
+      rotation: store.photoRotation(me),
     };
   };
   const photosChanged = (me) => {
@@ -1184,6 +1190,49 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
       return photosView(me);
     },
 
+    /** Premium: change my picture to the next photo every 7 days (needs a full set of photos). */
+    setPhotoRotation(me, { on } = {}) {
+      if (typeof on !== 'boolean') throw new ApiError(400, 'invalid_request', '"on" must be true or false');
+      if (on) {
+        const lim = store.getSettings().limits;
+        if (!store.isPremium(me)) throw new ApiError(402, 'premium_required', 'Changing your picture automatically is a Premium feature.');
+        if (store.photosOf(me).length < lim.premiumProfilePhotos) {
+          throw new ApiError(409, 'not_enough_photos', `Add ${lim.premiumProfilePhotos} photos to change your picture automatically every 7 days.`);
+        }
+      }
+      store.setPhotoRotation(me, on);
+      photosChanged(me);
+      return photosView(me);
+    },
+
+    // ----- linking browsers -----
+
+    /** On a primary phone: a 6-digit passcode (2 minutes) that lets one browser log in to this account. */
+    linkCodeCreate(me, _p, ctx = {}) {
+      if (!ctx.credential || !store.isPrimaryToken(ctx.credential)) {
+        throw new ApiError(403, 'primary_required', 'Passcodes are made on the phone you signed in on with the SMS code.');
+      }
+      try {
+        return linking.create(me);
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+    },
+
+    linkedDevices(me, _p, ctx = {}) {
+      return { devices: store.linkedDevices(me, ctx.credential || ''), primary: !!ctx.credential && store.isPrimaryToken(ctx.credential) };
+    },
+
+    unlinkDevice(me, { id } = {}, ctx = {}) {
+      if (!ctx.credential || !store.isPrimaryToken(ctx.credential)) {
+        // A linked browser may sign itself out, but cannot remove the others.
+        const own = store.linkedDevices(me, ctx.credential || '').find((d) => d.current);
+        if (!own || own.id !== String(id)) throw new ApiError(403, 'primary_required', 'Only your phone can sign out other browsers.');
+      }
+      if (!store.unlinkDevice(me, id)) throw new ApiError(404, 'not_found', 'No such browser');
+      return undefined;
+    },
+
     /** Who may see my photos: `everyone`, `contacts` (people I chat with) or `nobody`. */
     setPhotoPrivacy(me, { who }) {
       try {
@@ -1787,6 +1836,7 @@ function createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, pa
     expireSubscriptions,
     eraseDueAccounts,
     releaseGuardians,
+    rotatePhotos,
     refreshPhotos: photosChanged,
     /** Razorpay (or the relay) told us a payment arrived: Premium is on, tell every open app of the person. */
     paymentReceived({ user, entry }) {

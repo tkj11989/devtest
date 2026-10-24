@@ -88,7 +88,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     req.user = username;
     req.credential = token;
     // Chat lock: unlocks last for this credential (optionally narrowed with X-App-Session).
-    req.ctx = { lockKey: service.lockKeyFor(username, token, req.get('x-app-session')), origin: `${req.protocol}://${req.get('host')}` };
+    req.ctx = { credential: token, lockKey: service.lockKeyFor(username, token, req.get('x-app-session')), origin: `${req.protocol}://${req.get('host')}` };
     next();
   };
   const authed = [auth, limiter((req) => `u:${req.credential}`, limits.max)];
@@ -375,6 +375,10 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.post('/me/photos', ...authed, express.json({ limit: '1mb' }), run((req) => actions.uploadPhoto(req.user, { image: req.body?.image, thumb: req.body?.thumb }), 201));
   router.put('/me/photos/:id/main', ...authed, run((req) => actions.setMainPhoto(req.user, { id: p(req, 'id') })));
   router.delete('/me/photos/:id', ...authed, run((req) => actions.deletePhoto(req.user, { id: p(req, 'id') })));
+  router.post('/me/link-code', ...authed, run((req) => actions.linkCodeCreate(req.user, {}, req.ctx), 201));
+  router.get('/me/linked-devices', ...authed, run((req) => actions.linkedDevices(req.user, {}, req.ctx)));
+  router.delete('/me/linked-devices/:id', ...authed, run((req) => actions.unlinkDevice(req.user, { id: p(req, 'id') }, req.ctx)));
+  router.put('/me/photo-rotation', ...authed, json, run((req) => actions.setPhotoRotation(req.user, { on: req.body?.on })));
   router.put('/me/photo-privacy', ...authed, json, run((req) => actions.setPhotoPrivacy(req.user, { who: req.body?.who })));
   router.get('/users/:username/photos', ...authed, run((req) => actions.userPhotos(req.user, { username: p(req, 'username') })));
   router.post('/users/:username/photos/:id/report', ...authed, json, run((req) => actions.reportPhoto(req.user, { username: p(req, 'username'), id: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail }), 201));

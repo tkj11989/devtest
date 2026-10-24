@@ -444,6 +444,37 @@ class Store {
     return who;
   }
 
+  static ROTATE_MS = 7 * 24 * 3600 * 1000;
+
+  /** Does this person's picture change by itself every 7 days? Premium, and only while they keep a full set of photos. */
+  photoRotation(username) {
+    const u = this.data.users[username];
+    const full = (u?.photos || []).length >= this.getSettings().limits.premiumProfilePhotos;
+    return { on: !!u?.photoRotate, active: !!u?.photoRotate && full && this.isPremium(username), full, nextAt: u?.photoRotate && full ? (u.photoRotatedAt || u.photos[0]?.ts || 0) + Store.ROTATE_MS : null };
+  }
+
+  setPhotoRotation(username, on) {
+    const u = this.data.users[username];
+    u.photoRotate = !!on;
+    if (on) u.photoRotatedAt = Date.now(); // the first swap comes a week after switching on
+    this._save();
+  }
+
+  /** Swap the main picture for the next one, for everyone who is due. Returns the usernames changed. */
+  rotatePhotos(now = Date.now()) {
+    const changed = [];
+    for (const [name, u] of Object.entries(this.data.users)) {
+      if (!u.photoRotate || this.isClosed(name)) continue;
+      const r = this.photoRotation(name);
+      if (!r.active || now < r.nextAt) continue;
+      u.photos = [...u.photos.slice(1), u.photos[0]];
+      u.photoRotatedAt = now;
+      changed.push(name);
+    }
+    if (changed.length) this._save();
+    return changed;
+  }
+
   photosOf(username) {
     return this.data.users[username]?.photos || [];
   }
@@ -1299,12 +1330,12 @@ class Store {
     return this.createSession(username);
   }
 
-  createSession(username) {
+  createSession(username, { via = 'sms', name = '' } = {}) {
     if (this.isClosed(username)) throw Object.assign(new Error('This account is being deleted and can no longer be used. Its data is erased within 24 hours.'), { status: 403, code: 'account_deletion_pending' });
     const sus = this.data.users[username]?.suspended;
     if (sus) throw Object.assign(new Error(`This account is suspended${sus.reason ? `: ${sus.reason}` : ''}`), { status: 403, code: 'account_suspended' });
     const token = crypto.randomBytes(24).toString('hex');
-    this.data.sessions[Store._tokenKey(token)] = { u: username, at: Date.now() };
+    this.data.sessions[Store._tokenKey(token)] = { u: username, at: Date.now(), via, ...(name ? { name: String(name).slice(0, 60) } : {}) };
     this._save();
     return { token, user: this.publicUser(username) };
   }
@@ -1328,6 +1359,50 @@ class Store {
   }
 
   /** End every login session of one person. */
+  // ---------- primary phone and linked browsers ----------
+  //
+  // The device that signed up (or logged in) with the SMS code to the person's number is their *primary* phone. A browser or
+  // another device can only log in with a one-time passcode that a signed-in primary device generated (`via: 'link'`).
+
+  _liveSessions(username) {
+    const out = [];
+    for (const [key, s] of Object.entries(this.data.sessions)) {
+      if (s.u !== username) continue;
+      if (Date.now() - s.at > Store.SESSION_MS) continue;
+      out.push([key, s]);
+    }
+    return out;
+  }
+
+  /** Is a device signed in with the SMS code right now (a primary phone that can hand out passcodes)? */
+  hasPrimary(username) {
+    return this._liveSessions(username).some(([, s]) => s.via !== 'link');
+  }
+
+  /** Is this credential a primary (SMS-code) session? API keys are not. */
+  isPrimaryToken(token) {
+    const s = this.data.sessions[Store._tokenKey(token)];
+    return !!s && s.via !== 'link';
+  }
+
+  /** The browsers linked with a passcode, newest first. `current` marks the caller's own session. */
+  linkedDevices(username, token) {
+    const mine = Store._tokenKey(token);
+    return this._liveSessions(username)
+      .filter(([, s]) => s.via === 'link')
+      .map(([key, s]) => ({ id: key.slice(0, 12), name: s.name || 'Browser', at: s.at, current: key === mine }))
+      .sort((a, b) => b.at - a.at);
+  }
+
+  /** Sign a linked browser out. Returns false if there is none with that id. */
+  unlinkDevice(username, id) {
+    const hit = this._liveSessions(username).find(([key, s]) => s.via === 'link' && key.slice(0, 12) === String(id));
+    if (!hit) return false;
+    delete this.data.sessions[hit[0]];
+    this._save();
+    return true;
+  }
+
   dropSessionsOf(username) {
     for (const [key, s] of Object.entries(this.data.sessions)) if (s.u === username) delete this.data.sessions[key];
   }

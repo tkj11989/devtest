@@ -15,6 +15,7 @@ const { createWebhookDispatcher } = require('./webhooks');
 const { createApiRouter } = require('./api');
 const { createOtpService, createOtpSender } = require('./otp');
 const { createAuth } = require('./auth');
+const { createLinking } = require('./linking');
 const { createAdminRouter } = require('./admin');
 const { createKyc, createKycGateway } = require('./kyc');
 const { createTranslator, createTranslateGateway } = require('./translate');
@@ -64,7 +65,11 @@ const SOCKET_ACTIONS = {
   'messages:get': 'messages',
   'message:send': 'sendText',
   'voice:send': 'sendVoice',
+  'link:create': 'linkCodeCreate',
+  'link:list': 'linkedDevices',
+  'link:remove': 'unlinkDevice',
   'photos:get': 'photos',
+  'photo:rotate': 'setPhotoRotation',
   'photo:upload': 'uploadPhoto',
   'photo:main': 'setMainPhoto',
   'photo:delete': 'deletePhoto',
@@ -226,7 +231,8 @@ function createApp({
 
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
   const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
-  const auth = createAuth({ store, otp, publicUrl, minAge: () => store.getSettings().limits.minAge, assertSignupsOpen: () => service.assertFeature('registration') });
+  const linking = createLinking();
+  const auth = createAuth({ store, otp, linking, publicUrl, minAge: () => store.getSettings().limits.minAge, assertSignupsOpen: () => service.assertFeature('registration') });
   const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
   const payments = createPayments({
     store,
@@ -251,7 +257,7 @@ function createApp({
     vapid: { file: dataDir ? path.join(dataDir, 'vapid.json') : undefined },
     ...pushOptions,
   });
-  const service = createService({ store, io, isOnline, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl, accountEraseDelayMs });
+  const service = createService({ store, io, isOnline, linking, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl, accountEraseDelayMs });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
@@ -400,6 +406,8 @@ function createApp({
   const deletionTimer = setInterval(() => { service.eraseDueAccounts(); }, deletionSweepMs);
   // Children who turn 18 are released from their guardian's controls.
   const guardianTimer = setInterval(() => { service.releaseGuardians(); }, guardianSweepMs);
+  const rotateTimer = setInterval(() => { service.rotatePhotos(); }, guardianSweepMs);
+  rotateTimer.unref();
   guardianTimer.unref();
   subscriptionTimer.unref();
   deletionTimer.unref();
@@ -410,6 +418,7 @@ function createApp({
     clearInterval(subscriptionTimer);
     clearInterval(deletionTimer);
     clearInterval(guardianTimer);
+    clearInterval(rotateTimer);
     webhooks.stop();
     push.stop();
     otp.stop();
@@ -466,7 +475,7 @@ function createApp({
     });
 
     calls.attach(socket);
-    const ctx = { lockKey: socket.data.lockKey, origin: `${socket.handshake.secure ? 'https' : 'http'}://${socket.handshake.headers.host}` };
+    const ctx = { lockKey: socket.data.lockKey, credential: socket.handshake.auth.token, origin: `${socket.handshake.secure ? 'https' : 'http'}://${socket.handshake.headers.host}` };
     for (const [event, action] of Object.entries(SOCKET_ACTIONS)) {
       socket.on(event, handle((payload) => {
         service.assertAvailable();

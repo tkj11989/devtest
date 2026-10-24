@@ -9,14 +9,16 @@ const guardianRules = require('./guardian');
 /**
  * Sign-up and login with one-time codes.
  *
- * - Individuals: mobile number + SMS code.
+ * - Individuals: mobile number + SMS code (an email is optional; if given, it is verified with a code too).
+ * - A browser (`clientType: "web"`) can only log in with a passcode made on a signed-in primary phone, never with an SMS code
+ *   while such a phone is signed in.
  * - Businesses: mobile number + SMS code AND email + email code, plus a category.
  * - Login: a code sent to the registered mobile number (or a business's email).
  *
  * Flow: `requestCode` sends a code and returns a `requestId`; `register` / `login`
  * take that `requestId` with the code the person typed.
  */
-function createAuth({ store, otp, assertSignupsOpen = () => {}, minAge = () => guardianRules.DEFAULT_MIN_AGE, publicUrl = process.env.PUBLIC_URL }) {
+function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge = () => guardianRules.DEFAULT_MIN_AGE, publicUrl = process.env.PUBLIC_URL }) {
   /** `{ phone }` or `{ email }` -> `{ channel, to }` (normalised), or a 400. */
   function destination(body, { allowEmail = true } = {}) {
     const bad = (err) => new ApiError(400, err.code || 'invalid_request', err.message);
@@ -34,6 +36,13 @@ function createAuth({ store, otp, assertSignupsOpen = () => {}, minAge = () => g
   const owner = ({ channel, to }) => (channel === 'sms' ? store.findByPhone(to) : store.findByEmail(to));
   const what = (channel) => (channel === 'sms' ? 'mobile number' : 'email');
 
+  /** A browser may not log in with an SMS code while a primary phone is signed in: it needs a passcode from that phone. */
+  function needsPasscode(body, username) {
+    if (body.clientType === 'web' && store.hasPrimary(username)) {
+      throw new ApiError(403, 'passcode_required', 'To log in on a browser, open VartiQ on your phone (Profile, Link a browser), get a passcode and enter it here.');
+    }
+  }
+
   return {
     /** Send a sign-up or login code to `{ phone }` or `{ email }`. */
     async requestCode(body = {}) {
@@ -48,6 +57,7 @@ function createAuth({ store, otp, assertSignupsOpen = () => {}, minAge = () => g
       if (purpose === 'login' && !existing) {
         throw new ApiError(404, 'not_registered', `No account uses this ${what(dest.channel)}. Sign up first.`);
       }
+      if (purpose === 'login') needsPasscode(body, existing);
       return otp.request({ ...dest, purpose });
     },
 
@@ -93,10 +103,11 @@ function createAuth({ store, otp, assertSignupsOpen = () => {}, minAge = () => g
       const phone = destination({ phone: body.phone }, { allowEmail: false });
       if (guardian?.phone && guardian.phone === phone.to) throw new ApiError(400, 'guardian_same_person', "Your parent's or guardian's mobile number must be different from yours");
       let email = null;
-      if (type === 'business') {
-        if (!body.email) throw new ApiError(400, 'invalid_request', 'Email is required for a business account');
+      if (type === 'business' && !body.email) throw new ApiError(400, 'invalid_request', 'Email is required for a business account');
+      if (type === 'business' && !body.business?.category) throw new ApiError(400, 'invalid_request', 'Choose a business category');
+      if (body.email) {
+        // Optional for an individual, required for a business; either way it is proved with a code.
         email = destination({ email: body.email });
-        if (!body.business?.category) throw new ApiError(400, 'invalid_request', 'Choose a business category');
         if (guardian?.email && guardian.email === email.to) throw new ApiError(400, 'guardian_same_person', "Your parent's or guardian's email must be different from yours");
       }
       if (store.findByPhone(phone.to)) throw new ApiError(409, 'phone_taken', 'This mobile number is already registered. Log in instead.');
@@ -148,6 +159,20 @@ function createAuth({ store, otp, assertSignupsOpen = () => {}, minAge = () => g
         }
       }
       const dest = destination(body);
+      if (body.linkCode != null && body.linkCode !== '') {
+        // Browser login: the passcode made on the primary phone, with the account's number.
+        if (dest.channel !== 'sms') throw new ApiError(400, 'invalid_request', 'Send the mobile "phone" with the "linkCode"');
+        const who = owner(dest);
+        if (!who) throw new ApiError(404, 'not_registered', `No account uses this ${what(dest.channel)}.`);
+        try {
+          linking.consume(who, body.linkCode);
+        } catch (err) {
+          throw new ApiError(err.status || 401, err.code || 'invalid_passcode', err.message);
+        }
+        return store.createSession(who, { via: 'link', name: body.deviceName });
+      }
+      const known = owner(dest);
+      if (known) needsPasscode(body, known);
       if (!body.requestId) throw new ApiError(400, 'invalid_request', 'Send the "requestId" from /auth/otp and the "code"');
       otp.verify({ requestId: body.requestId, code: body.code, ...dest, purpose: 'login' });
       const username = owner(dest);

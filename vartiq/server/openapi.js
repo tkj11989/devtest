@@ -127,6 +127,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       appliedPrivacy: { type: 'string', enum: ['everyone', 'contacts', 'nobody'], description: 'what is really applied: under 18 never goes beyond `contacts`' },
       minor: { type: 'boolean' },
       reasons: arrayOf(obj({ id: { type: 'string' }, label: { type: 'string' } })),
+      rotation: obj({ on: { type: 'boolean' }, active: { type: 'boolean', description: 'on, Premium, and a full set of photos' }, full: { type: 'boolean' }, nextAt: { type: ['integer', 'null'], description: 'when the picture changes next' } }),
     }),
     GuardianDetails: obj({
       name: { type: 'string', maxLength: 60 },
@@ -388,7 +389,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           username: { type: 'string', pattern: '^[a-z0-9_.]{3,20}$', description: 'optional' },
           phone: { type: 'string' },
           phoneOtp: ref('OtpProof'),
-          email: { type: 'string', format: 'email', description: 'business only (required)' },
+          email: { type: 'string', format: 'email', description: 'required for a business; optional for an individual, who then also sends emailOtp (verified like the phone)' },
           emailOtp: ref('OtpProof'),
           business: ref('Business'),
           consent: ref('ConsentAccept'),
@@ -417,6 +418,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: { type: 'string', format: 'email' },
           requestId: { type: 'string' },
           code: { type: 'string', pattern: '^\\d{6}$' },
+          clientType: { type: 'string', enum: ['web', 'app'], description: '`web` for a browser: while a primary phone is signed in, a browser cannot use an SMS code and gets `403 passcode_required`' },
+          linkCode: { type: 'string', pattern: '^\\d{6}$', description: 'browser login: the passcode made on the primary phone (`POST /me/link-code`), sent with `phone` instead of `requestId` and `code`' },
+          deviceName: { type: 'string', maxLength: 60, description: 'shown in the list of linked browsers' },
           username: { type: 'string', description: 'older accounts only, with password' },
           password: { type: 'string', description: 'older accounts only' },
         }), { phone: '+919876543210', requestId: 'otp_6f1c…', code: '482913' }),
@@ -860,6 +864,25 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     },
     '/me/photos/{id}/main': { put: op(T.photo, 'Make a photo the one shown as my picture', { params: [idParam('id')], responses: { 200: ok(ref('ProfilePhotos')), ...errors(401, 404) } }) },
     '/me/photos/{id}': { delete: op(T.photo, 'Remove one of my photos', { params: [idParam('id')], responses: { 200: ok(ref('ProfilePhotos')), ...errors(401, 404) } }) },
+    '/me/photo-rotation': {
+      put: op(T.photo, 'Change my picture by itself every 7 days (Premium)', {
+        description: 'Needs a full set of photos (the Premium limit, 5 by default): the next photo becomes your picture a week after switching on, then every 7 days. `402 premium_required` without Premium; `409 not_enough_photos` with fewer photos. If Premium ends, rotation stops until it returns.',
+        body: jsonBody(obj({ on: { type: 'boolean' } }, ['on'])),
+        responses: { 200: ok(ref('ProfilePhotos')), ...errors(400, 401, 402, 409) },
+      }),
+    },
+    '/me/link-code': {
+      post: op(T.me, 'Make a passcode to log in on a browser', {
+        description: 'Only from the phone you signed in on with the SMS code (`403 primary_required` from a browser or API key). Returns a 6-digit `code` valid for 2 minutes, used once, with 5 wrong tries; 5 passcodes an hour. The browser then calls `POST /auth/login` with `{ phone, linkCode, clientType: "web" }`.',
+        responses: { 201: ok(obj({ code: { type: 'string' }, expiresAt: { type: 'integer' } })), ...errors(401, 403, 429) },
+      }),
+    },
+    '/me/linked-devices': {
+      get: op(T.me, 'Browsers logged in with a passcode', { responses: { 200: ok(obj({ devices: arrayOf(obj({ id: { type: 'string' }, name: { type: 'string' }, at: { type: 'integer' }, current: { type: 'boolean' } })), primary: { type: 'boolean' } })), ...errors(401) } }),
+    },
+    '/me/linked-devices/{id}': {
+      delete: op(T.me, 'Sign a linked browser out', { description: 'The primary phone can sign out any browser; a browser only itself.', params: [idParam('id')], responses: { 204: noContent, ...errors(401, 403, 404) } }),
+    },
     '/me/photo-privacy': {
       put: op(T.photo, 'Who may see my photos', {
         description: '`everyone`, `contacts` (people I chat with, the default) or `nobody`. Blocked people never see them. For someone under 18 `everyone` is applied as `contacts`.',
@@ -1314,6 +1337,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /me/photos/{id}/main': 'setMainProfilePhoto',
     'delete /me/photos/{id}': 'deleteProfilePhoto',
     'put /me/photo-privacy': 'setPhotoPrivacy',
+    'put /me/photo-rotation': 'setPhotoRotation',
+    'post /me/link-code': 'createLinkCode',
+    'get /me/linked-devices': 'listLinkedDevices',
+    'delete /me/linked-devices/{id}': 'unlinkDevice',
     'get /users/{username}/photos': 'getUserPhotos',
     'post /users/{username}/photos/{id}/report': 'reportProfilePhoto',
     'get /guardian/{token}': 'getGuardianPage',
