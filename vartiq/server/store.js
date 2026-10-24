@@ -16,6 +16,7 @@ class Store {
   /** `statusTtlMs`: how long a status update stays up (24 hours, shorter in tests). */
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000, persistence = null, initialData = null, mediaDir } = {}) {
     this.statusTtlMs = statusTtlMs;
+    this.premiumForAll = process.env.PREMIUM_FOR_ALL === '1';
     this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
     this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
@@ -1660,6 +1661,8 @@ class Store {
   }
 
   isPremium(username) {
+    // Testing switch: PREMIUM_FOR_ALL=1 gives every account Premium. Leave it off in production.
+    if (this.premiumForAll) return !!this.data.users[username];
     const sub = this.data.users[username]?.subscription;
     return !!sub && sub.expiresAt > Date.now();
   }

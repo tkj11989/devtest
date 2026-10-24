@@ -44,6 +44,10 @@ The app uses the **PrayukTech** colour palette, taken from the logo, on desktop 
 
 All colours are CSS variables at the top of `public/styles.css`; text and background pairs meet WCAG AA contrast in both themes. On phones the browser bar takes the navy colour, and the app can be installed to the home screen (`public/manifest.webmanifest`, icons in `public/app-icons/`).
 
+### Testing: Premium for everyone
+
+Set `PREMIUM_FOR_ALL=1` to give every account Premium (unlimited chat locks and hidden chats, 5 profile photos, call recording, Premium personalisation and parental-control changes). It is for testing only: leave it unset in production. Premium is still bought and checked normally when it is off.
+
 ## Getting started
 
 ```bash
