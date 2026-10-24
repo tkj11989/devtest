@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-22';
+const VERSION = '2026-10-24';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -101,6 +101,8 @@ function privacyNotice() {
         head: ['Data', 'What we use it for', 'When'],
         rows: [
           ['Mobile number', 'To create your account, send you login codes (OTP), let people who know your number find you, and keep your account secure', 'At sign-up and login'],
+          ['Email address (optional for a personal account, required for a business)', 'To send you a code to prove the address is yours, and for a business to show its contact email', 'Only if you give one'],
+          ['Browsers you log in on (a name such as "Chrome on Windows" and the time)', 'To show you which browsers are logged in to your account and let you sign them out', 'When you log in on a browser with a passcode'],
           ['Name, username, "about" line', 'To show who you are to the people you chat with', 'At sign-up and when you edit your profile'],
           ['Profile photos you add (a picture and a small thumbnail of each), and who you let see them', 'To show your picture next to your name to the people you choose (everyone, your contacts, or nobody; for people under 18, only people they chat with)', 'When you add a photo'],
           ['Reports about a photo (who reported it, why, when)', 'To review reported photos and keep people safe', 'When someone reports a photo'],
@@ -261,6 +263,7 @@ function termsOfUse() {
       ul: [
         'You must be at least 8 years old. If you are under 18 you need the permission of a parent or guardian: you give their details when you sign up, we send them a private link, and your account opens when they agree. They can switch some features off (calls, location sharing, being found by new people, public channels), disable the account, or delete it. At 18 these controls end.',
         'You must give a mobile number that you own and can receive codes on. A business account also needs a working email address and a correct business category.',
+        'To log in on a browser (a computer), you make a one-time passcode in the app on the phone you signed up on and type it with your mobile number. The passcode lasts 2 minutes and works once. While that phone is logged in, a browser cannot log in with an SMS code. You can sign browsers out in the app.',
         'One person, one account per mobile number. You are responsible for what happens under your account, so keep your login codes, secret codes and devices safe, and tell us if you think someone else has access.',
       ],
     },
@@ -298,7 +301,7 @@ function termsOfUse() {
       ul: [
         'Premium is bought in advance for a day, a month or a year. It does not renew by itself; buying again extends it. Prices are shown before you pay and may change for future purchases.',
         'Premium also lets a parent or guardian of a young person under 18 change that person\'s parental controls (calls, location sharing, being found by new people, public channels). Agreeing to a child\'s account, disabling it and deleting it are always free, and a child\'s safe default settings apply without Premium.',
-        'Premium lets you keep more profile photos (5 instead of 2 by default).',
+        'Premium lets you keep more profile photos (5 instead of 2 by default) and change your picture automatically every 7 days.',
         'Payments are handled by a payment provider. {brand} never sees your card or bank details.',
         'Refunds: [describe your refund policy here, for example "Premium is not refundable once activated, except where the law requires"]. This is for your lawyer to confirm.',
         'When Premium ends, the extra features stop; your chats and data stay, within the free limits.',

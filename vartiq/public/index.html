@@ -130,7 +130,7 @@
         </div>
 
         <div class="otp-field hidden" data-field="email">
-          <label for="auth-email">Email</label>
+          <label for="auth-email" id="auth-email-label">Email</label>
           <div class="otp-input-row">
             <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@business.com" maxlength="120" />
           </div>
@@ -149,6 +149,13 @@
           </ul>
           <label class="agree"><input type="checkbox" name="agreeTerms" /> <span id="consent-terms-text">I have read and agree to the Terms of Use and Privacy Notice.</span></label>
           <p class="consent-links"><a href="/legal/terms" target="_blank" rel="noopener">Read the Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Read the Privacy Notice</a></p>
+        </div>
+
+        <div class="passcode-box hidden" id="passcode-box" role="group" aria-labelledby="passcode-title">
+          <strong id="passcode-title">Passcode from your phone</strong>
+          <p class="muted">To log in on a browser, open VartiQ on the phone you signed up on: <b>Profile &rsaquo; Link a browser</b>. Enter the 6-digit passcode it shows (valid for 2 minutes).</p>
+          <input name="linkCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit passcode" aria-label="Passcode from your phone" />
+          <button type="button" class="link" id="passcode-back">Use an SMS code instead</button>
         </div>
 
         <p id="auth-error" class="error" role="alert"></p>
@@ -323,7 +330,27 @@
             <label class="radio-row"><input type="radio" name="photo-privacy" value="nobody" /><span><strong>Nobody</strong></span></label>
             <p class="muted small-note" id="photos-privacy-note"></p>
           </div>
+          <div class="card-lite" id="rotation-card">
+            <label class="radio-row"><input type="checkbox" id="photo-rotate" /><span><strong>Change my picture every 7 days</strong> <span class="muted">· Premium</span><br />With a full set of photos, the next one becomes your picture each week.</span></label>
+            <p class="muted small-note" id="photo-rotate-note"></p>
+          </div>
           <p class="muted small-note">Photos are not end-to-end encrypted: the people you allow can see them, and if someone reports a photo our moderators review it. Do not upload photos of other people without their agreement.</p>
+        </div>
+      </div>
+
+      <div class="panel overlay hidden" id="panel-link">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Link a browser</h2></header>
+        <div class="pad stack">
+          <p class="muted" id="link-lead">To log in to VartiQ on a computer, make a passcode here and type it on the login page together with your mobile number. A passcode works once and lasts 2 minutes.</p>
+          <button class="primary" type="button" id="link-make">Make a passcode</button>
+          <div class="card-lite hidden" id="link-code-box" aria-live="polite">
+            <strong class="passcode-big" id="link-code"></strong>
+            <p class="muted small-note" id="link-countdown"></p>
+          </div>
+          <p class="error" id="link-error" role="alert"></p>
+          <h3>Logged-in browsers</h3>
+          <div id="link-list" class="stack"></div>
+          <p class="muted small-note">Only the phone you signed up on can make passcodes and sign browsers out.</p>
         </div>
       </div>
 
@@ -493,6 +520,10 @@
             <label class="cache-switch"><input type="checkbox" id="cache-toggle" checked aria-label="Save chats on this device" /></label>
             <button class="link" type="button" id="btn-cache-clear">Clear</button>
           </div>
+          <button class="link-row" type="button" id="btn-link">
+            <svg viewBox="0 0 24 24"><path d="M17 1H7a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2Zm0 18H7V5h10v14Z"/></svg>
+            <span><strong>Link a browser</strong><small id="link-summary">Get a passcode to log in on a computer</small></span>
+          </button>
           <button class="link-row" type="button" id="btn-photos">
             <svg viewBox="0 0 24 24"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.500 13.500l2.500 3 3.500-4.500 4.500 6H5l3.500-4.500Z"/></svg>
             <span><strong>Profile photos</strong><small id="photos-row-summary">Add a picture people see next to your name</small></span>

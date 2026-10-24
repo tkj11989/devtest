@@ -375,14 +375,29 @@
     };
   }
 
+  /** A short name for this browser, shown in "Link a browser" on the phone. */
+  const browserName = () => {
+    const ua = navigator.userAgent;
+    const b = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+    const o = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+    return o ? `${b} on ${o}` : b;
+  };
   const authForm = $('#auth-form');
-  const auth = { mode: 'login', type: 'individual', loginBy: 'phone' };
+  const auth = { mode: 'login', type: 'individual', loginBy: 'phone', passcode: false };
   const authError = (text) => { $('#auth-error').textContent = text; };
   const purpose = () => (auth.mode === 'login' ? 'login' : 'register');
   const phoneField = createOtpField(authForm.querySelector('[data-field=phone]'), {
     destination: () => fullPhone(authForm),
-    request: (phone) => apiPost('/auth/otp', { purpose: purpose(), phone }),
-    onError: authError,
+    request: (phone) => apiPost('/auth/otp', { purpose: purpose(), phone, ...(auth.mode === 'login' ? { clientType: 'web' } : {}) }).catch((err) => {
+      // A browser cannot use an SMS code while the phone is signed in: ask for the passcode from the phone instead.
+      if (err.code === 'passcode_required') {
+        auth.passcode = true;
+        paintAuth();
+        $('#passcode-box input').focus();
+      }
+      throw err;
+    }),
+    onError: (text) => authError(auth.passcode ? '' : text),
   });
   const emailField = createOtpField(authForm.querySelector('[data-field=email]'), {
     destination: () => authForm.email.value.trim(),
@@ -392,8 +407,9 @@
 
   /** Which code fields this form needs, in order. */
   const neededFields = () => {
-    if (auth.mode === 'login') return [auth.loginBy === 'email' ? emailField : phoneField];
-    return auth.type === 'business' ? [phoneField, emailField] : [phoneField];
+    if (auth.mode === 'login') return auth.passcode ? [] : [auth.loginBy === 'email' ? emailField : phoneField];
+    // An individual's email is optional; when they type one it is verified with a code too.
+    return auth.type === 'business' || authForm.email.value.trim() ? [phoneField, emailField] : [phoneField];
   };
 
   // Age: below the minimum there is no account; under 18 a parent or guardian is mandatory.
@@ -448,14 +464,17 @@
     authForm.querySelectorAll('.business-only').forEach((n) => n.classList.toggle('hidden', !business));
     authForm.querySelectorAll('.login-only').forEach((n) => n.classList.toggle('hidden', register));
     const usePhone = register || auth.loginBy === 'phone';
-    const useEmail = business || (!register && auth.loginBy === 'email');
+    const useEmail = register || (!register && auth.loginBy === 'email' && !auth.passcode);
     authForm.querySelector('[data-field=phone]').classList.toggle('hidden', !usePhone);
     authForm.querySelector('[data-field=email]').classList.toggle('hidden', !useEmail);
-    $('#auth-email').placeholder = business ? 'you@business.com' : 'Your business email';
+    $('#passcode-box').classList.toggle('hidden', register || !auth.passcode);
+    $('#auth-email-label').textContent = register && !business ? 'Email (optional)' : 'Email';
+    $('#auth-email').placeholder = business ? 'you@business.com' : register ? 'you@example.com' : 'Your business email';
     $('#auth-name-label').textContent = business ? 'Business name' : 'Your name';
     $('#auth-use-email').textContent = auth.loginBy === 'email' ? 'Log in with mobile number instead' : 'Business account? Log in with email';
     paintGuardianBox();
-    $('#auth-lead').textContent = !register
+    $('#auth-lead').textContent = !register && auth.passcode ? 'Log in on this browser with your mobile number and a passcode from the VartiQ app on your phone.'
+      : !register
       ? (auth.loginBy === 'email' ? 'Log in with your business email. We\'ll email you a code.' : 'Log in with your mobile number. We\'ll send you a code by SMS.')
       : (business ? 'Business accounts verify both a mobile number and an email address.' : 'Sign up with your mobile number. We\'ll verify it with a code by SMS.');
     paintSubmit();
@@ -468,6 +487,7 @@
 
   function setAuthMode(mode) {
     auth.mode = mode;
+    auth.passcode = false;
     phoneField.reset();
     emailField.reset();
     authError('');
@@ -480,7 +500,14 @@
     authError('');
     paintAuth();
   }));
+  $('#passcode-back').addEventListener('click', () => {
+    auth.passcode = false;
+    phoneField.reset();
+    authError('');
+    paintAuth();
+  });
   $('#auth-use-email').addEventListener('click', () => {
+    auth.passcode = false;
     auth.loginBy = auth.loginBy === 'email' ? 'phone' : 'email';
     phoneField.reset();
     emailField.reset();
@@ -534,7 +561,18 @@
         return missing.focusCode();
       }
       let data;
-      if (!register) {
+      if (!register && auth.passcode) {
+        const linkCode = authForm.linkCode.value.replace(/\D/g, '');
+        if (!/^\d{6}$/.test(linkCode)) {
+          authError('Enter the 6-digit passcode from your phone');
+          return authForm.linkCode.focus();
+        }
+        if (!authForm.phone.value.trim()) {
+          authError('Enter your mobile number');
+          return authForm.phone.focus();
+        }
+        data = await apiPost('/auth/login', { phone: fullPhone(authForm), linkCode, clientType: 'web', deviceName: browserName() });
+      } else if (!register) {
         const by = auth.loginBy === 'email' ? { email: authForm.email.value.trim() } : { phone: fullPhone(authForm) };
         data = await apiPost('/auth/login', { ...by, ...(auth.loginBy === 'email' ? emailField : phoneField).proof() });
       } else {
@@ -553,9 +591,8 @@
               ...(authForm.gEmail.value.trim() ? { email: authForm.gEmail.value.trim() } : {}),
             },
           } : {}),
+          ...(business || authForm.email.value.trim() ? { email: authForm.email.value.trim(), emailOtp: emailField.proof() } : {}),
           ...(business ? {
-            email: authForm.email.value.trim(),
-            emailOtp: emailField.proof(),
             business: { category: authForm.category.value, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
           } : {}),
         });
@@ -827,6 +864,11 @@
     });
     grid.appendChild(add);
     document.querySelectorAll('input[name=photo-privacy]').forEach((r) => { r.checked = r.value === ph.privacy; });
+    const rot = ph.rotation || {};
+    $('#photo-rotate').checked = !!rot.on;
+    $('#photo-rotate-note').textContent = rot.on && rot.active ? `Next change: ${new Date(rot.nextAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}.`
+      : rot.on ? (ph.premium ? 'Add a full set of photos for this to run.' : 'Paused until you have Premium again.')
+      : !ph.premium ? `Premium feature. Add ${ph.premiumLimit} photos and switch it on.` : ph.photos.length < ph.premiumLimit ? `Add ${ph.premiumLimit} photos to use this (you have ${ph.photos.length}).` : '';
     $('#photos-privacy-note').textContent = ph.minor
       ? 'Because you are under 18, your photos are only ever shown to people you already chat with, whatever you choose here.'
       : ph.privacy === 'contacts' ? 'People who are not in a chat or group with you cannot see your photos.' : '';
@@ -851,6 +893,75 @@
   $('#profile-avatar').addEventListener('click', openPhotos);
   $('#profile-avatar').style.cursor = 'pointer';
   document.querySelectorAll('input[name=photo-privacy]').forEach((r) => r.addEventListener('change', () => photoAction('photo:privacy', { who: r.value })));
+  $('#photo-rotate').addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    if (on && state.photos && !state.photos.premium) {
+      e.target.checked = false;
+      return offerUpgrade('Changing your picture automatically every 7 days is a Premium feature.');
+    }
+    await photoAction('photo:rotate', { on });
+    renderPhotos(); // puts the switch back where the server left it when it refused
+    return undefined;
+  });
+
+  // --- Link a browser: a passcode made here lets one browser log in ---
+  let linkTimer = null;
+  async function loadLinked() {
+    try {
+      const { devices, primary } = await emit('link:list');
+      $('#link-make').disabled = !primary;
+      $('#link-lead').textContent = primary
+        ? 'To log in to VartiQ on a computer, make a passcode here and type it on the login page together with your mobile number. A passcode works once and lasts 2 minutes.'
+        : 'Passcodes are made on the phone you signed up on. You are logged in on a browser.';
+      $('#link-summary').textContent = devices.length ? `${devices.length} browser${devices.length === 1 ? '' : 's'} logged in` : 'Get a passcode to log in on a computer';
+      const list = $('#link-list');
+      list.textContent = '';
+      if (!devices.length) list.appendChild(el('p', 'muted', 'No browsers are logged in with a passcode.'));
+      for (const d of devices) {
+        const row = el('div', 'link-row static');
+        row.appendChild(el('span', '', ''));
+        const label = el('span', '');
+        label.appendChild(el('strong', '', d.current ? `${d.name} (this browser)` : d.name));
+        label.appendChild(el('small', '', `Logged in ${new Date(d.at).toLocaleString()}`));
+        row.appendChild(label);
+        const out = el('button', 'link', 'Sign out');
+        out.type = 'button';
+        out.addEventListener('click', async () => {
+          try {
+            await emit('link:remove', { id: d.id });
+            if (d.current) logout();
+            else loadLinked();
+          } catch (err) { $('#link-error').textContent = err.message; }
+        });
+        row.appendChild(out);
+        list.appendChild(row);
+      }
+    } catch (err) {
+      $('#link-error').textContent = err.message;
+    }
+  }
+  function showLinkCode(res) {
+    clearInterval(linkTimer);
+    $('#link-code-box').classList.remove('hidden');
+    $('#link-code').textContent = `${res.code.slice(0, 3)} ${res.code.slice(3)}`;
+    const tick = () => {
+      const left = Math.max(0, Math.round((res.expiresAt - Date.now()) / 1000));
+      $('#link-countdown').textContent = left ? `Valid for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}. Use it once.` : 'Expired. Make a new one.';
+      if (!left) { clearInterval(linkTimer); $('#link-code').textContent = '------'; }
+    };
+    tick();
+    linkTimer = setInterval(tick, 1000);
+  }
+  $('#btn-link').addEventListener('click', () => {
+    openPanel('#panel-link');
+    $('#link-error').textContent = '';
+    loadLinked();
+  });
+  $('#link-make').addEventListener('click', async () => {
+    $('#link-error').textContent = '';
+    try { showLinkCode(await emit('link:create')); } catch (err) { $('#link-error').textContent = err.message; }
+  });
+  $('#panel-link [data-close]').addEventListener('click', () => { clearInterval(linkTimer); $('#link-code-box').classList.add('hidden'); });
 
   // --- crop: a square, moved by dragging and zoomed with a slider ---
   const crop = { bmp: null, zoom: 1, ox: 0, oy: 0, base: 1 };
