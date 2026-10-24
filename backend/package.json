@@ -1,0 +1,20 @@
+{
+  "name": "sports-space-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API for the Sports Space booking app: OTP login, sports, spaces, slots, bookings, payments and SMS notifications.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.3"
+  }
+}
