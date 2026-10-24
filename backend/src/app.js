@@ -21,6 +21,7 @@ function createApp(store = createStore(config.dbFile)) {
   app.use('/', require('./routes/me').meRoutes(store));
   app.use('/bookings', require('./routes/bookings').bookingRoutes(store));
   app.use('/owner', require('./routes/owner').ownerRoutes(store));
+  app.use('/admin', require('./routes/admin').adminRoutes(store));
   app.use('/payments', require('./routes/payments')(store));
 
   app.use((_req, _res, next) => next(new ApiError(404, 'NOT_FOUND', 'Not found')));

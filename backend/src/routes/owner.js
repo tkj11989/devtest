@@ -5,6 +5,9 @@ const { todayLocal, isValidDate } = require('../services/time');
 const { assertBookableDate } = require('./grounds');
 const { hasStarted } = require('./bookings');
 const { ApiError } = require('../errors');
+const config = require('../config');
+const settlement = require('../services/settlement');
+const { validatePayout, publicPayout } = require('../services/payouts');
 
 // Stadium-owner endpoints. A user is an owner of every ground whose
 // ownerPhone matches their number.
@@ -38,7 +41,7 @@ function ownerRoutes(store) {
     const today = todayLocal();
     res.json({
       totalBookings: bookings.length,
-      totalRevenue: bookings.reduce((sum, b) => sum + b.amount, 0),
+      totalRevenue: bookings.reduce((sum, b) => sum + b.amount, 0), // owner's share; platform fee excluded
       upcoming: bookings.filter((b) => !hasStarted(b)).length,
       completed: bookings.filter((b) => hasStarted(b)).length,
       pendingPayments: bookings.filter((b) => b.paymentStatus === 'PAY_AT_VENUE').length,
@@ -63,12 +66,34 @@ function ownerRoutes(store) {
     const ids = new Set(owned(req).map((g) => g.id));
     const booking = store.data.bookings.find((b) => b.id === req.params.id && ids.has(b.groundId));
     if (!booking) throw new ApiError(404, 'BOOKING_NOT_FOUND', 'Booking not found');
+    if (booking.status !== 'CONFIRMED') throw new ApiError(400, 'NOT_CONFIRMED', 'Only confirmed bookings can be marked paid');
     if (booking.paymentStatus === 'PAY_AT_VENUE') {
       booking.paymentStatus = 'PAID';
       booking.paidAt = new Date().toISOString();
+      settlement.settleVenueCollection(store, booking);
       store.save();
     }
     res.json({ booking });
+  });
+
+  // Where the owner's share of online payments is sent.
+  router.get('/payout', (req, res) => {
+    const user = store.data.users.find((u) => u.phone === req.phone);
+    res.json(publicPayout(user?.payout, config.paymentProvider));
+  });
+
+  router.put('/payout', (req, res) => {
+    if (!owned(req).length) throw new ApiError(403, 'NOT_OWNER', 'Only venue owners can set payout details');
+    const user = store.data.users.find((u) => u.phone === req.phone);
+    user.payout = validatePayout(req.body, user.payout);
+    store.save();
+    res.json(publicPayout(user.payout, config.paymentProvider));
+  });
+
+  router.get('/earnings', (req, res) => {
+    if (!owned(req).length) throw new ApiError(403, 'NOT_OWNER', 'Only venue owners have earnings');
+    const user = store.data.users.find((u) => u.phone === req.phone);
+    res.json({ ...settlement.ownerSummary(store, req.phone), payout: publicPayout(user?.payout, config.paymentProvider) });
   });
 
   router.get('/grounds/:id/slots', (req, res) => {

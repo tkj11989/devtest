@@ -7,6 +7,7 @@ const { todayLocal, localNow } = require('../services/time');
 const { quote } = require('../services/pricing');
 const payment = require('../services/payment');
 const { notifyBooking } = require('../services/notify');
+const settlement = require('../services/settlement');
 const { assertBookableDate, findGround } = require('./grounds');
 const { ApiError } = require('../errors');
 
@@ -72,6 +73,9 @@ function bookingRoutes(store) {
       throw new ApiError(400, 'INVALID_PAYMENT_METHOD', 'Choose UPI, card, net banking or wallet');
     }
     const { ground, slot, price } = prepare(req.body);
+    if (online && !settlement.canTakeOnline(store, ground)) {
+      throw new ApiError(400, 'ONLINE_PAYMENT_UNAVAILABLE', 'This venue accepts payment at the venue only');
+    }
     const sport = store.data.sports.find((s) => s.id === ground.sportId);
     const city = store.data.cities.find((c) => c.id === ground.city);
     const user = store.data.users.find((u) => u.phone === req.phone);
@@ -86,6 +90,7 @@ function bookingRoutes(store) {
       groundId: ground.id,
       groundName: ground.name,
       groundType: ground.type,
+      ownerPhone: ground.ownerPhone,
       area: ground.area,
       cityName: city.name,
       date: req.body.date,
@@ -110,7 +115,11 @@ function bookingRoutes(store) {
     }
 
     try {
-      const order = await payment.createOrder({ amount: booking.total, receipt: booking.code });
+      const order = await payment.createOrder({
+        amount: booking.total,
+        receipt: booking.code,
+        transfers: settlement.orderTransfers(store, booking),
+      });
       booking.orderId = order.orderId;
       booking.holdExpiresAt = new Date(Date.parse(booking.createdAt) + config.paymentHoldMs).toISOString();
       store.save();
@@ -138,6 +147,7 @@ function bookingRoutes(store) {
       paymentId,
       paidAt: new Date().toISOString(),
     });
+    await settlement.settleOnlinePayment(store, booking);
     store.save();
     await notifyBooking(store, booking, 'Booking confirmed', confirmationMessage(booking));
     res.json({ booking });
@@ -151,7 +161,10 @@ function bookingRoutes(store) {
     const wasConfirmed = booking.status === 'CONFIRMED';
     booking.status = 'CANCELLED';
     booking.cancelledAt = new Date().toISOString();
-    if (booking.paymentStatus === 'PAID') booking.paymentStatus = 'REFUND_INITIATED';
+    if (booking.paymentStatus === 'PAID') {
+      booking.paymentStatus = 'REFUND_INITIATED';
+      if (booking.paymentMethod === 'ONLINE') settlement.reverseOnlinePayment(store, booking);
+    }
     store.save();
     if (wasConfirmed) {
       const refund = booking.paymentStatus === 'REFUND_INITIATED' ? ` Refund of Rs.${booking.total} will reach you in 5-7 days.` : '';

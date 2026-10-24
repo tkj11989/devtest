@@ -25,6 +25,15 @@ A mobile app for booking sports spaces (cricket turfs/nets, football, badminton,
 | 11 | **Stadium Dashboard** | Total bookings, revenue, upcoming, completed; today's bookings; tap a Pending (pay-at-venue) booking to mark cash collected |
 | 12 | **Manage Slots** | Pick a ground and date; switch slots on/off for that date; add slots, edit prices, delete slots |
 
+**Payments & payouts**
+
+- **Owner payout account:** owners add a **UPI ID** or **bank account (number + IFSC)**, the account holder name and a **payment contact number** (Dashboard → Earnings & Payouts → Payout account). Until they do, their grounds take pay-at-venue bookings only.
+- **Online payments are split at source:** the slot price is credited **directly to the owner's account**; the **platform fee** stays in the platform's own payment-gateway account. If a coupon is bigger than the platform fee, the platform tops up the owner, so owners always receive the full slot price.
+- **Pay at venue:** the owner collects the full amount and marks it paid on the dashboard; the platform fee is then recorded as **due from the owner**.
+- **Cancellations** of paid online bookings reverse both shares in the ledger.
+- **Owner – Earnings & Payouts:** credited to account, collected at venue, platform fees due, and every transaction.
+- **Platform Admin** (sign in with `ADMIN_PHONE`, default `9000000000`, then Profile → Platform Admin): net platform earnings, fees collected online, fees due from and received from venues, coupon top-ups, owner payout accounts; link an owner's Razorpay account and record fees an owner has paid.
+
 Every booking confirmation or cancellation is sent by **SMS** and saved as an in-app **notification**.
 
 Venue photos are drawn as floodlit-ground illustrations for each sport (`mobile/src/components/GroundArt.tsx`) until venues upload real photos.
@@ -62,6 +71,7 @@ Copy `backend/.env.example` to set these as environment variables.
 - **SMS (OTP + booking intimation):** `SMS_PROVIDER=twilio` or `SMS_PROVIDER=msg91`
   with its credentials. In India, MSG91 needs DLT-registered templates — one for
   the OTP and one for booking messages, each with a `message` variable.
+- **Payment split (Razorpay Route):** enable **Route** on the platform's Razorpay account, which is where platform fees land and settle to the platform's bank. For each owner, create a **Linked Account** in the Razorpay dashboard (Route → Linked Accounts) using the bank details they entered, then paste its `acc_…` ID in the app (Platform Admin → Link Razorpay account). Orders are then created with a Route `transfers` entry, so the owner's share moves to their linked account when the payment is captured. Coupon top-ups use a direct transfer from the platform balance. Online payments for an owner's grounds stay off until the account is linked. Razorpay Route settles linked accounts to **bank accounts**; owners who give only a UPI ID need a bank account added for Razorpay, or a RazorpayX Payouts integration (not included). Refund reversals for cancellations are recorded in the ledger, but the Razorpay refund and transfer-reversal API calls still need to be added.
 - **Payments:** `PAYMENT_PROVIDER=razorpay` plus `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET`.
   The API already creates Razorpay orders and verifies the `orderId|paymentId`
   HMAC signature. On the app side, swap the mock gateway in
@@ -76,7 +86,7 @@ Copy `backend/.env.example` to set these as environment variables.
 
 ## API
 
-All `/me`, `/notifications`, `/bookings`, `/payments` and `/owner` routes need `Authorization: Bearer <token>`.
+All `/me`, `/notifications`, `/bookings`, `/payments`, `/owner` and `/admin` routes need `Authorization: Bearer <token>`.
 
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
@@ -100,10 +110,15 @@ All `/me`, `/notifications`, `/bookings`, `/payments` and `/owner` routes need `
 | GET/POST | `/owner/grounds/:id/slots` | `?date=` / `{ startHour, price }` | List with on/off state / add slot |
 | PATCH/DELETE | `/owner/grounds/:id/slots/:hour` | `{ price }` | Edit price / delete slot |
 | PUT | `/owner/grounds/:id/slots/:hour/availability` | `{ date, enabled }` | Switch a slot off/on for one date |
+| GET/PUT | `/owner/payout` | `{ method: "UPI" \| "BANK", accountHolder, contactPhone, upiId? , accountNumber?, ifsc? }` | Owner's payout account (account number returned masked) |
+| GET | `/owner/earnings` | | Credited, collected at venue, fees due, ledger |
+| GET | `/admin/summary` | | Admin only: platform earnings and owners |
+| PUT | `/admin/owners/:phone/linked-account` | `{ linkedAccountId }` | Razorpay Route `acc_…` ID |
+| POST | `/admin/owners/:phone/dues-received` | `{ amount }` | Platform fees paid by an owner |
 
 ## Tests
 
 ```bash
-cd backend && npm test        # API tests: OTP, catalog filters, favorites, coupons, booking, holds, cancel, owner tools
+cd backend && npm test        # API tests: OTP, catalog, favorites, coupons, booking, holds, cancel, owner tools, payouts & split
 cd mobile && npm run typecheck
 ```

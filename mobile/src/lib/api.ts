@@ -62,7 +62,7 @@ export function qs(params: Record<string, string | number | undefined | null | f
   return parts.length ? `?${parts.join('&')}` : '';
 }
 
-export type User = { phone: string; name: string; favorites: string[]; isOwner: boolean };
+export type User = { phone: string; name: string; favorites: string[]; isOwner: boolean; isAdmin: boolean };
 export type City = { id: string; name: string; state: string; lat: number; lng: number };
 export type Sport = { id: string; name: string; icon: string; groundCount: number };
 export type GroundType = 'Turf' | 'Stadium' | 'Indoor';
@@ -85,6 +85,7 @@ export type Ground = {
   pricePerHour: number;
   distanceKm: number | null;
   isFavorite: boolean;
+  onlinePayments: boolean; // false until the owner has a payout account set up
 };
 export type Review = { id: string; name: string; rating: number; comment: string; date: string };
 export type GroundDetails = Ground & { sport: Sport; reviews: Review[] };
@@ -122,3 +123,54 @@ export type Booking = Quote & {
 };
 export type Order = { provider: 'mock' | 'razorpay'; orderId: string; amount: number; currency: string; keyId?: string };
 export type AppNotification = { id: string; bookingId?: string; title: string; message: string; read: boolean; createdAt: string };
+
+export type Payout = {
+  method: 'UPI' | 'BANK';
+  accountHolder: string;
+  contactPhone: string;
+  upiId?: string;
+  ifsc?: string;
+  accountNumberMasked: string | null;
+  linkedAccountId?: string;
+  destination: string;
+  status: 'ACTIVE' | 'PENDING_LINK';
+  updatedAt: string;
+};
+export type LedgerType = 'OWNER_PAYOUT' | 'PLATFORM_SUBSIDY' | 'PLATFORM_FEE' | 'VENUE_COLLECTION' | 'FEE_DUE' | 'DUES_SETTLED';
+export type LedgerEntry = {
+  id: string;
+  bookingCode: string | null;
+  groundName: string | null;
+  type: LedgerType;
+  amount: number;
+  status: 'PROCESSED' | 'INITIATED' | 'FAILED';
+  destination?: string;
+  reversal?: boolean;
+  createdAt: string;
+};
+export type Earnings = {
+  paidToAccount: number;
+  collectedAtVenue: number;
+  platformFeesDue: number;
+  entries: LedgerEntry[];
+  payout: Payout | null;
+};
+export type AdminSummary = {
+  feesCollectedOnline: number;
+  subsidiesPaid: number;
+  paidToOwners: number;
+  feesDueFromVenues: number;
+  duesReceived: number;
+  paymentProvider: 'mock' | 'razorpay';
+  bookings: number;
+  grossBookingValue: number;
+  owners: {
+    phone: string;
+    name: string;
+    grounds: string[];
+    payout: Payout | null;
+    paidToAccount: number;
+    collectedAtVenue: number;
+    platformFeesDue: number;
+  }[];
+};

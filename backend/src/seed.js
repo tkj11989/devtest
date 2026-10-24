@@ -75,4 +75,23 @@ const coupons = [
   { code: 'PLAY10', description: '10% off, up to ₹200', type: 'PERCENT', value: 10, maxDiscount: 200, minAmount: 0 },
 ];
 
-module.exports = { sports, cities, grounds, reviews, coupons, OWNER_PHONE };
+// The demo owner already has payout details so online payments work out of
+// the box. With PAYMENT_PROVIDER=razorpay the admin still has to link a Route
+// account before online payments are accepted.
+const users = [
+  {
+    phone: OWNER_PHONE,
+    name: '',
+    favorites: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    payout: {
+      method: 'UPI',
+      accountHolder: 'PlayOn Sports Pvt Ltd',
+      upiId: 'playonsports@okaxis',
+      contactPhone: OWNER_PHONE,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  },
+];
+
+module.exports = { sports, cities, grounds, reviews, coupons, users, OWNER_PHONE };

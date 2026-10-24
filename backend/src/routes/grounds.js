@@ -4,6 +4,7 @@ const { getSlots, MAX_ADVANCE_DAYS } = require('../services/slots');
 const { todayLocal, isValidDate, addDays } = require('../services/time');
 const { distanceKm } = require('../services/geo');
 const { ApiError } = require('../errors');
+const { canTakeOnline } = require('../services/settlement');
 
 function assertBookableDate(date) {
   if (!isValidDate(date)) throw new ApiError(400, 'INVALID_DATE', 'Date must be YYYY-MM-DD');
@@ -31,6 +32,7 @@ function summarize(store, ground, { phone, lat, lng } = {}) {
     pricePerHour: slots.length ? Math.min(...slots.map((s) => s.price)) : null,
     distanceKm: Number.isFinite(lat) && Number.isFinite(lng) ? Math.round(distanceKm(lat, lng, ground.lat, ground.lng) * 10) / 10 : null,
     isFavorite: !!user?.favorites?.includes(ground.id),
+    onlinePayments: canTakeOnline(store, ground),
   };
 }
 

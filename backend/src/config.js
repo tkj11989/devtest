@@ -16,6 +16,10 @@ const config = {
 
   platformFee: Number(process.env.PLATFORM_FEE ?? 50),
 
+  // The platform admin signs in with this number to see platform earnings
+  // and link owners' payout accounts.
+  adminPhone: process.env.ADMIN_PHONE || '9000000000',
+
   timezoneOffsetMinutes: Number(process.env.TZ_OFFSET_MINUTES ?? 330), // IST default
 
   // console | twilio | msg91

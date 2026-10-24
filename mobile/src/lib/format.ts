@@ -26,7 +26,7 @@ export const hourLabel = (h: number) => `${h % 12 || 12}:00 ${h % 24 < 12 ? 'AM'
 // "7:00 PM – 8:00 PM"
 export const slotRange = (h: number) => `${hourLabel(h)} – ${hourLabel(h + 1)}`;
 
-export const rupees = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+export const rupees = (n: number) => `${n < 0 ? '–' : ''}₹${Math.abs(n).toLocaleString('en-IN')}`;
 
 export const maskPhone = (p: string) => `+91 ${p.slice(0, 5)} ${p.slice(5)}`;
 

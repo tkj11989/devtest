@@ -12,9 +12,10 @@ function createStore(file) {
     reviews: seed.reviews,
     coupons: seed.coupons,
     blockedSlots: [], // { groundId, date, startHour }
-    users: [],
+    users: clone(seed.users),
     bookings: [],
     notifications: [],
+    ledger: [], // money movements; see services/settlement.js
   };
   if (file && fs.existsSync(file)) {
     data = { ...data, ...JSON.parse(fs.readFileSync(file, 'utf8')) };

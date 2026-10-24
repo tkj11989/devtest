@@ -141,6 +141,7 @@ export default function GroundDetailsScreen() {
               <Text style={styles.about}>
                 Starts at <Text style={{ fontWeight: '800', color: colors.text }}>{rupees(ground.pricePerHour)}</Text> per hour · {ground.type}
                 {ground.floodlights ? ' · Floodlit' : ''}
+                {ground.onlinePayments ? '' : ' · Pay at venue only'}
               </Text>
             </View>
           )}

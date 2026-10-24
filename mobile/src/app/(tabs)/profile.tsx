@@ -49,6 +49,17 @@ export default function Profile() {
           </Pressable>
         )}
 
+        {user?.isAdmin && (
+          <Pressable style={[styles.owner, { backgroundColor: colors.text }]} onPress={() => router.push('/admin')}>
+            <Ionicons name="shield-checkmark" size={22} color="#fff" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Platform Admin</Text>
+              <Text style={{ color: '#C9D2CD', fontSize: 12 }}>Platform fees & owner payouts</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#fff" />
+          </Pressable>
+        )}
+
         <Card style={{ paddingVertical: 4 }}>
           {MENU.map((m) => (
             <Pressable key={m.label} style={styles.item} onPress={() => router.push(m.href)}>

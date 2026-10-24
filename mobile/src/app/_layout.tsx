@@ -50,6 +50,9 @@ function RootStack() {
           }}
         />
         <Stack.Screen name="owner/slots" options={{ title: 'Manage Slots' }} />
+        <Stack.Screen name="owner/payout" options={{ title: 'Payout Account' }} />
+        <Stack.Screen name="owner/earnings" options={{ title: 'Earnings & Payouts' }} />
+        <Stack.Screen name="admin/index" options={{ title: 'Platform Admin', headerStyle: { backgroundColor: colors.text }, headerTintColor: '#fff' }} />
       </Stack.Protected>
     </Stack>
   );

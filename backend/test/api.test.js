@@ -237,6 +237,113 @@ test('owner: dashboard, slot toggles, add/edit/delete slots, collect payment', a
   assert.equal((await call('DELETE', `/owner/grounds/${PLAYON}/slots/5`, null, owner)).status, 200);
 });
 
+const ADMIN = '9000000000';
+const config = require('../src/config');
+
+test('owner payout details: validation, masking, and online gating', async () => {
+  const owner = await login(OWNER);
+  const player = await login('9876543210', 'Rahul Mehta');
+  assert.equal((await call('PUT', '/owner/payout', { method: 'UPI', upiId: 'x@y', accountHolder: 'A', contactPhone: '9876543210' }, player)).status, 403);
+
+  const seeded = await call('GET', '/owner/payout', null, owner);
+  assert.equal(seeded.body.upiId, 'playonsports@okaxis');
+  assert.equal(seeded.body.status, 'ACTIVE');
+
+  const bad = await call('PUT', '/owner/payout', { method: 'BANK', accountHolder: 'PlayOn', accountNumber: '12', ifsc: 'HDFC0001234', contactPhone: '9000000001' }, owner);
+  assert.equal(bad.body.error, 'INVALID_PAYOUT');
+  const badIfsc = await call('PUT', '/owner/payout', { method: 'BANK', accountHolder: 'PlayOn', accountNumber: '50100123456789', ifsc: 'HDFC1234', contactPhone: '9000000001' }, owner);
+  assert.match(badIfsc.body.message, /IFSC/);
+
+  const bank = await call('PUT', '/owner/payout', { method: 'BANK', accountHolder: 'PlayOn Sports', accountNumber: '5010 0123 456789', ifsc: 'hdfc0001234', contactPhone: '+91 98290 12345' }, owner);
+  assert.equal(bank.status, 200);
+  assert.equal(bank.body.accountNumber, undefined);
+  assert.equal(bank.body.accountNumberMasked, 'XXXX6789');
+  assert.equal(bank.body.ifsc, 'HDFC0001234');
+  assert.equal(bank.body.contactPhone, '9829012345');
+  // Saving again without re-entering the account number keeps it.
+  const again = await call('PUT', '/owner/payout', { method: 'BANK', accountHolder: 'PlayOn Sports', ifsc: 'HDFC0001234', contactPhone: '9829012345' }, owner);
+  assert.equal(again.body.accountNumberMasked, 'XXXX6789');
+
+  // No payout details -> online payments are refused, pay at venue still works.
+  store.data.users.find((u) => u.phone === OWNER).payout = undefined;
+  assert.equal((await call('GET', `/grounds/${PLAYON}`)).body.onlinePayments, false);
+  assert.equal((await book(player, { startHour: 10, paymentMethod: 'ONLINE', paymentChannel: 'UPI' })).body.error, 'ONLINE_PAYMENT_UNAVAILABLE');
+  assert.equal((await book(player, { startHour: 10 })).status, 201);
+});
+
+test('razorpay mode needs the admin to link the owner account', async () => {
+  const admin = await login(ADMIN, 'Platform Admin');
+  const owner = await login(OWNER);
+  assert.equal((await call('GET', '/me', null, admin)).body.isAdmin, true);
+  assert.equal((await call('GET', '/admin/summary', null, owner)).status, 403);
+
+  config.paymentProvider = 'razorpay';
+  try {
+    assert.equal((await call('GET', '/owner/payout', null, owner)).body.status, 'PENDING_LINK');
+    assert.equal((await call('GET', `/grounds/${PLAYON}`)).body.onlinePayments, false);
+    assert.equal((await call('PUT', `/admin/owners/${OWNER}/linked-account`, { linkedAccountId: 'nope' }, admin)).body.error, 'INVALID_LINKED_ACCOUNT');
+    const linked = await call('PUT', `/admin/owners/${OWNER}/linked-account`, { linkedAccountId: 'acc_AbCdEfGhIjKlMn' }, admin);
+    assert.equal(linked.body.status, 'ACTIVE');
+    assert.equal((await call('GET', `/grounds/${PLAYON}`)).body.onlinePayments, true);
+
+    // Changing the destination clears the link.
+    await call('PUT', '/owner/payout', { method: 'UPI', upiId: 'new@okhdfcbank', accountHolder: 'PlayOn', contactPhone: '9000000001' }, owner);
+    assert.equal((await call('GET', '/owner/payout', null, owner)).body.status, 'PENDING_LINK');
+  } finally {
+    config.paymentProvider = 'mock';
+  }
+});
+
+test('online payment splits: owner gets the slot price, platform keeps the fee', async () => {
+  const player = await login('9876543210', 'Rahul Mehta');
+  const owner = await login(OWNER);
+  const admin = await login(ADMIN, 'Platform Admin');
+  const pay = async (body) => {
+    const created = await book(player, { paymentMethod: 'ONLINE', paymentChannel: 'UPI', ...body });
+    const checkout = await call('POST', '/payments/mock-checkout', { orderId: created.body.order.orderId }, player);
+    return (await call('POST', `/bookings/${created.body.booking.id}/pay`, checkout.body, player)).body.booking;
+  };
+
+  const plain = await pay({ startHour: 18 }); // 1500 + 50
+  assert.equal(plain.ownerShare, 1500);
+  assert.equal(plain.platformShare, 50);
+  // PLAY10 = 150 off, more than the 50 fee: customer pays 1400, platform tops up 100.
+  const promo = await pay({ startHour: 19, couponCode: 'PLAY10' });
+  assert.equal(promo.total, 1400);
+  assert.equal(promo.platformShare, -100);
+
+  let earnings = (await call('GET', '/owner/earnings', null, owner)).body;
+  assert.equal(earnings.paidToAccount, 3000); // full slot price both times
+  assert.deepEqual(earnings.entries.filter((e) => e.bookingId === promo.id).map((e) => [e.type, e.amount]).sort(), [['OWNER_PAYOUT', 1400], ['PLATFORM_SUBSIDY', 100]]);
+  assert.match(earnings.entries[0].destination, /playonsports@okaxis/);
+
+  let summary = (await call('GET', '/admin/summary', null, admin)).body;
+  assert.equal(summary.feesCollectedOnline, 50);
+  assert.equal(summary.subsidiesPaid, 100);
+  assert.equal(summary.paidToOwners, 2900);
+
+  // Cancelling a paid booking reverses its split.
+  await call('POST', `/bookings/${plain.id}/cancel`, {}, player);
+  earnings = (await call('GET', '/owner/earnings', null, owner)).body;
+  assert.equal(earnings.paidToAccount, 1500);
+  summary = (await call('GET', '/admin/summary', null, admin)).body;
+  assert.equal(summary.feesCollectedOnline, 0);
+
+  // Pay at venue: owner collects everything and owes the platform its fee.
+  const { body } = await book(player, { startHour: 20 });
+  await call('POST', `/owner/bookings/${body.booking.id}/collect`, {}, owner);
+  earnings = (await call('GET', '/owner/earnings', null, owner)).body;
+  assert.equal(earnings.collectedAtVenue, 1550);
+  assert.equal(earnings.platformFeesDue, 50);
+
+  assert.equal((await call('POST', `/admin/owners/${OWNER}/dues-received`, { amount: 60 }, admin)).body.error, 'INVALID_AMOUNT');
+  const settled = await call('POST', `/admin/owners/${OWNER}/dues-received`, { amount: 50 }, admin);
+  assert.equal(settled.body.platformFeesDue, 0);
+  summary = (await call('GET', '/admin/summary', null, admin)).body;
+  assert.equal(summary.duesReceived, 50);
+  assert.equal(summary.owners[0].phone, OWNER);
+});
+
 test('booking endpoints require login', async () => {
   assert.equal((await call('GET', '/bookings')).status, 401);
   assert.equal((await call('GET', '/bookings', null, 'garbage')).status, 401);

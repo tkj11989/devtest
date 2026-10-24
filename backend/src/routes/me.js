@@ -2,12 +2,14 @@ const express = require('express');
 const { requireAuth } = require('../auth');
 const { findGround } = require('./grounds');
 const { ApiError } = require('../errors');
+const config = require('../config');
 
 const publicUser = (store, u) => ({
   phone: u.phone,
   name: u.name || '',
   favorites: u.favorites || [],
   isOwner: store.data.grounds.some((g) => g.ownerPhone === u.phone),
+  isAdmin: u.phone === config.adminPhone,
   createdAt: u.createdAt,
 });
 

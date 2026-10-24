@@ -3,7 +3,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState, type ComponentProps } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Badge, Button, Chip, Empty, ErrorBanner, Loading } from '../../components/ui';
-import { api, qs } from '../../lib/api';
+import { api, qs, type Payout } from '../../lib/api';
 import { confirm } from '../../lib/confirm';
 import { errorMessage, rupees } from '../../lib/format';
 import { colors, radius, shadow } from '../../lib/theme';
@@ -34,10 +34,13 @@ export default function OwnerDashboard() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [payout, setPayout] = useState<Payout | null | undefined>(undefined);
 
   const load = useCallback(async () => {
     try {
-      setData(await api<Dashboard>(`/owner/dashboard${qs({ groundId })}`));
+      const [d, p] = await Promise.all([api<Dashboard>(`/owner/dashboard${qs({ groundId })}`), api<Payout | null>('/owner/payout')]);
+      setData(d);
+      setPayout(p);
       setError(null);
     } catch (e) {
       setError(errorMessage(e));
@@ -95,6 +98,28 @@ export default function OwnerDashboard() {
 
       <View style={{ paddingHorizontal: 16, gap: 12 }}>
         <ErrorBanner message={error ?? groundsError} />
+        {payout === null && (
+          <Pressable style={styles.setup} onPress={() => router.push('/owner/payout')}>
+            <Ionicons name="alert-circle" size={22} color={colors.warning} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontWeight: '800', color: colors.text }}>Add your payout account</Text>
+              <Text style={{ color: colors.muted, fontSize: 12 }}>Players can only pay at the venue until you add a UPI ID or bank account.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+          </Pressable>
+        )}
+        {payout && (
+          <Pressable style={styles.payout} onPress={() => router.push('/owner/earnings')}>
+            <Ionicons name="wallet-outline" size={22} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontWeight: '800', color: colors.text }}>Earnings & Payouts</Text>
+              <Text style={{ color: colors.muted, fontSize: 12 }} numberOfLines={1}>
+                {payout.status === 'ACTIVE' ? `Online payments go to ${payout.destination}` : 'Payout account pending verification'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+          </Pressable>
+        )}
         <Button
           title="Manage Slots"
           icon="time-outline"
@@ -153,6 +178,8 @@ const styles = StyleSheet.create({
   stat: { width: '47%', flexGrow: 1, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderRadius: radius, padding: 14, ...shadow },
   statValue: { fontSize: 20, fontWeight: '800', color: colors.text },
   statLabel: { fontSize: 12, color: colors.muted },
+  setup: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.warningSoft, borderRadius: radius, padding: 14 },
+  payout: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: radius, padding: 14, ...shadow },
   pending: { color: colors.warning, backgroundColor: colors.warningSoft, padding: 10, borderRadius: 8, textAlign: 'center' },
   section: { fontSize: 16, fontWeight: '800', color: colors.text, marginTop: 6 },
   booking: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: radius, padding: 14, ...shadow },
