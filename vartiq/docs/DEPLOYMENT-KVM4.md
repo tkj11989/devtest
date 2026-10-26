@@ -295,6 +295,18 @@ TRANSLATE_WEBHOOK_TOKEN=...
 ACCOUNT_ERASE_DELAY_MS=3600000
 ```
 
+**Security settings to add to the same file:**
+
+```
+NODE_ENV=production
+OTP_DAILY_SMS_LIMIT=2000
+OTP_ALLOWED_PREFIXES=+91
+ADMIN_REQUIRE_2FA=1
+CORS_ORIGINS=https://vartiq.prayuktech.com
+```
+
+`NODE_ENV=production` makes the server refuse to start if a testing switch is on. Also: `chmod 600 /etc/vartiq/vartiq.env`, keep `/opt/vartiq/data`, `media/` and backups on an encrypted disk (LUKS) or encrypt the backups (`gpg`/`age`), run `npm audit --omit=dev` before every update, and watch SMS spend at the gateway. The full list of open risks is in `docs/SECURITY.md`.
+
 **Must NOT appear in this file in production:** `OTP_DEV_CODES`, `KYC_SANDBOX`, `PAYMENTS_SANDBOX`, `TRANSLATE_SANDBOX`, `WEBHOOKS_ALLOW_PRIVATE`. The sandbox switches give away verification and Premium, and `OTP_DEV_CODES` shows login codes on screen. Check: `grep -E "SANDBOX|DEV_CODES" /etc/vartiq/vartiq.env` must print nothing.
 
 Without `OTP_WEBHOOK_URL` login codes are only printed in the server log and nobody receives an SMS, so real sign-up does not work until it is set.

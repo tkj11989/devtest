@@ -384,6 +384,18 @@ Fingerprint / face uses WebAuthn platform authenticators (Touch ID, Face ID, Win
 
 REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
 
+## Security
+
+See [docs/SECURITY.md](docs/SECURITY.md) for what is protected and the open risks. Settings that matter in production:
+
+- `NODE_ENV=production`: the server refuses to start if a testing switch (`OTP_DEV_CODES`, `*_SANDBOX`, `WEBHOOKS_ALLOW_PRIVATE`, `PREMIUM_FOR_ALL`) is on.
+- `OTP_DAILY_SMS_LIMIT` (for example `2000`) and `OTP_ALLOWED_PREFIXES` (for example `+91`) protect against SMS bills.
+- `ADMIN_REQUIRE_2FA=1` makes authenticator-app sign-in mandatory for administrators (they set it up on first login: Administrators → Two-step sign-in).
+- `CORS_ORIGINS` (comma list); without it, and with `PUBLIC_URL` set, only your own address may call the API from a browser.
+- **Login PIN** (users): Profile → Devices, browsers and PIN. Asked at every login. Support can remove a forgotten one (Admin → Users).
+- **Sessions** end after 30 days without use; the user can see and sign out devices, or log out everywhere (`GET`/`DELETE /me/sessions`, `PUT /me/login-pin`). Other open devices get a *New login* notice (`security:login`).
+- Signing up with a registered number, or logging in with an unknown one, gives the same answer as any request and sends nothing, so numbers cannot be probed.
+
 ## Terms of Use, Privacy Notice and consent
 
 Everything people agree to, and their rights over their data, is built in. **The texts are written from what the app actually does, but they are not legal advice: have a lawyer review them (and the company details and retention periods) before go-live.**

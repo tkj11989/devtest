@@ -154,6 +154,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.post('/auth/login', authLimit, open, json, run((req) => accounts.login(req.body || {})));
   router.post('/auth/logout', ...authed, run((req) => {
     store.logout(req.credential);
+    service.cutDeadSockets(req.user);
     service.forgetUnlocks({ credential: req.credential });
     return undefined;
   }));
@@ -375,6 +376,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.post('/me/photos', ...authed, express.json({ limit: '1mb' }), run((req) => actions.uploadPhoto(req.user, { image: req.body?.image, thumb: req.body?.thumb }), 201));
   router.put('/me/photos/:id/main', ...authed, run((req) => actions.setMainPhoto(req.user, { id: p(req, 'id') })));
   router.delete('/me/photos/:id', ...authed, run((req) => actions.deletePhoto(req.user, { id: p(req, 'id') })));
+  router.put('/me/login-pin', ...authed, json, run((req) => actions.setLoginPin(req.user, { pin: req.body?.pin, current: req.body?.current })));
+  router.get('/me/sessions', ...authed, run((req) => actions.sessionsList(req.user, {}, req.ctx)));
+  router.delete('/me/sessions', ...authed, run((req) => actions.endOtherSessions(req.user, {}, req.ctx)));
   router.post('/me/link-code', ...authed, run((req) => actions.linkCodeCreate(req.user, {}, req.ctx), 201));
   router.get('/me/linked-devices', ...authed, run((req) => actions.linkedDevices(req.user, {}, req.ctx)));
   router.delete('/me/linked-devices/:id', ...authed, run((req) => actions.unlinkDevice(req.user, { id: p(req, 'id') }, req.ctx)));

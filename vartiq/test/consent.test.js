@@ -241,7 +241,7 @@ test('deleting an account: permanently disabled at once, chats and personal data
   // Immediately: permanently disabled. No login, no session, nothing of them is shown, nobody can write to them.
   assert.strictEqual((await api('GET', '/me', { token: a.token })).status, 401);
   assert.strictEqual(store.data.users[ua].status, 'permanently_disabled');
-  assert.strictEqual((await api('POST', '/auth/otp', { body: { purpose: 'login', phone: '+919811100041' } })).body.error.code, 'not_registered', 'the number no longer belongs to that account');
+  assert.strictEqual((await api('POST', '/auth/otp', { body: { purpose: 'login', phone: '+919811100041' } })).body.devCode, undefined, 'the number no longer belongs to that account: no code is made');
   assert.throws(() => store.createSession(ua), /being deleted/);
   assert.deepStrictEqual([store.publicUser(ua).displayName, store.publicUser(ua).about, store.publicUser(ua).deleted], ['Deleted account', '', true]);
   assert.deepStrictEqual(store.searchUsers('asha', ub), []);

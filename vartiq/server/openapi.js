@@ -403,7 +403,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
-          consent: { terms: true, version: '2026-10-24' },
+          consent: { terms: true, version: '2026-10-26' },
           birthDate: '1990-05-17',
         }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session. For someone under 18 the response also has `guardian` (`state: "pending"`, whether the private link reached the parent, and the masked contacts): the account cannot be used until the parent or guardian agrees.'), ...errors(400, 403, 409, 429, 503) },
@@ -418,7 +418,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: { type: 'string', format: 'email' },
           requestId: { type: 'string' },
           code: { type: 'string', pattern: '^\\d{6}$' },
-          clientType: { type: 'string', enum: ['web', 'app'], description: '`web` for a browser: while a primary phone is signed in, a browser cannot use an SMS code and gets `403 passcode_required`' },
+          clientType: { type: 'string', enum: ['web', 'app'], description: 'Send `app` only from the phone app. Anything else is treated as a browser: while a primary phone is signed in it cannot use an SMS code and gets `403 passcode_required` (also from `POST /auth/otp`)' },
+          pin: { type: 'string', pattern: '^\\d{6}$', description: 'the login PIN, if the account has one (`401 pin_required` without it; the code is not used up; `401 wrong_pin`; `429 too_many_attempts` after 5 wrong)' },
           linkCode: { type: 'string', pattern: '^\\d{6}$', description: 'browser login: the passcode made on the primary phone (`POST /me/link-code`), sent with `phone` instead of `requestId` and `code`' },
           deviceName: { type: 'string', maxLength: 60, description: 'shown in the list of linked browsers' },
           username: { type: 'string', description: 'older accounts only, with password' },
@@ -870,6 +871,17 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         body: jsonBody(obj({ on: { type: 'boolean' } }, ['on'])),
         responses: { 200: ok(ref('ProfilePhotos')), ...errors(400, 401, 402, 409) },
       }),
+    },
+    '/me/login-pin': {
+      put: op(T.me, 'Set, change or remove my login PIN', {
+        description: 'A 6-digit PIN asked at every login (SMS code or browser passcode), so a stolen SMS code alone is not enough. `pin` is the new PIN, or `null` to remove it; `current` is the present PIN and is required to change or remove one. A forgotten PIN can only be removed by support.',
+        body: jsonBody(obj({ pin: { type: ['string', 'null'], pattern: '^\\d{6}$' }, current: { type: 'string' } }, ['pin'])),
+        responses: { 200: ok(obj({ hasPin: { type: 'boolean' } })), ...errors(400, 401, 429) },
+      }),
+    },
+    '/me/sessions': {
+      get: op(T.me, 'Devices logged in to my account', { responses: { 200: ok(obj({ sessions: arrayOf(obj({ id: { type: 'string' }, name: { type: 'string' }, via: { type: 'string', enum: ['sms', 'link'] }, at: { type: 'integer' }, seen: { type: 'integer' }, current: { type: 'boolean' } })), hasPin: { type: 'boolean' } })), ...errors(401) } }),
+      delete: op(T.me, 'Log out everywhere except this device', { description: 'Ends every other login session and closes their live connections. API keys are not affected (revoke them separately).', responses: { 200: ok(obj({ ended: { type: 'integer' } })), ...errors(401) } }),
     },
     '/me/link-code': {
       post: op(T.me, 'Make a passcode to log in on a browser', {
@@ -1339,6 +1351,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /me/photo-privacy': 'setPhotoPrivacy',
     'put /me/photo-rotation': 'setPhotoRotation',
     'post /me/link-code': 'createLinkCode',
+    'put /me/login-pin': 'setLoginPin',
+    'get /me/sessions': 'listSessions',
+    'delete /me/sessions': 'endOtherSessions',
     'get /me/linked-devices': 'listLinkedDevices',
     'delete /me/linked-devices/{id}': 'unlinkDevice',
     'get /users/{username}/photos': 'getUserPhotos',

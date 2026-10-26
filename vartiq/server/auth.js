@@ -18,7 +18,7 @@ const guardianRules = require('./guardian');
  * Flow: `requestCode` sends a code and returns a `requestId`; `register` / `login`
  * take that `requestId` with the code the person typed.
  */
-function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge = () => guardianRules.DEFAULT_MIN_AGE, publicUrl = process.env.PUBLIC_URL }) {
+function createAuth({ store, otp, linking, onLogin = () => {}, assertSignupsOpen = () => {}, minAge = () => guardianRules.DEFAULT_MIN_AGE, publicUrl = process.env.PUBLIC_URL }) {
   /** `{ phone }` or `{ email }` -> `{ channel, to }` (normalised), or a 400. */
   function destination(body, { allowEmail = true } = {}) {
     const bad = (err) => new ApiError(400, err.code || 'invalid_request', err.message);
@@ -32,15 +32,25 @@ function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge 
   }
 
   const mailer = guardianRules.createMailer(otp);
+  const oldFails = new Map(); // username -> wrong password count (old password logins lock for 15 minutes after 10)
 
   const owner = ({ channel, to }) => (channel === 'sms' ? store.findByPhone(to) : store.findByEmail(to));
   const what = (channel) => (channel === 'sms' ? 'mobile number' : 'email');
 
   /** A browser may not log in with an SMS code while a primary phone is signed in: it needs a passcode from that phone. */
   function needsPasscode(body, username) {
-    if (body.clientType === 'web' && store.hasPrimary(username)) {
+    // Anything that does not say it is the phone app is treated as a browser. (A client can still lie: the login PIN and the
+    // new-login alert are the protection against someone who has the SMS code.)
+    if (body.clientType !== 'app' && store.hasPrimary(username)) {
       throw new ApiError(403, 'passcode_required', 'To log in on a browser, open VartiQ on your phone (Profile, Link a browser), get a passcode and enter it here.');
     }
+  }
+
+  /** A new login: the session, and a note to the person's other devices. */
+  function signedIn(username, { via, name }) {
+    const session = store.createSession(username, { via, name });
+    onLogin(username, { via, name: name || (via === 'link' ? 'Browser' : 'Phone or app'), at: Date.now() });
+    return session;
   }
 
   return {
@@ -51,14 +61,11 @@ function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge 
       if (purpose === 'register') assertSignupsOpen();
       const dest = destination(body);
       const existing = owner(dest);
-      if (purpose === 'register' && existing) {
-        throw new ApiError(409, `${dest.channel === 'sms' ? 'phone' : 'email'}_taken`, `This ${what(dest.channel)} is already registered. Log in instead.`);
-      }
-      if (purpose === 'login' && !existing) {
-        throw new ApiError(404, 'not_registered', `No account uses this ${what(dest.channel)}. Sign up first.`);
-      }
-      if (purpose === 'login') needsPasscode(body, existing);
-      return otp.request({ ...dest, purpose });
+      if (purpose === 'login' && existing) needsPasscode(body, existing);
+      // Nobody can learn whether a number has an account: asking to sign up with a registered number, or to log in with an
+      // unknown one, gets the same answer as any other request (and the same limits), but no code is sent.
+      const decoy = (purpose === 'register' && !!existing) || (purpose === 'login' && !existing);
+      return otp.request({ ...dest, purpose, decoy });
     },
 
     /**
@@ -110,13 +117,14 @@ function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge 
         email = destination({ email: body.email });
         if (guardian?.email && guardian.email === email.to) throw new ApiError(400, 'guardian_same_person', "Your parent's or guardian's email must be different from yours");
       }
-      if (store.findByPhone(phone.to)) throw new ApiError(409, 'phone_taken', 'This mobile number is already registered. Log in instead.');
-      if (email && store.findByEmail(email.to)) throw new ApiError(409, 'email_taken', 'This email is already registered.');
-
       // Check every code before using any up, so one typo doesn't cost the other code.
       const otpOf = (o) => ({ requestId: o?.requestId, code: o?.code });
       otp.verify({ ...otpOf(body.phoneOtp), ...phone, purpose: 'register', label: email ? 'SMS code' : 'code', consume: false });
       if (email) otp.verify({ ...otpOf(body.emailOtp), ...email, purpose: 'register', label: 'email code', consume: false });
+
+      // Only now, with the codes proved, say that a number or email is taken (the person owns it, so nothing is given away).
+      if (store.findByPhone(phone.to)) throw new ApiError(409, 'phone_taken', 'This mobile number is already registered. Log in instead.');
+      if (email && store.findByEmail(email.to)) throw new ApiError(409, 'email_taken', 'This email is already registered.');
 
       let result;
       try {
@@ -151,10 +159,18 @@ function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge 
      */
     login(body = {}) {
       if (body.username != null && body.password != null) {
+        const key = String(body.username).trim().toLowerCase();
+        const f = oldFails.get(key);
+        if (f && f.until > Date.now()) throw new ApiError(429, 'too_many_attempts', 'Too many wrong attempts. Try again later.');
         try {
-          return store.login(body.username, body.password);
+          const session = store.login(body.username, body.password);
+          oldFails.delete(key);
+          onLogin(key, { via: 'sms', name: body.deviceName || 'Phone or app', at: Date.now() });
+          return session;
         } catch (err) {
           if (err.code === 'account_suspended') throw new ApiError(403, 'account_suspended', err.message);
+          const n = (f?.n || 0) + 1;
+          oldFails.set(key, { n, until: n >= 10 ? Date.now() + 15 * 60 * 1000 : 0 });
           throw new ApiError(401, 'invalid_credentials', err.message);
         }
       }
@@ -165,19 +181,27 @@ function createAuth({ store, otp, linking, assertSignupsOpen = () => {}, minAge 
         const who = owner(dest);
         if (!who) throw new ApiError(404, 'not_registered', `No account uses this ${what(dest.channel)}.`);
         try {
+          store.checkLoginPin(who, body.pin);
           linking.consume(who, body.linkCode);
         } catch (err) {
           throw new ApiError(err.status || 401, err.code || 'invalid_passcode', err.message);
         }
-        return store.createSession(who, { via: 'link', name: body.deviceName });
+        return signedIn(who, { via: 'link', name: body.deviceName });
       }
       const known = owner(dest);
       if (known) needsPasscode(body, known);
       if (!body.requestId) throw new ApiError(400, 'invalid_request', 'Send the "requestId" from /auth/otp and the "code"');
-      otp.verify({ requestId: body.requestId, code: body.code, ...dest, purpose: 'login' });
+      otp.verify({ requestId: body.requestId, code: body.code, ...dest, purpose: 'login', consume: false });
       const username = owner(dest);
-      if (!username) throw new ApiError(404, 'not_registered', `No account uses this ${what(dest.channel)}.`);
-      return store.createSession(username);
+      if (!username) throw new ApiError(400, 'otp_expired', 'The code has expired or was not sent to this address. Ask for a new one.');
+      // The optional PIN is checked before the code is used up, so asking for it does not cost the code.
+      try {
+        store.checkLoginPin(username, body.pin);
+      } catch (err) {
+        throw new ApiError(err.status || 401, err.code || 'wrong_pin', err.message);
+      }
+      otp.consume(body.requestId);
+      return signedIn(username, { via: 'sms', name: body.deviceName });
     },
 
     destination,

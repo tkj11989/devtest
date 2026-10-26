@@ -321,7 +321,8 @@ test('behind a proxy: rate limits count each visitor by the forwarded address, n
   await new Promise((r) => app.server.listen(0, r));
   t.after(() => { app.io.close(); app.server.close(); });
   const base = `http://localhost:${app.server.address().port}/api/v1`;
-  const hit = (ip) => fetch(`${base}/auth/otp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify({ purpose: 'login', phone: '+919876543210' }) }).then((r) => r.status);
-  assert.deepStrictEqual([await hit('203.0.113.7'), await hit('203.0.113.7'), await hit('203.0.113.7')], [404, 404, 429], 'the third request from one visitor is limited');
-  assert.strictEqual(await hit('198.51.100.9'), 404, 'another visitor is not affected');
+  let n = 0;
+  const hit = (ip) => fetch(`${base}/auth/otp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify({ purpose: 'login', phone: `+9198765432${String(n++).padStart(2, '0')}` }) }).then((r) => r.status);
+  assert.deepStrictEqual([await hit('203.0.113.7'), await hit('203.0.113.7'), await hit('203.0.113.7')], [200, 200, 429], 'the third request from one visitor is limited');
+  assert.strictEqual(await hit('198.51.100.9'), 200, 'another visitor is not affected');
 });

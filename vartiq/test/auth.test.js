@@ -28,7 +28,7 @@ async function setup(t) {
   };
   /** Ask for a code and read it from the outbox, like a phone would. */
   const codeFor = async (body, path = '/auth/otp', token) => {
-    const res = await api('POST', path, body, token);
+    const res = await api('POST', path, body?.purpose === 'login' ? { clientType: 'app', ...body } : body, token);
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body.devCode, undefined, 'codes are not returned unless OTP_DEV_CODES=1');
     return { requestId: res.body.requestId, code: outbox[outbox.length - 1].code, sent: res.body };
@@ -95,7 +95,11 @@ test('api: individual signs up and logs in with mobile number + OTP', async (t) 
   const bad = await api('POST', '/auth/otp', { purpose: 'register', phone: '98765' });
   assert.deepStrictEqual([bad.status, bad.body.error.code], [400, 'invalid_phone']);
   const notYet = await api('POST', '/auth/otp', { purpose: 'login', phone: '+919876543210' });
-  assert.deepStrictEqual([notYet.status, notYet.body.error.code], [404, 'not_registered']);
+  // Nobody can find out which numbers have an account: an unknown number gets the same answer, but no SMS goes out.
+  assert.strictEqual(notYet.status, 200);
+  assert.ok(notYet.body.requestId);
+  assert.strictEqual(outbox.length, 0, 'nothing is sent to a number without an account');
+  assert.strictEqual((await api('POST', '/auth/login', { phone: '+919876543210', requestId: notYet.body.requestId, code: '123456' })).body.error.code, 'otp_expired');
 
   const phone = '+91 98765 43210';
   const { requestId, code, sent } = await codeFor({ purpose: 'register', phone });
@@ -117,8 +121,11 @@ test('api: individual signs up and logs in with mobile number + OTP', async (t) 
 
   // The code was used up; the number is taken now.
   const again = await api('POST', '/auth/register', { birthDate: '1990-05-17', consent, displayName: 'Copy', phone, phoneOtp: { requestId, code } });
-  assert.strictEqual(again.status, 409);
-  assert.strictEqual((await api('POST', '/auth/otp', { purpose: 'register', phone })).body.error.code, 'phone_taken');
+  assert.strictEqual(again.status, 400, 'the code was used up');
+  const sentBefore = outbox.length;
+  const decoy = await api('POST', '/auth/otp', { purpose: 'register', phone });
+  assert.strictEqual(decoy.status, 200, 'signing up with a registered number looks like any other request');
+  assert.strictEqual(outbox.length, sentBefore, 'and sends nothing');
 
   // Same name again gets a different username.
   const other = await codeFor({ purpose: 'register', phone: '+14155550100' });
@@ -127,9 +134,9 @@ test('api: individual signs up and logs in with mobile number + OTP', async (t) 
 
   // Log in with a code by SMS. Wrong code, then right code.
   const login = await codeFor({ purpose: 'login', phone: '+919876543210' });
-  const nope = await api('POST', '/auth/login', { phone, requestId: login.requestId, code: login.code === '123456' ? '654321' : '123456' });
+  const nope = await api('POST', '/auth/login', { phone, requestId: login.requestId, code: login.code === '123456' ? '654321' : '123456', clientType: 'app' });
   assert.deepStrictEqual([nope.status, nope.body.error.code], [400, 'otp_invalid']);
-  const ok = await api('POST', '/auth/login', { phone, requestId: login.requestId, code: login.code });
+  const ok = await api('POST', '/auth/login', { phone, requestId: login.requestId, code: login.code, clientType: 'app' });
   assert.strictEqual(ok.status, 200);
   assert.strictEqual(ok.body.user.username, 'anitarao');
   // A register code can't be used to log in.
@@ -173,9 +180,9 @@ test('api: business sign-up needs both mobile and email verified', async (t) => 
   assert.strictEqual(me.body.business.timezone, 'Asia/Kolkata');
 
   // The email is taken now; a business can log in with a code by email too.
-  assert.strictEqual((await api('POST', '/auth/otp', { purpose: 'register', email })).body.error.code, 'email_taken');
+  assert.strictEqual((await api('POST', '/auth/otp', { purpose: 'register', email })).status, 200);
   const login = await codeFor({ purpose: 'login', email });
-  assert.strictEqual((await api('POST', '/auth/login', { email, ...login })).body.user.username, reg.body.user.username);
+  assert.strictEqual((await api('POST', '/auth/login', { email, ...login, clientType: 'app' })).body.user.username, reg.body.user.username);
 });
 
 test('api: change a verified number/email; reset the chat lock code by SMS', async (t) => {

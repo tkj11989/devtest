@@ -60,7 +60,7 @@ test('admin sign-in: separate accounts, roles, rate limit, sessions', async (t) 
   const ok = await login();
   assert.deepStrictEqual([ok.status, ok.body.admin, ok.body.token.startsWith('adm_')], [200, { username: 'root', role: 'super' }, true]);
   const token = ok.body.token;
-  assert.deepStrictEqual((await admin('GET', '/me', { token })).body.admin, { username: 'root', role: 'super' });
+  assert.deepStrictEqual((await admin('GET', '/me', { token })).body.admin, { username: 'root', role: 'super', twoStep: false, limited: false });
 
   // Admins: create a support admin; support can look and moderate but not change settings or admins.
   assert.strictEqual((await admin('POST', '/admins', { token, body: { username: 'helper', password: 'short', role: 'support' } })).status, 400);

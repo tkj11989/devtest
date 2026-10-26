@@ -1016,7 +1016,7 @@ class Store {
   }
 
   listAdmins() {
-    return Object.values(this.data.admins).map(({ username, role, createdAt }) => ({ username, role, createdAt }));
+    return Object.values(this.data.admins).map(({ username, role, createdAt, totp }) => ({ username, role, createdAt, twoStep: !!totp?.secret }));
   }
 
   removeAdmin(username) {
@@ -1344,7 +1344,7 @@ class Store {
   }
 
   // Login sessions are saved with the rest of the data (only a hash of each token), so restarting the server does not log
-  // everybody out. A session lasts `Store.SESSION_MS` (90 days) from login.
+  // everybody out. A session ends after `Store.SESSION_MS` (30 days) without use.
   static _tokenKey(token) {
     return crypto.createHash('sha256').update(String(token)).digest('hex');
   }
@@ -1354,11 +1354,80 @@ class Store {
     const key = Store._tokenKey(token);
     const s = this.data.sessions[key];
     if (!s) return null;
-    if (Date.now() - s.at > Store.SESSION_MS) {
+    const now = Date.now();
+    if (now - (s.seen || s.at) > Store.SESSION_MS) {
       delete this.data.sessions[key];
       return null;
     }
+    // A session stays alive while it is used (30 days since last use); the stamp is only rewritten about once an hour.
+    if (now - (s.seen || s.at) > 60 * 60 * 1000) {
+      s.seen = now;
+      this._save();
+    }
     return s.u;
+  }
+
+  // ---------- login PIN ----------
+  //
+  // Optional second step for people who want one: a 6-digit PIN asked at every login (SMS code or browser passcode), so a
+  // stolen SMS code alone is not enough. Wrong guesses lock it for longer each time; the count is kept with the account.
+
+  static PIN_FAILS = 5;
+
+  /** Wrong secret-code guesses for chats (count and the time until which they are refused); null clears them. */
+  setLockGuard(username, guard) {
+    const u = this.data.users[username];
+    if (!u) return;
+    if (guard === null) {
+      if (u.lockGuard) { delete u.lockGuard; this._save(); }
+      return;
+    }
+    u.lockGuard = { fails: guard.fails, until: guard.until };
+    this._save();
+  }
+
+  hasLoginPin(username) {
+    return !!this.data.users[username]?.loginPin;
+  }
+
+  setLoginPin(username, pin, current) {
+    const u = this.data.users[username];
+    if (u.loginPin) this.checkLoginPin(username, current);
+    if (pin === null) {
+      delete u.loginPin;
+    } else {
+      if (!/^\d{6}$/.test(String(pin))) throw Object.assign(new Error('The PIN must be 6 digits'), { status: 400, code: 'invalid_request' });
+      const salt = crypto.randomBytes(16).toString('hex');
+      u.loginPin = { salt, hash: Store._hash(String(pin), salt), fails: 0, until: 0 };
+    }
+    this._save();
+  }
+
+  /** Throws `pin_required` (none given), `wrong_pin` or `too_many_attempts`; returns when the PIN is right (or none is set). */
+  checkLoginPin(username, pin) {
+    const p = this.data.users[username]?.loginPin;
+    if (!p) return;
+    const err = (status, code, message) => Object.assign(new Error(message), { status, code });
+    if (pin === undefined || pin === null || pin === '') throw err(401, 'pin_required', 'Enter your VartiQ PIN');
+    if (p.until > Date.now()) throw err(429, 'too_many_attempts', `Too many wrong PINs. Try again in ${Math.ceil((p.until - Date.now()) / 60000)} minutes.`);
+    const hash = Store._hash(String(pin), p.salt);
+    if (crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(p.hash, 'hex'))) {
+      if (p.fails) { p.fails = 0; p.until = 0; this._save(); }
+      return;
+    }
+    p.fails += 1;
+    if (p.fails >= Store.PIN_FAILS) p.until = Date.now() + Math.min(24 * 3600 * 1000, 5 * 60 * 1000 * 2 ** (p.fails - Store.PIN_FAILS));
+    this._save();
+    throw err(401, 'wrong_pin', 'Wrong PIN');
+  }
+
+  /** Support: remove a forgotten PIN (the person then logs in with the SMS code alone). */
+  resetLoginPin(username) {
+    const u = this.data.users[username];
+    if (!u?.loginPin) return false;
+    delete u.loginPin;
+    this._save();
+    return true;
   }
 
   /** End every login session of one person. */
@@ -1371,7 +1440,7 @@ class Store {
     const out = [];
     for (const [key, s] of Object.entries(this.data.sessions)) {
       if (s.u !== username) continue;
-      if (Date.now() - s.at > Store.SESSION_MS) continue;
+      if (Date.now() - (s.seen || s.at) > Store.SESSION_MS) continue;
       out.push([key, s]);
     }
     return out;
@@ -1397,9 +1466,28 @@ class Store {
       .sort((a, b) => b.at - a.at);
   }
 
-  /** Sign a linked browser out. Returns false if there is none with that id. */
-  unlinkDevice(username, id) {
-    const hit = this._liveSessions(username).find(([key, s]) => s.via === 'link' && key.slice(0, 12) === String(id));
+  /** Every login session of the person (phones and browsers), newest first; `current` marks the caller's own. */
+  sessionsOf(username, token) {
+    const mine = token ? Store._tokenKey(token) : '';
+    return this._liveSessions(username)
+      .map(([key, s]) => ({ id: key.slice(0, 12), name: s.name || (s.via === 'link' ? 'Browser' : 'Phone or app'), via: s.via === 'link' ? 'link' : 'sms', at: s.at, seen: s.seen || s.at, current: key === mine }))
+      .sort((a, b) => b.at - a.at);
+  }
+
+  /** Log out everywhere except the caller's own session (and API keys, which have their own list). Returns how many ended. */
+  logoutOthers(username, token) {
+    const mine = Store._tokenKey(token || '');
+    let n = 0;
+    for (const [key, s] of Object.entries(this.data.sessions)) {
+      if (s.u === username && key !== mine) { delete this.data.sessions[key]; n += 1; }
+    }
+    if (n) this._save();
+    return n;
+  }
+
+  /** Sign a session out by its id (a linked browser, or with `any`, a phone too). Returns false if there is none. */
+  unlinkDevice(username, id, { any = false } = {}) {
+    const hit = this._liveSessions(username).find(([key, s]) => (any || s.via === 'link') && key.slice(0, 12) === String(id));
     if (!hit) return false;
     delete this.data.sessions[hit[0]];
     this._save();
@@ -2950,7 +3038,7 @@ Store.TIMER_MIN = 60;
 Store.TIMER_MAX = 365 * 24 * 60 * 60;
 Store.API_KEY_PREFIX = 'cak_';
 Store.MAX_API_KEYS = 10;
-Store.SESSION_MS = 90 * 24 * 60 * 60 * 1000;
+Store.SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 Store.MAX_WEBHOOKS = 5;
 Store.WEBHOOK_MAX_FAILURES = 20;
 /** Events that can be delivered to webhooks (same names and payloads as the Socket.IO events). */

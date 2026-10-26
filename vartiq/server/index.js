@@ -65,6 +65,9 @@ const SOCKET_ACTIONS = {
   'messages:get': 'messages',
   'message:send': 'sendText',
   'voice:send': 'sendVoice',
+  'pin:set': 'setLoginPin',
+  'sessions:list': 'sessionsList',
+  'sessions:end-others': 'endOtherSessions',
   'link:create': 'linkCodeCreate',
   'link:list': 'linkedDevices',
   'link:remove': 'unlinkDevice',
@@ -193,7 +196,9 @@ function createApp({
   recordConsentMs,
   webhooks: webhookOptions = { allowPrivate: process.env.WEBHOOKS_ALLOW_PRIVATE === '1' },
   rateLimit,
-  corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()) : '*',
+  // Browser apps on other websites may only call the API when listed: CORS_ORIGINS, or just our own address when PUBLIC_URL is set.
+  corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
+    : (process.env.PUBLIC_URL ? [new URL(process.env.PUBLIC_URL).origin] : '*'),
   messageSweepMs = 5000,
   subscriptionSweepMs = 60 * 1000,
   deletionSweepMs = 60 * 1000,
@@ -220,6 +225,16 @@ function createApp({
     res.set('Permissions-Policy', 'geolocation=(self), microphone=(self), camera=(self), payment=(), usb=(), serial=(), hid=(), bluetooth=(), display-capture=()');
     next();
   });
+  // Headers for every page: the app may only load its own scripts (so an injected script cannot run or phone home), nothing may
+  // frame it, browsers must keep using https once they have seen it, and files are never guessed to be another type.
+  // The admin dashboard, the guardian page and the API docs set their own, stricter or special policies below.
+  const APP_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+  app.use((req, res, next) => {
+    res.set({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'X-Frame-Options': 'DENY' });
+    if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    if (!/^\/(admin|api\/docs|guardian)(\/|$)/.test(req.path)) res.set('Content-Security-Policy', APP_CSP);
+    next();
+  });
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
   // Voice messages and status photos are uploaded over the socket.
   const io = new Server(server, { maxHttpBufferSize: 4 * 1024 * 1024 });
@@ -232,7 +247,7 @@ function createApp({
   const webhooks = createWebhookDispatcher({ store, ...webhookOptions });
   const otp = createOtpService({ sender: createOtpSender(), exposeCodes: process.env.OTP_DEV_CODES === '1', ...otpOptions });
   const linking = createLinking();
-  const auth = createAuth({ store, otp, linking, publicUrl, minAge: () => store.getSettings().limits.minAge, assertSignupsOpen: () => service.assertFeature('registration') });
+  const auth = createAuth({ store, otp, linking, onLogin: (u, info) => service.notifyNewLogin(u, info), publicUrl, minAge: () => store.getSettings().limits.minAge, assertSignupsOpen: () => service.assertFeature('registration') });
   const kyc = createKyc({ store, otp, gateway: createKycGateway(), sandbox: process.env.KYC_SANDBOX === '1', ...kycOptions });
   const payments = createPayments({
     store,
@@ -308,7 +323,12 @@ function createApp({
   // The parent or guardian's page: opened from the private link sent to them (no sign-in; the link is the key).
   app.get('/guardian/:token', (req, res) => {
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
-    res.type('html').send(require('./guardian').pageHtml());
+    const html = require('./guardian').pageHtml();
+    // Its one inline script is allowed by hash, so nothing else can run on this page.
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] || '';
+    const hash = crypto.createHash('sha256').update(script).digest('base64');
+    res.set('Content-Security-Policy', `default-src 'none'; script-src 'sha256-${hash}'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+    res.type('html').send(html);
   });
   app.get('/api/docs', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'api-docs.html')));
   // Swagger UI is served from node_modules so the docs work without internet access.
@@ -389,7 +409,7 @@ function createApp({
     // Voice notes from a locked chat need it unlocked in this app session.
     const ctx = { lockKey: service.lockKeyFor(username, bearer(req), req.get('x-app-session')) };
     if (!service.mediaAllowed(username, req.params.id, ctx)) return res.status(423).end();
-    res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
+    res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable', 'Content-Security-Policy': "default-src 'none'; sandbox" });
     res.send(media.buffer);
   });
 
@@ -507,6 +527,16 @@ function createApp({
 if (require.main === module) {
   (async () => {
     const port = Number(process.env.PORT) || 3000;
+    // Switches that give away verification, Premium or login codes are for development only: a production server refuses them.
+    if (process.env.NODE_ENV === 'production') {
+      const unsafe = ['OTP_DEV_CODES', 'KYC_SANDBOX', 'PAYMENTS_SANDBOX', 'TRANSLATE_SANDBOX', 'WEBHOOKS_ALLOW_PRIVATE'].filter((k) => process.env[k] === '1');
+      if (process.env.PREMIUM_FOR_ALL === '1') unsafe.push('PREMIUM_FOR_ALL');
+      if (unsafe.length) {
+        console.error(`Refusing to start in production with testing switches on: ${unsafe.join(', ')}. Remove them from the environment file.`);
+        process.exit(1);
+      }
+      if (!process.env.PUBLIC_URL) console.warn('PUBLIC_URL is not set: parent/guardian links, payment returns and the CORS allow-list will not work properly.');
+    }
     // Browsers only allow camera/microphone on https:// or localhost, so serve
     // HTTPS when a certificate is provided (needed to call from other devices).
     const tls = process.env.SSL_KEY && process.env.SSL_CERT

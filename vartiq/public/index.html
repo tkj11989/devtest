@@ -158,6 +158,12 @@
           <button type="button" class="link" id="passcode-back">Use an SMS code instead</button>
         </div>
 
+        <div class="passcode-box hidden" id="pin-box" role="group" aria-labelledby="pin-title">
+          <strong id="pin-title">Your VartiQ PIN</strong>
+          <p class="muted">This account has a login PIN. Enter it to finish logging in.</p>
+          <input name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="6-digit PIN" aria-label="Login PIN" />
+        </div>
+
         <p id="auth-error" class="error" role="alert"></p>
         <button type="submit" class="primary" id="auth-submit">Send code</button>
         <button type="button" class="link login-only" id="auth-use-email">Business account? Log in with email</button>
@@ -339,7 +345,7 @@
       </div>
 
       <div class="panel overlay hidden" id="panel-link">
-        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Link a browser</h2></header>
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Devices and login</h2></header>
         <div class="pad stack">
           <p class="muted" id="link-lead">To log in to VartiQ on a computer, make a passcode here and type it on the login page together with your mobile number. A passcode works once and lasts 2 minutes.</p>
           <button class="primary" type="button" id="link-make">Make a passcode</button>
@@ -348,9 +354,18 @@
             <p class="muted small-note" id="link-countdown"></p>
           </div>
           <p class="error" id="link-error" role="alert"></p>
-          <h3>Logged-in browsers</h3>
+          <h3>Logged-in devices</h3>
           <div id="link-list" class="stack"></div>
-          <p class="muted small-note">Only the phone you signed up on can make passcodes and sign browsers out.</p>
+          <button class="link" type="button" id="link-end-others">Log out all other devices</button>
+          <p class="muted small-note">Only the phone you signed up on can make passcodes and sign other devices out.</p>
+          <h3>Login PIN</h3>
+          <div class="card-lite stack" id="pin-card">
+            <p class="muted small-note" id="pin-note">A 6-digit PIN asked at every login, on top of the SMS code, so a stolen SMS code alone cannot open your account.</p>
+            <input id="pin-current" type="password" inputmode="numeric" maxlength="6" placeholder="Current PIN" autocomplete="off" class="hidden" />
+            <input id="pin-new" type="password" inputmode="numeric" maxlength="6" placeholder="New 6-digit PIN" autocomplete="off" />
+            <div class="row"><button class="primary" type="button" id="pin-save">Save PIN</button> <button class="link hidden" type="button" id="pin-remove">Remove PIN</button></div>
+            <p class="error" id="pin-error" role="alert"></p>
+          </div>
         </div>
       </div>
 
@@ -522,7 +537,7 @@
           </div>
           <button class="link-row" type="button" id="btn-link">
             <svg viewBox="0 0 24 24"><path d="M17 1H7a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2Zm0 18H7V5h10v14Z"/></svg>
-            <span><strong>Link a browser</strong><small id="link-summary">Get a passcode to log in on a computer</small></span>
+            <span><strong>Devices, browsers and PIN</strong><small id="link-summary">Get a passcode to log in on a computer</small></span>
           </button>
           <button class="link-row" type="button" id="btn-photos">
             <svg viewBox="0 0 24 24"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.500 13.500l2.500 3 3.500-4.500 4.500 6H5l3.500-4.500Z"/></svg>

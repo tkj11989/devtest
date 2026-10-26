@@ -60,7 +60,6 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   const unlocked = new Map(); // lockKey -> Set(convId)
   const revealed = new Set(); // lockKeys that opened their hidden chats
   const webauthn = createWebAuthn();
-  const attempts = new Map(); // username -> { fails, until }
   const MAX_FAILS = 5;
 
   /** Identifies one app session of `username`. */
@@ -149,17 +148,18 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
 
   /** Wrong codes count against the user; after MAX_FAILS they must wait (doubling, up to an hour). */
   const checkSecret = (me, ok, what = 'secret code') => {
-    const a = attempts.get(me) || { fails: 0, until: 0 };
+    // The count is kept with the account, so restarting the server does not give an attacker fresh tries.
+    const a = { ...(store.data.users[me]?.lockGuard || { fails: 0, until: 0 }) };
     if (a.until > Date.now()) {
       throw new ApiError(429, 'too_many_attempts', `Too many wrong attempts. Try again in ${Math.ceil((a.until - Date.now()) / 1000)} seconds.`);
     }
     if (ok()) {
-      attempts.delete(me);
+      store.setLockGuard(me, null);
       return;
     }
     a.fails += 1;
     if (a.fails >= MAX_FAILS) a.until = Date.now() + Math.min(60 * 60 * 1000, 60 * 1000 * 2 ** (a.fails - MAX_FAILS));
-    attempts.set(me, a);
+    store.setLockGuard(me, a);
     const left = MAX_FAILS - a.fails;
     throw new ApiError(403, 'wrong_code', `Wrong ${what}${left > 0 ? ` (${left} ${left === 1 ? 'try' : 'tries'} left)` : ''}`);
   };
@@ -390,6 +390,17 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   })();
 
   /** Children who turned 18 are released from their guardian's controls (run regularly). Tells their apps. */
+  /** Close live connections whose login has ended (a session was signed out, or everything was). */
+  const cutDeadSockets = (username) => {
+    for (const id of io.sockets.adapter.rooms.get(userRoom(username)) || []) {
+      const s = io.sockets.sockets.get(id);
+      if (s && store.userForToken(s.handshake.auth?.token) !== username) s.disconnect(true);
+    }
+  };
+  /** Tell the person's open devices that someone just logged in. */
+  const notifyNewLogin = (username, info) => {
+    io.to(userRoom(username)).emit('security:login', info);
+  };
   const rotatePhotos = () => {
     const changed = store.rotatePhotos();
     for (const u of changed) photosChanged(u);
@@ -1223,13 +1234,37 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { devices: store.linkedDevices(me, ctx.credential || ''), primary: !!ctx.credential && store.isPrimaryToken(ctx.credential) };
     },
 
+    /** Every device logged in to my account (phones and browsers), and whether I have a login PIN. */
+    sessionsList(me, _p, ctx = {}) {
+      return { sessions: store.sessionsOf(me, ctx.credential), hasPin: store.hasLoginPin(me) };
+    },
+
+    /** Log out everywhere except this device. */
+    endOtherSessions(me, _p, ctx = {}) {
+      const ended = store.logoutOthers(me, ctx.credential);
+      cutDeadSockets(me);
+      return { ended };
+    },
+
+    /** Set, change or remove (`pin: null`) the 6-digit PIN asked at every login. Changing or removing needs the current one. */
+    setLoginPin(me, { pin, current } = {}) {
+      if (pin !== null && typeof pin !== 'string') throw new ApiError(400, 'invalid_request', '"pin" must be 6 digits, or null to remove it');
+      try {
+        store.setLoginPin(me, pin, current);
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      return { hasPin: store.hasLoginPin(me) };
+    },
+
     unlinkDevice(me, { id } = {}, ctx = {}) {
       if (!ctx.credential || !store.isPrimaryToken(ctx.credential)) {
         // A linked browser may sign itself out, but cannot remove the others.
         const own = store.linkedDevices(me, ctx.credential || '').find((d) => d.current);
         if (!own || own.id !== String(id)) throw new ApiError(403, 'primary_required', 'Only your phone can sign out other browsers.');
       }
-      if (!store.unlinkDevice(me, id)) throw new ApiError(404, 'not_found', 'No such browser');
+      if (!store.unlinkDevice(me, id, { any: !!ctx.credential && store.isPrimaryToken(ctx.credential) })) throw new ApiError(404, 'not_found', 'No such browser');
+      cutDeadSockets(me);
       return undefined;
     },
 
@@ -1837,6 +1872,8 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     eraseDueAccounts,
     releaseGuardians,
     rotatePhotos,
+    cutDeadSockets,
+    notifyNewLogin,
     refreshPhotos: photosChanged,
     /** Razorpay (or the relay) told us a payment arrived: Premium is on, tell every open app of the person. */
     paymentReceived({ user, entry }) {

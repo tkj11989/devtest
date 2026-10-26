@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-24';
+const VERSION = '2026-10-26';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -102,7 +102,8 @@ function privacyNotice() {
         rows: [
           ['Mobile number', 'To create your account, send you login codes (OTP), let people who know your number find you, and keep your account secure', 'At sign-up and login'],
           ['Email address (optional for a personal account, required for a business)', 'To send you a code to prove the address is yours, and for a business to show its contact email', 'Only if you give one'],
-          ['Browsers you log in on (a name such as "Chrome on Windows" and the time)', 'To show you which browsers are logged in to your account and let you sign them out', 'When you log in on a browser with a passcode'],
+          ['Devices you are logged in on (a name such as "Chrome on Windows", when you logged in and last used it)', 'To show you which devices are logged in to your account, warn you about a new login, and let you sign them out. A login ends after 30 days without use', 'At every login'],
+          ['Login PIN (only if you choose one; kept as a salted hash, never in readable form)', 'To ask for a second step at login, so a stolen SMS code alone cannot open your account', 'When you turn it on'],
           ['Name, username, "about" line', 'To show who you are to the people you chat with', 'At sign-up and when you edit your profile'],
           ['Profile photos you add (a picture and a small thumbnail of each), and who you let see them', 'To show your picture next to your name to the people you choose (everyone, your contacts, or nobody; for people under 18, only people they chat with)', 'When you add a photo'],
           ['Reports about a photo (who reported it, why, when)', 'To review reported photos and keep people safe', 'When someone reports a photo'],
@@ -235,7 +236,7 @@ function privacyNotice() {
       title: '11. Children and young people',
       p: [
         '{brand} is for people aged 8 and over. We ask for your date of birth when you sign up, and we do not create accounts for younger children.',
-        'If you are 8 to 17 you must give the name and a mobile number or email of a parent or guardian. We send them a private link. Your account opens when they agree, and until then you cannot use it. We do this because a young person\'s parent or guardian should decide whether and how their child uses the service.',
+        'If you are 8 to 17 you must give the name and a mobile number or email of a parent or guardian. We send them a private link. Your account opens when they agree, and until then you cannot use it. We do this because a young person\'s parent or guardian should decide whether and how their child uses the service. We cannot check who a parent or guardian really is: we rely on the details you give and on the private link reaching them.',
         'A parent or guardian can, with that link: agree or decline; switch calls, location sharing, being found by new people and public channels on or off; disable your account for a while; or delete it (section 7). By default a young person\'s account does not share location and cannot be found or started chats with by people they are not already chatting with. Parents and guardians cannot read messages.',
         'We never show advertising to anyone, and we do not use children\'s data for tracking or profiling. At 18 the controls end and we erase the parent\'s or guardian\'s contact details.',
         'If you are a parent or guardian and did not agree to this, or the person is not your child, open the link and choose to delete the account, or write to us (section 9).',

@@ -17,6 +17,7 @@
       <p class="muted" id="login-note">Sign in with your administrator account. This is separate from user accounts.</p>
       <label>Username <input name="username" autocomplete="username" required /></label>
       <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+      <label id="login-code-label" class="hidden">Code from your authenticator app <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" /></label>
       <p class="error" id="login-error" role="alert"></p>
       <button class="btn primary" type="submit">Sign in</button>
     </form>

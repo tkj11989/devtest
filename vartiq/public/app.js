@@ -487,6 +487,7 @@
 
   function setAuthMode(mode) {
     auth.mode = mode;
+    $('#pin-box').classList.add('hidden');
     auth.passcode = false;
     phoneField.reset();
     emailField.reset();
@@ -571,10 +572,10 @@
           authError('Enter your mobile number');
           return authForm.phone.focus();
         }
-        data = await apiPost('/auth/login', { phone: fullPhone(authForm), linkCode, clientType: 'web', deviceName: browserName() });
+        data = await apiPost('/auth/login', { phone: fullPhone(authForm), linkCode, clientType: 'web', deviceName: browserName(), ...(authForm.pin.value ? { pin: authForm.pin.value } : {}) });
       } else if (!register) {
         const by = auth.loginBy === 'email' ? { email: authForm.email.value.trim() } : { phone: fullPhone(authForm) };
-        data = await apiPost('/auth/login', { ...by, ...(auth.loginBy === 'email' ? emailField : phoneField).proof() });
+        data = await apiPost('/auth/login', { ...by, ...(auth.loginBy === 'email' ? emailField : phoneField).proof(), clientType: 'web', deviceName: browserName(), ...(authForm.pin.value ? { pin: authForm.pin.value } : {}) });
       } else {
         data = await apiPost('/auth/register', {
           accountType: auth.type,
@@ -605,6 +606,13 @@
       start(data.token, data.user);
     } catch (err) {
       authError(err.message);
+      // The account has a login PIN: ask for it (the code is not used up).
+      if (err.code === 'pin_required' || err.code === 'wrong_pin') {
+        $('#pin-box').classList.remove('hidden');
+        authForm.pin.value = '';
+        authForm.pin.focus();
+        if (err.code === 'pin_required') authError('');
+      }
       // The code is gone (expired / too many tries): let them ask for a new one.
       if (err.code === 'otp_expired') {
         if (/email code/.test(err.message) || (!register && auth.loginBy === 'email')) emailField.reset();
@@ -908,38 +916,63 @@
   let linkTimer = null;
   async function loadLinked() {
     try {
-      const { devices, primary } = await emit('link:list');
+      const [{ devices, primary }, { sessions, hasPin }] = await Promise.all([emit('link:list'), emit('sessions:list')]);
       $('#link-make').disabled = !primary;
+      $('#link-end-others').classList.toggle('hidden', !primary || sessions.length < 2);
       $('#link-lead').textContent = primary
         ? 'To log in to VartiQ on a computer, make a passcode here and type it on the login page together with your mobile number. A passcode works once and lasts 2 minutes.'
         : 'Passcodes are made on the phone you signed up on. You are logged in on a browser.';
       $('#link-summary').textContent = devices.length ? `${devices.length} browser${devices.length === 1 ? '' : 's'} logged in` : 'Get a passcode to log in on a computer';
       const list = $('#link-list');
       list.textContent = '';
-      if (!devices.length) list.appendChild(el('p', 'muted', 'No browsers are logged in with a passcode.'));
-      for (const d of devices) {
+      for (const d of sessions) {
         const row = el('div', 'link-row static');
         row.appendChild(el('span', '', ''));
         const label = el('span', '');
-        label.appendChild(el('strong', '', d.current ? `${d.name} (this browser)` : d.name));
-        label.appendChild(el('small', '', `Logged in ${new Date(d.at).toLocaleString()}`));
+        label.appendChild(el('strong', '', d.current ? `${d.name} (this device)` : d.name));
+        label.appendChild(el('small', '', `${d.via === 'link' ? 'Browser with passcode' : 'Phone or app'} · logged in ${new Date(d.at).toLocaleString()} · last used ${new Date(d.seen).toLocaleDateString()}`));
         row.appendChild(label);
-        const out = el('button', 'link', 'Sign out');
-        out.type = 'button';
-        out.addEventListener('click', async () => {
-          try {
-            await emit('link:remove', { id: d.id });
-            if (d.current) logout();
-            else loadLinked();
-          } catch (err) { $('#link-error').textContent = err.message; }
-        });
-        row.appendChild(out);
+        if (d.current ? d.via === 'link' : primary) {
+          const out = el('button', 'link', d.current ? 'Log out' : 'Sign out');
+          out.type = 'button';
+          out.addEventListener('click', async () => {
+            try {
+              await emit('link:remove', { id: d.id });
+              if (d.current) logout();
+              else loadLinked();
+            } catch (err) { $('#link-error').textContent = err.message; }
+          });
+          row.appendChild(out);
+        }
         list.appendChild(row);
       }
+      paintPinCard(hasPin);
     } catch (err) {
       $('#link-error').textContent = err.message;
     }
   }
+  function paintPinCard(hasPin) {
+    $('#pin-current').classList.toggle('hidden', !hasPin);
+    $('#pin-remove').classList.toggle('hidden', !hasPin);
+    $('#pin-new').placeholder = hasPin ? 'New 6-digit PIN' : 'Choose a 6-digit PIN';
+    $('#pin-save').textContent = hasPin ? 'Change PIN' : 'Turn on PIN';
+    $('#pin-note').textContent = hasPin ? 'A login PIN is ON. It is asked at every login, on top of the SMS code. If you forget it, contact support.' : 'A 6-digit PIN asked at every login, on top of the SMS code, so a stolen SMS code alone cannot open your account.';
+  }
+  const savePin = async (pin) => {
+    $('#pin-error').textContent = '';
+    try {
+      const r = await emit('pin:set', { pin, current: $('#pin-current').value || undefined });
+      $('#pin-new').value = '';
+      $('#pin-current').value = '';
+      paintPinCard(r.hasPin);
+      toast(r.hasPin ? 'Login PIN saved' : 'Login PIN removed');
+    } catch (err) { $('#pin-error').textContent = err.message; }
+  };
+  $('#pin-save').addEventListener('click', () => savePin($('#pin-new').value));
+  $('#pin-remove').addEventListener('click', () => savePin(null));
+  $('#link-end-others').addEventListener('click', async () => {
+    try { const r = await emit('sessions:end-others'); toast(`${r.ended} device(s) logged out`); loadLinked(); } catch (err) { $('#link-error').textContent = err.message; }
+  });
   function showLinkCode(res) {
     clearInterval(linkTimer);
     $('#link-code-box').classList.remove('hidden');
@@ -1279,6 +1312,7 @@
 
     // The administrator can change features, announcements and maintenance at any time.
     socket.on('config:update', applyConfig);
+    socket.on('security:login', (info) => toast(`New login: ${info.name} at ${new Date(info.at).toLocaleTimeString()}. If it was not you, open Profile, Devices and login.`)); // someone logged in to my account
     socket.on('photos:update', (ph) => { state.photos = ph; renderPhotos(); }); // another of my devices changed my photos
     // The parent or guardian agreed, changed what is allowed, or the child turned 18.
     socket.on('guardian:update', ({ guardian }) => {

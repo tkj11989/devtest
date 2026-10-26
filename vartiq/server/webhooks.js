@@ -1,7 +1,9 @@
 'use strict';
 
 const crypto = require('crypto');
-const dns = require('dns').promises;
+const dns = require('dns');
+const http = require('http');
+const https = require('https');
 const net = require('net');
 
 /**
@@ -32,10 +34,43 @@ function createWebhookDispatcher({ store, allowPrivate = false, retryDelaysMs = 
     if (allowPrivate) return;
     const { hostname } = new URL(url);
     const host = hostname.replace(/^\[|\]$/g, '');
-    const addresses = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true })).map((a) => a.address);
+    const addresses = net.isIP(host) ? [host] : (await dns.promises.lookup(host, { all: true })).map((a) => a.address);
     if (!addresses.length || addresses.some(isPrivateAddress)) {
       throw new Error('webhook URL resolves to a private address');
     }
+  }
+
+  /**
+   * POST without following redirects. The address is checked at the moment the connection is made (not in a separate earlier
+   * lookup), so a name that answers "public" once and "127.0.0.1" the next time (DNS rebinding) cannot reach internal services.
+   */
+  function post(url, headers, body) {
+    return new Promise((resolve, reject) => {
+      const u = new URL(url);
+      if (!['http:', 'https:'].includes(u.protocol)) return reject(new Error('webhook URL must be http or https'));
+      const lookup = (host, opts, cb) => dns.lookup(host, opts, (err, address, family) => {
+        if (err) return cb(err);
+        const list = Array.isArray(address) ? address.map((a) => a.address) : [address];
+        if (!allowPrivate && list.some(isPrivateAddress)) return cb(new Error('webhook URL resolves to a private address'));
+        return cb(null, address, family);
+      });
+      const req = (u.protocol === 'https:' ? https : http).request({
+        hostname: u.hostname.replace(/^\[|\]$/g, ''),
+        port: u.port || undefined,
+        path: `${u.pathname}${u.search}`,
+        method: 'POST',
+        headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+        lookup,
+        timeout: timeoutMs,
+      }, (res) => {
+        res.resume();
+        res.on('end', () => resolve({ status: res.statusCode }));
+        res.on('error', reject);
+      });
+      req.on('timeout', () => req.destroy(Object.assign(new Error('Timed out'), { name: 'TimeoutError' })));
+      req.on('error', reject);
+      req.end(body);
+    });
   }
 
   async function attempt(hook, delivery, n, retry = true) {
@@ -44,20 +79,15 @@ function createWebhookDispatcher({ store, allowPrivate = false, retryDelaysMs = 
     let result;
     try {
       await assertPublicHost(hook.url);
-      const res = await fetch(hook.url, {
-        method: 'POST',
-        redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'VartiQ-Webhooks/1.0',
-          'X-VartiQ-Event': delivery.event,
-          'X-VartiQ-Delivery': delivery.id,
-          'X-VartiQ-Timestamp': timestamp,
-          'X-VartiQ-Signature': sign(hook.secret, timestamp, body),
-        },
-        body,
-      });
+      const res = await post(hook.url, {
+        'Content-Type': 'application/json',
+        'User-Agent': 'VartiQ-Webhooks/1.0',
+        'X-VartiQ-Event': delivery.event,
+        'X-VartiQ-Delivery': delivery.id,
+        'X-VartiQ-Timestamp': timestamp,
+        'X-VartiQ-Signature': sign(hook.secret, timestamp, body),
+      }, body);
+      res.ok = res.status >= 200 && res.status < 300;
       result = { ok: res.ok, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
     } catch (err) {
       result = { ok: false, status: null, error: err.name === 'TimeoutError' ? 'Timed out' : err.message };

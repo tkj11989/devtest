@@ -67,13 +67,15 @@
     const f = e.target;
     $('#login-error').textContent = '';
     try {
-      const res = await api('POST', '/login', { username: f.username.value, password: f.password.value });
+      const res = await api('POST', '/login', { username: f.username.value, password: f.password.value, ...(f.code.value ? { code: f.code.value } : {}) });
       state.token = res.token;
       state.admin = res.admin;
       store.set('admin.token', res.token);
       f.reset();
+      $('#login-code-label').classList.add('hidden');
       start();
     } catch (err) {
+      if (err.code === 'totp_required') $('#login-code-label').classList.remove('hidden');
       $('#login-error').textContent = err.message;
     }
   });
@@ -247,7 +249,7 @@
       u.suspended
         ? h('div', { class: 'actions' }, act('Unsuspend', () => api('POST', `/users/${username}/unsuspend`)))
         : h('div', { class: 'form' }, reason, h('div', { class: 'actions' }, act('Suspend account', () => api('POST', `/users/${username}/suspend`, { reason: reason.value }), 'danger'))),
-      h('div', { class: 'actions' }, act('Force log out everywhere', () => api('POST', `/users/${username}/logout`))),
+      h('div', { class: 'actions' }, act('Force log out everywhere', () => api('POST', `/users/${username}/logout`)), act('Remove login PIN (forgotten)', () => api('POST', `/users/${username}/reset-pin`))),
       isSuper() && h('h3', {}, 'Badges and Premium'),
       isSuper() && h('div', { class: 'actions' }, act(u.verified ? 'Remove Verified badge' : 'Give Verified badge', () => api('POST', `/users/${username}/verified`, { verified: !u.verified }))),
       isSuper() && h('div', { class: 'row' }, h('label', {}, 'Give Premium for (days)', days), h('div', { class: 'actions', style: 'align-self:flex-end' },
@@ -428,14 +430,51 @@
       h('label', {}, 'Current password', h('input', { name: 'current', type: 'password', autocomplete: 'current-password', required: true })),
       h('label', {}, 'New password (at least 10 characters)', h('input', { name: 'password', type: 'password', autocomplete: 'new-password', minlength: 10, required: true })),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Change my password')));
+    // Two-step sign-in with an authenticator app, and signing out everywhere.
+    const twoStep = h('div', {});
+    const paintTwoStep = async () => {
+      twoStep.textContent = '';
+      const me = (await api('GET', '/me')).admin;
+      state.admin = me;
+      if (me.twoStep) {
+        twoStep.append(h('p', { class: 'muted' }, 'Two-step sign-in is ON: a code from your authenticator app is needed with your password.'),
+          h('form', { class: 'form', onsubmit: async (e) => {
+            e.preventDefault();
+            const f = e.target;
+            if (await attempt(() => api('POST', '/totp/disable', { password: f.password.value, code: f.code.value })) !== null) { toast('Two-step sign-in turned off'); paintTwoStep(); }
+          } },
+            h('label', {}, 'Password', h('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true })),
+            h('label', {}, 'Current code', h('input', { name: 'code', inputmode: 'numeric', maxlength: 6, required: true })),
+            h('div', { class: 'actions' }, h('button', { class: 'btn danger', type: 'submit' }, 'Turn off'))));
+        return;
+      }
+      twoStep.append(h('p', { class: 'muted' }, me.limited ? 'This server requires two-step sign-in. Set it up to continue.' : 'Two-step sign-in is OFF. Strongly recommended: a stolen password alone would then give full access.'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          const r = await attempt(() => api('POST', '/totp/setup'));
+          if (!r) return;
+          twoStep.textContent = '';
+          twoStep.append(h('p', {}, 'In your authenticator app (Google Authenticator, Microsoft Authenticator, Aegis…) add an account with this key (time-based):'),
+            h('p', {}, h('code', { class: 'wrap' }, r.secret)), h('p', { class: 'muted wrap' }, r.uri),
+            h('form', { class: 'form', onsubmit: async (e) => {
+              e.preventDefault();
+              if (await attempt(() => api('POST', '/totp/enable', { code: e.target.code.value })) !== null) { toast('Two-step sign-in is on'); paintTwoStep(); if (me.limited) start(); }
+            } }, h('label', {}, 'Enter the 6-digit code it shows', h('input', { name: 'code', inputmode: 'numeric', maxlength: 6, required: true })),
+              h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Turn on'))));
+        } }, 'Set up two-step sign-in'));
+    };
+    await paintTwoStep();
+    const endAll = h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: async () => { const r = await attempt(() => api('POST', '/sessions/end', {})); if (r) toast(`${r.ended} other session(s) signed out`); } }, 'Sign out my other sessions'),
+      isSuper() && h('button', { class: 'btn danger', onclick: async () => { if (confirm('Sign out every other administrator?')) { const r = await attempt(() => api('POST', '/sessions/end', { all: true })); if (r) toast(`${r.ended} session(s) signed out`); } } }, 'Sign out all administrators'));
     let list = null;
     if (isSuper()) list = (await api('GET', '/admins')).admins;
     return h('div', {}, head('Administrators'),
+      h('div', { class: 'card' }, h('h3', {}, 'Two-step sign-in'), twoStep, endAll),
       h('div', { class: 'card' }, h('h3', {}, 'My account'), h('p', { class: 'muted' }, `Signed in as ${state.admin.username} (${state.admin.role === 'super' ? 'super admin: can do everything' : 'support: can look and moderate'}).`), own),
       isSuper() && h('div', { class: 'card' }, h('h3', {}, 'Administrators'),
-        h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Username', 'Role', 'Added', ''].map((t) => h('th', {}, t)))),
-          h('tbody', {}, list.map((a) => h('tr', {}, h('td', {}, a.username), h('td', {}, h('span', { class: 'tag' }, a.role)), h('td', {}, fmt.date(a.createdAt)),
-            h('td', {}, a.username !== state.admin.username && h('button', { class: 'btn small danger', onclick: async () => { if (confirm(`Remove administrator ${a.username}?`) && await attempt(() => api('DELETE', `/admins/${a.username}`)) !== null) { toast('Removed'); route(); } } }, 'Remove'))))))),
+        h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Username', 'Role', 'Two-step', 'Added', ''].map((t) => h('th', {}, t)))),
+          h('tbody', {}, list.map((a) => h('tr', {}, h('td', {}, a.username), h('td', {}, h('span', { class: 'tag' }, a.role)), h('td', {}, a.twoStep ? 'On' : 'Off'), h('td', {}, fmt.date(a.createdAt)),
+            h('td', {}, a.twoStep && a.username !== state.admin.username && h('button', { class: 'btn small', onclick: async () => { if (confirm(`Clear two-step sign-in for ${a.username}?`) && await attempt(() => api('POST', `/admins/${a.username}/totp/reset`)) !== null) { toast('Cleared'); route(); } } }, 'Reset 2-step'), a.username !== state.admin.username && h('button', { class: 'btn small danger', onclick: async () => { if (confirm(`Remove administrator ${a.username}?`) && await attempt(() => api('DELETE', `/admins/${a.username}`)) !== null) { toast('Removed'); route(); } } }, 'Remove'))))))),
         h('h3', { style: 'margin-top:18px' }, 'Add an administrator'),
         h('form', { class: 'form', onsubmit: async (e) => {
           e.preventDefault();

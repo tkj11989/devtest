@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { FEATURES } = require('./features');
 const { addPeriod } = require('./payments');
+const totp = require('./totp');
 
 /**
  * Administration API for the dashboard at /admin. It is separate from the user API: its own
@@ -12,7 +13,7 @@ const { addPeriod } = require('./payments');
  *  - super:   everything, including feature switches, settings and managing administrators
  *  - support: look at everything and moderate (suspend users, remove channels, handle reports)
  */
-function createAdminRouter({ store, service, io, onlineCount, integrations = () => ({}), sessionMs = 8 * 60 * 60 * 1000, loginLimit = { max: 5, windowMs: 15 * 60 * 1000 } }) {
+function createAdminRouter({ store, service, io, onlineCount, integrations = () => ({}), sessionMs = 8 * 60 * 60 * 1000, loginLimit = { max: 5, windowMs: 15 * 60 * 1000 }, require2fa = process.env.ADMIN_REQUIRE_2FA === '1' }) {
   const router = express.Router();
   const sessions = new Map(); // token -> { admin, role, exp }
   const failures = new Map(); // key -> { count, resetAt }
@@ -49,6 +50,8 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     req.admin = s.admin;
     req.role = store.data.admins[s.admin].role; // roles apply immediately
     req.token = token;
+    // Where two-step sign-in is required, an administrator without it can only set it up.
+    if (s.limited && !/^\/(totp(\/|$)|me$|logout$)/.test(req.path)) return next(fail(403, 'totp_setup_required', 'Set up two-step sign-in first (Account, Two-step sign-in)'));
     next();
   };
   const superOnly = (req, res, next) => (req.role === 'super' ? next() : next(fail(403, 'forbidden', 'Only a super admin can do this')));
@@ -68,6 +71,23 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
       if (f && f.resetAt > now && f.count >= loginLimit.max) throw fail(429, 'rate_limited', 'Too many failed sign-ins. Try again later.');
     }
     const admin = store.verifyAdmin(username, password);
+    // Second step: the code from the authenticator app, when the administrator has set one up.
+    const secret = admin && store.data.admins[admin.username].totp?.secret;
+    let totpStep = null;
+    if (admin && secret) {
+      if (!req.body?.code) throw fail(401, 'totp_required', 'Enter the 6-digit code from your authenticator app');
+      totpStep = totp.verify(secret, req.body.code);
+      if (totpStep === null || totpStep <= (store.data.admins[admin.username].totp.last || 0)) {
+        for (const k of keys) {
+          const f = failures.get(k);
+          if (!f || f.resetAt <= now) failures.set(k, { count: 1, resetAt: now + loginLimit.windowMs });
+          else f.count += 1;
+        }
+        throw fail(401, 'invalid_credentials', 'Wrong or already used code');
+      }
+      store.data.admins[admin.username].totp.last = totpStep; // a code works once
+      store._save();
+    }
     if (!admin) {
       for (const k of keys) {
         const f = failures.get(k);
@@ -78,9 +98,10 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     }
     keys.forEach((k) => failures.delete(k));
     const token = `adm_${crypto.randomBytes(24).toString('hex')}`;
-    sessions.set(token, { admin: admin.username, exp: now + sessionMs });
+    const limited = require2fa && !secret;
+    sessions.set(token, { admin: admin.username, exp: now + sessionMs, limited });
     store.audit(admin.username, 'login', null, null);
-    return { token, admin, expiresIn: Math.round(sessionMs / 1000) };
+    return { token, admin, limited, expiresIn: Math.round(sessionMs / 1000) };
   }));
 
   router.post('/logout', auth, run((req) => {
@@ -88,7 +109,65 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     return undefined;
   }));
 
-  router.get('/me', auth, run((req) => ({ admin: { username: req.admin, role: req.role } })));
+  router.get('/me', auth, run((req) => ({ admin: { username: req.admin, role: req.role, twoStep: !!store.data.admins[req.admin].totp?.secret, limited: !!sessions.get(req.token)?.limited } })));
+
+  // ---------- two-step sign-in (authenticator app) ----------
+
+  router.post('/totp/setup', auth, run((req) => {
+    const a = store.data.admins[req.admin];
+    if (a.totp?.secret) throw fail(409, 'conflict', 'Two-step sign-in is already on. Turn it off first to set it up again.');
+    const secret = totp.generateSecret();
+    a.totpPending = secret;
+    store._save();
+    return { secret, uri: totp.otpauthUri(secret, req.admin) };
+  }));
+  router.post('/totp/enable', auth, run((req) => {
+    const a = store.data.admins[req.admin];
+    const step = a.totpPending && totp.verify(a.totpPending, req.body?.code);
+    if (!step) throw fail(400, 'invalid_request', 'That code is not right. Check the time on your phone and try again.');
+    a.totp = { secret: a.totpPending, last: step };
+    delete a.totpPending;
+    store._save();
+    const s = sessions.get(req.token);
+    if (s) s.limited = false;
+    log(req, 'totp-enable', req.admin, null);
+    return { twoStep: true };
+  }));
+  router.post('/totp/disable', auth, run((req) => {
+    const a = store.data.admins[req.admin];
+    if (require2fa) throw fail(403, 'forbidden', 'Two-step sign-in is required on this server');
+    if (!store.verifyAdmin(req.admin, req.body?.password) || !a.totp?.secret || totp.verify(a.totp.secret, req.body?.code) === null) throw fail(403, 'forbidden', 'Password or code is wrong');
+    delete a.totp;
+    store._save();
+    log(req, 'totp-disable', req.admin, null);
+    return { twoStep: false };
+  }));
+  // A super admin can clear another administrator's two-step sign-in (a lost phone); they then set it up again.
+  router.post('/admins/:username/totp/reset', auth, superOnly, run((req) => {
+    const target = store.data.admins[req.params.username];
+    if (!target) throw fail(404, 'not_found', 'Administrator not found');
+    delete target.totp;
+    delete target.totpPending;
+    store._save();
+    for (const [t, s] of sessions) if (s.admin === req.params.username) sessions.delete(t);
+    log(req, 'totp-reset', req.params.username, null);
+    return undefined;
+  }));
+  // Sign this administrator out everywhere, or (super admin, `all=1`) every administrator.
+  router.post('/sessions/end', auth, run((req) => {
+    const all = req.role === 'super' && req.body?.all === true;
+    let n = 0;
+    for (const [t, s] of sessions) if ((all || s.admin === req.admin) && t !== req.token) { sessions.delete(t); n += 1; }
+    log(req, 'sessions-end', all ? '*' : req.admin, String(n));
+    return { ended: n };
+  }));
+  // Support: remove a forgotten login PIN from a user's account (they log in with the SMS code alone afterwards).
+  router.post('/users/:username/reset-pin', auth, run((req) => {
+    const u = user(req);
+    const had = store.resetLoginPin(u.username);
+    log(req, 'reset-pin', u.username, null);
+    return { reset: had };
+  }));
 
   // ---------- overview ----------
 

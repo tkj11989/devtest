@@ -57,12 +57,30 @@ function createOtpService({
   maxAttempts = 5,
   resendMs = 30 * 1000,
   maxPerHour = 5,
+  // Protection against SMS bills: at most this many SMS a day in all (0 = no limit), and only to numbers starting with one
+  // of these prefixes (for example ['+91']; empty = any country).
+  dailySmsLimit = Number(process.env.OTP_DAILY_SMS_LIMIT) || 0,
+  allowedPrefixes = String(process.env.OTP_ALLOWED_PREFIXES || '').split(',').map((x) => x.trim()).filter(Boolean),
 } = {}) {
   const secret = crypto.randomBytes(32);
   const requests = new Map(); // requestId -> { channel, to, purpose, hash, expiresAt, attempts, verified }
   const sent = new Map(); // `${channel}:${to}` -> [timestamps of sends in the last hour]
   const lastSent = new Map(); // `${channel}:${to}:${purpose}` -> time of the latest send
   const deliver = sender || consoleSender;
+  let day = { key: '', sms: 0 };
+  /** Count an SMS against today's budget, or refuse. Countries outside the allow-list are refused before anything is sent. */
+  const smsAllowed = (to) => {
+    if (allowedPrefixes.length && !allowedPrefixes.some((p) => to.startsWith(p))) {
+      throw new OtpError(400, 'country_not_supported', 'Mobile numbers from this country are not supported yet.');
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (day.key !== today) day = { key: today, sms: 0 };
+    if (dailySmsLimit && day.sms >= dailySmsLimit) {
+      console.error(`SMS daily limit of ${dailySmsLimit} reached: no more SMS are sent today.`);
+      throw new OtpError(503, 'sms_budget', 'We cannot send more codes right now. Please try again tomorrow.');
+    }
+  };
+  const smsSent = () => { day.sms += 1; if (dailySmsLimit && day.sms === Math.floor(dailySmsLimit * 0.8)) console.warn(`SMS: 80% of the daily limit (${dailySmsLimit}) used.`); };
 
   const hmac = (id, code) => crypto.createHmac('sha256', secret).update(`${id}:${code}`).digest();
 
@@ -82,7 +100,7 @@ function createOtpService({
    * Send a code. `to` must already be normalised. Returns what the client needs to
    * show the "enter code" step; `devCode` only when `exposeCodes` is on.
    */
-  async function request({ channel, to, purpose }) {
+  async function request({ channel, to, purpose, decoy = false }) {
     if (!['sms', 'email'].includes(channel)) throw new OtpError(400, 'invalid_request', 'channel must be "sms" or "email"');
     if (!PURPOSES.includes(purpose)) throw new OtpError(400, 'invalid_request', `purpose must be one of: ${PURPOSES.join(', ')}`);
     const now = Date.now();
@@ -103,11 +121,14 @@ function createOtpService({
     // A new code replaces any earlier one for the same address and purpose.
     for (const [id, r] of requests) if (r.channel === channel && r.to === to && r.purpose === purpose) requests.delete(id);
 
+    if (channel === 'sms') smsAllowed(to);
     const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
     const requestId = `otp_${crypto.randomBytes(12).toString('hex')}`;
     const text = `${code} is your VartiQ verification code. It expires in ${Math.round(ttlMs / 60000)} minutes. Never share it with anyone.`;
     try {
-      await deliver({ channel, to, code, purpose, text });
+      // A decoy (a number that has, or has no, account when that must stay secret) looks the same to the caller and uses the
+      // same limits, but nothing is sent and no code is kept.
+      if (!decoy) await deliver({ channel, to, code, purpose, text });
     } catch (err) {
       console.error(`OTP delivery to ${maskDestination(channel, to)} failed:`, err.message);
       throw new OtpError(502, 'otp_delivery_failed', `Could not send the code by ${channel === 'sms' ? 'SMS' : 'email'}. Try again shortly.`);
@@ -115,7 +136,10 @@ function createOtpService({
     times.push(now);
     sent.set(key, times);
     lastSent.set(`${key}:${purpose}`, now);
-    requests.set(requestId, { channel, to, purpose, hash: hmac(requestId, code), expiresAt: now + ttlMs, attempts: 0 });
+    if (!decoy) {
+      if (channel === 'sms') smsSent();
+      requests.set(requestId, { channel, to, purpose, hash: hmac(requestId, code), expiresAt: now + ttlMs, attempts: 0 });
+    }
 
     return {
       requestId,
@@ -123,7 +147,7 @@ function createOtpService({
       sentTo: maskDestination(channel, to),
       expiresIn: Math.round(ttlMs / 1000),
       resendIn: Math.round(resendMs / 1000),
-      ...(exposeCodes ? { devCode: code } : {}),
+      ...(exposeCodes && !decoy ? { devCode: code } : {}),
     };
   }
 
@@ -170,6 +194,7 @@ function createOtpService({
       throw new OtpError(429, 'otp_too_soon', `Please wait ${wait} seconds before sending this again`, { retryAfter: wait });
     }
     if (times.length >= maxPerHour) throw new OtpError(429, 'otp_limit', 'Too many messages sent to this address. Try again later.', { retryAfter: Math.ceil((times[0] + 60 * 60 * 1000 - now) / 1000) });
+    if (channel === 'sms') smsAllowed(to);
     try {
       await deliver({ channel, to, code: '', purpose, text });
     } catch (err) {
@@ -179,6 +204,7 @@ function createOtpService({
     times.push(now);
     sent.set(key, times);
     lastSent.set(`${key}:${purpose}`, now);
+    if (channel === 'sms') smsSent();
     return { sentTo: maskDestination(channel, to), ...(exposeCodes ? { devText: text } : {}) };
   }
 
