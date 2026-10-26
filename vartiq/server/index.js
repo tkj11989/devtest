@@ -106,6 +106,7 @@ const SOCKET_ACTIONS = {
   'chatlock:unlock': 'unlockChat',
   'chatlock:relock': 'relock',
   'chat:disappearing': 'setDisappearing',
+  'chat:continue': 'continueChat',
   'settings:default-disappear': 'setDefaultDisappear',
   'business:get': 'business',
   'business:set': 'setBusiness',

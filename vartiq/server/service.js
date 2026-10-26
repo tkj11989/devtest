@@ -91,7 +91,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   });
 
   /** A conversation summary for `me`, with the lock state and a redacted preview when locked. */
-  const lockView = (me, c, lockKey) => {
+  const lockViewBase = (me, c, lockKey) => {
     if (store.isChatHidden(me, c.id)) {
       // Closed hidden chats look locked; once revealed they are open (and marked hidden).
       const open = isRevealed(lockKey);
@@ -100,6 +100,15 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     if (!store.isChatLocked(me, c.id)) return { ...c, locked: false };
     const open = !!(lockKey && unlocked.get(lockKey)?.has(c.id));
     return { ...c, locked: true, unlocked: open, lastMessage: open || !c.lastMessage ? c.lastMessage : redactMessage(c.lastMessage) };
+  };
+
+  /** After a mobile number change, messages from before it stay sealed until the chat is continued. */
+  const sealedBefore = (me, convId) => store.sealedBefore(me, convId);
+  const sealMessage = (me, m, sealAt) => (sealAt && m.ts < sealAt && !m.system && m.type !== 'system' ? { ...redactMessage(m), sealed: true } : m);
+  const lockView = (me, c, lockKey) => {
+    const view = lockViewBase(me, c, lockKey);
+    const sealAt = sealedBefore(me, c.id);
+    return sealAt && view.lastMessage ? { ...view, lastMessage: sealMessage(me, view.lastMessage, sealAt) } : view;
   };
 
   /** The version of an event a device (or webhook, lockKey null) of `username` may receive; null = nothing. */
@@ -617,7 +626,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
         blocked: store.blockedList(me),
         defaultDisappear: store.defaultDisappear(me),
         business: store.getBusiness(me),
-        contact: store.contactOf(me),
+        contact: { ...store.contactOf(me), ...(store.numberChangedAt(me) ? { numberChangedAt: store.numberChangedAt(me) } : {}) },
         privacy: { profileViews: store.profileViewsEnabled(me) },
         guardian: guardianView(me),
         consent: { version: legal.VERSION, upToDate: store.consentUpToDate(me, legal.VERSION), optional: Object.fromEntries(legal.CONSENTS.filter((x) => !x.required).map((x) => [x.id, store.hasOptionalConsent(me, x.id)])) },
@@ -1095,8 +1104,16 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       const n = Math.max(1, Math.min(PAGE_MAX, Number(limit) || 50));
       const page = store.getMessages(convId, me, { before: Number(before) || undefined, limit: n + 1 });
       const hasMore = page.length > n;
-      const messages = hasMore ? page.slice(1) : page;
-      return { messages, hasMore, nextBefore: hasMore ? messages[0].ts : null };
+      const sealAt = sealedBefore(me, convId);
+      const messages = (hasMore ? page.slice(1) : page).map((m) => sealMessage(me, m, sealAt));
+      return { messages, hasMore, nextBefore: hasMore ? messages[0].ts : null, numberChanged: !!sealAt };
+    },
+
+    /** "Continue this chat" after a mobile number change: earlier messages become readable again. */
+    continueChat(me, { convId }) {
+      member(me, convId);
+      store.continueChat(me, convId);
+      return { ok: true };
     },
 
     sendText(me, { convId, text, masked, clientId, e2ee }, ctx) {
@@ -1741,7 +1758,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   /** May this app session download this media (voice notes of locked chats need unlocking)? */
   const mediaAllowed = (me, mediaId, ctx) => {
     const convId = store.mediaConversation(mediaId);
-    return !convId || isUnlocked(me, convId, ctx);
+    return !convId || (isUnlocked(me, convId, ctx) && !sealedBefore(me, convId));
   };
 
   /** Forget unlocks tied to a credential (on logout) or one app session (on disconnect). */
