@@ -3080,6 +3080,12 @@
     renderLockSummary();
     renderProfileExtras();
   });
+  $('#btn-settings').addEventListener('click', () => {
+    openPanel('#panel-settings');
+    renderLockSummary();
+    renderProfileExtras();
+    renderCacheRow();
+  });
   $('#profile-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (state.me.verified && e.target.displayName.value.trim() !== state.me.displayName
