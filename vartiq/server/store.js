@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const guardianRules = require('./guardian');
 const BusinessHours = require('../public/business-hours.js');
-const { DEFAULT_SETTINGS, applySettings } = require('./features');
+const { DEFAULT_SETTINGS, IDS, applySettings } = require('./features');
 
 /**
  * Simple JSON-file backed data store for users, conversations and messages.
@@ -17,6 +17,7 @@ class Store {
   constructor({ file, statusTtlMs = 24 * 60 * 60 * 1000, persistence = null, initialData = null, mediaDir } = {}) {
     this.statusTtlMs = statusTtlMs;
     this.premiumForAll = process.env.PREMIUM_FOR_ALL === '1';
+    this.forcedOff = String(process.env.DISABLE_FEATURES || '').split(',').map((x) => x.trim()).filter((id) => IDS.includes(id));
     this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
     this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
@@ -967,7 +968,8 @@ class Store {
       this.settingsCache = {
         ...DEFAULT_SETTINGS,
         ...saved,
-        features: { ...DEFAULT_SETTINGS.features, ...(saved.features || {}) },
+        // DISABLE_FEATURES=calls,push forces features off whatever the dashboard says (the dashboard shows them off).
+        features: { ...DEFAULT_SETTINGS.features, ...(saved.features || {}), ...Object.fromEntries(this.forcedOff.map((id) => [id, false])) },
         limits: { ...DEFAULT_SETTINGS.limits, ...(saved.limits || {}) },
         prices: { ...(saved.prices || {}) },
         maintenance: { ...DEFAULT_SETTINGS.maintenance, ...(saved.maintenance || {}) },

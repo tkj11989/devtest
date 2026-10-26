@@ -163,3 +163,16 @@ test('photo rotation: Premium, a full set of photos, every 7 days', async (t) =>
   assert.strictEqual((await env.api('PUT', '/me/photo-rotation', a.token, { on: true })).body.error.code, 'not_enough_photos');
   assert.deepStrictEqual(store.rotatePhotos(Date.now() + 60 * 24 * 3600 * 1000), [], 'a broken set does not rotate');
 });
+
+test('DISABLE_FEATURES=calls switches calls off whatever the saved settings say', () => {
+  process.env.DISABLE_FEATURES = 'calls, nonsense';
+  try {
+    const store = new Store({ file: null });
+    assert.strictEqual(store.featureOn('calls'), false);
+    assert.strictEqual(store.getSettings().features.calls, false);
+    assert.strictEqual(store.featureOn('push'), true);
+  } finally {
+    delete process.env.DISABLE_FEATURES;
+  }
+  assert.strictEqual(new Store({ file: null }).featureOn('calls'), true);
+});

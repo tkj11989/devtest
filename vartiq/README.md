@@ -46,6 +46,8 @@ All colours are CSS variables at the top of `public/styles.css`; text and backgr
 
 ### Testing: Premium for everyone
 
+Set `DISABLE_FEATURES=calls` (comma list of feature ids from Admin → Features, e.g. `calls,push`) to switch features off whatever the dashboard says; with `calls` off nobody can start or join voice and video calls and the call buttons are hidden. Remove it and restart to bring them back (if you saved settings in the dashboard meanwhile, check Features too).
+
 Set `PREMIUM_FOR_ALL=1` to give every account Premium (unlimited chat locks and hidden chats, 5 profile photos, call recording, Premium personalisation and parental-control changes). It is for testing only: leave it unset in production. Premium is still bought and checked normally when it is off.
 
 ## Getting started
