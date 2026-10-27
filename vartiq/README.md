@@ -757,6 +757,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `status:delete`     | Delete one of my updates                 |
 | `status:reply`      | Reply to an update (sent as a chat message) |
 | `chat:disappearing` | Set a chat's timer (`seconds`, 0 = off) |
+| `chat:continue` | After a mobile number change: show the earlier messages of this chat again |
 | `settings:default-disappear` | My default timer for new chats |
 | `business:get` / `business:set` / `business:remove` | My business profile |
 | `chatlock:settings` | Whether a secret code is set, and my locked chats |

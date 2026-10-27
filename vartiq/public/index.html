@@ -180,6 +180,9 @@
         <header class="bar">
           <button class="avatar-btn" id="btn-profile" title="Profile"></button>
           <div class="bar-actions">
+            <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+              <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.49.49 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z"/></svg>
+            </button>
             <button class="icon-btn status-btn" id="btn-status" title="Status">
               <svg viewBox="0 0 24 24"><path d="M12 20.66a8.6 8.6 0 0 1-2.24-.3l.52-1.93a6.7 6.7 0 0 0 3.44 0l.52 1.93a8.6 8.6 0 0 1-2.24.3Zm-5.53-2.02a8.7 8.7 0 0 1-2.75-4.76l1.95-.42a6.7 6.7 0 0 0 2.12 3.67l-1.32 1.51Zm11.06 0-1.32-1.51a6.7 6.7 0 0 0 2.12-3.67l1.95.42a8.7 8.7 0 0 1-2.75 4.76ZM5.67 10.7l-1.95-.42A8.7 8.7 0 0 1 6.47 5.5l1.32 1.51A6.7 6.7 0 0 0 5.67 10.7Zm12.66 0a6.7 6.7 0 0 0-2.12-3.68l1.32-1.51a8.7 8.7 0 0 1 2.75 4.77l-1.95.42ZM10.28 5.57l-.52-1.93a8.7 8.7 0 0 1 4.48 0l-.52 1.93a6.7 6.7 0 0 0-3.44 0ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
             </button>
@@ -506,6 +509,25 @@
         </form>
         <div class="pad stack">
           <div class="card-lite hidden" id="guardian-note"></div>
+          <div class="link-row static" id="premium-row">
+            <span id="premium-name" class="verify-name" aria-hidden="true"></span>
+            <span><strong>Premium</strong><small id="premium-summary">Free plan</small></span>
+            <button class="link" type="button" id="btn-payments" title="My payments">Payments</button>
+            <button class="link" type="button" id="btn-premium">Upgrade</button>
+          </div>
+          <div class="link-row static" id="verify-row">
+            <span id="verify-name" class="verify-name" aria-hidden="true"></span>
+            <span><strong>Verified badge</strong><small id="verify-summary">Not verified</small></span>
+            <button class="link" type="button" id="btn-verify">Verify</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings: account, privacy, notifications and appearance -->
+      <div class="panel overlay hidden" id="panel-settings">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Settings</h2></header>
+        <div class="settings-scroll">
+        <div class="pad stack">
           <div class="link-row static">
             <svg viewBox="0 0 24 24"><path d="M17 1H7a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2Zm0 18H7V5h10v14Zm-5 3a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
             <span><strong>Mobile number</strong><small id="contact-phone">Not added</small></span>
@@ -559,17 +581,6 @@
             <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
             <span><strong>Who viewed my profile</strong><small id="views-summary">See who looked at your profile, and when</small></span>
           </button>
-          <div class="link-row static" id="premium-row">
-            <span id="premium-name" class="verify-name" aria-hidden="true"></span>
-            <span><strong>Premium</strong><small id="premium-summary">Free plan</small></span>
-            <button class="link" type="button" id="btn-payments" title="My payments">Payments</button>
-            <button class="link" type="button" id="btn-premium">Upgrade</button>
-          </div>
-          <div class="link-row static" id="verify-row">
-            <span id="verify-name" class="verify-name" aria-hidden="true"></span>
-            <span><strong>Verified badge</strong><small id="verify-summary">Not verified</small></span>
-            <button class="link" type="button" id="btn-verify">Verify</button>
-          </div>
           <button class="link-row" type="button" id="btn-devices">
             <svg viewBox="0 0 24 24" ><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg>
             <span><strong>Encryption &amp; linked devices</strong><small id="e2ee-summary">Messages are end-to-end encrypted</small></span>
@@ -606,6 +617,7 @@
             <svg viewBox="0 0 24 24"><path d="m9.4 16.6-4.6-4.6 4.6-4.6L8 6l-6 6 6 6 1.4-1.4Zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4Z"/></svg>
             <span><strong>Developer</strong><small>API keys, webhooks and API docs</small></span>
           </button>
+        </div>
         </div>
       </div>
 
@@ -734,6 +746,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 1H9v2h6V1Zm-4 13h2V8h-2v6Zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg>
           <span id="timer-banner-text"></span>
         </button>
+        <div class="number-banner hidden" id="number-banner" role="status">
+          <span>Your mobile number changed. Earlier messages stay hidden until you continue this chat.</span>
+          <button class="primary small" type="button" id="btn-number-continue">Continue chat</button>
+        </div>
         <div class="call-banner hidden" id="call-banner">
           <img src="icons/calling.png" alt="" />
           <span id="call-banner-text"></span>

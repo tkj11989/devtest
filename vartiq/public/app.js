@@ -1347,6 +1347,13 @@
         }
         hideConsentGate();
         const { user: me, iceServers, blocked, defaultDisappear, business, contact, privacy, appearance, consent } = meReply;
+      // A changed mobile number seals older chats on the server; forget the copies saved in this browser.
+      const changedAt = contact?.numberChangedAt ? String(contact.numberChangedAt) : null;
+      if (changedAt && storage.get('chat.numberChangedAt') !== changedAt) {
+        storage.set('chat.numberChangedAt', changedAt);
+        Promise.resolve(state.cache?.clear?.()).catch(() => {});
+        purged.clear();
+      }
         state.consent = consent || null;
         // A child's account waits here until the parent or guardian has agreed.
         if (meReply.guardian?.state === 'pending') {
@@ -1618,7 +1625,9 @@
         let prefix = '';
         if (c.type === 'group') prefix = mine ? 'You: ' : `${displayName(m.from)}: `;
         let text;
-        if (m.locked) {
+        if (m.sealed) {
+          text = 'Hidden until you continue this chat';
+        } else if (m.locked) {
           text = 'Locked chat · tap to unlock';
         } else if (m.deleted) {
           preview.appendChild(icon('deleted'));
@@ -1723,6 +1732,26 @@
     box.scrollTop = box.scrollHeight - height;
   }
 
+  /** After a mobile number change, the older messages of this chat stay hidden until you continue it. */
+  function paintNumberBanner(conv) {
+    $('#number-banner').classList.toggle('hidden', !conv || !conv.numberChanged);
+  }
+  $('#btn-number-continue').addEventListener('click', async () => {
+    const id = state.activeId;
+    if (!id) return;
+    try {
+      await emit('chat:continue', { convId: id });
+      const conv = state.conversations.get(id);
+      if (conv) conv.numberChanged = false;
+      state.messages.delete(id);
+      Promise.resolve(state.cache?.purge?.(id)).catch(() => {});
+      paintNumberBanner(conv);
+      await openChat(id);
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
   async function openChat(id, { highlight } = {}) {
     const conv = state.conversations.get(id);
     if (!conv) return;
@@ -1736,6 +1765,7 @@
     $('#emoji-picker').classList.add('hidden');
     renderHeader();
     renderChatList();
+    paintNumberBanner(conv);
     if (isLockedView(conv)) {
       $('#unlock-error').textContent = '';
       $('#unlock-code').value = '';
@@ -1767,6 +1797,8 @@
       }
       const page = await emit('messages:get', { convId: id });
       if (state.activeId !== id) return;
+      conv.numberChanged = !!page.numberChanged;
+      paintNumberBanner(conv);
       let messages = page.messages;
       if (saved.length) {
         messages = await mergeWithSaved(id, saved, page);
@@ -2002,6 +2034,8 @@
         cover.append(icon('masked', 'inline-icon'), el('span', '', 'Masked message'), el('small', '', 'Tap to reveal'));
         cover.addEventListener('click', () => { state.revealed.add(m.id); renderMessages(); maybeTranslate(conv); });
         bubble.appendChild(cover);
+      } else if (m.sealed) {
+        bubble.appendChild(el('span', 'text sealed', 'Hidden until you continue this chat. Your mobile number changed.'));
       } else if (m.undecryptable) {
         bubble.appendChild(el('span', 'text undecryptable', "🔒 This message can't be read on this device (it was sent before this device was set up)."));
       } else {
@@ -3264,6 +3298,12 @@
     renderVerifyRow();
     renderLockSummary();
     renderProfileExtras();
+  });
+  $('#btn-settings').addEventListener('click', () => {
+    openPanel('#panel-settings');
+    renderLockSummary();
+    renderProfileExtras();
+    renderCacheRow();
   });
   $('#profile-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -5347,7 +5387,8 @@
         preview.appendChild(icon('starred'));
         if (m.masked) preview.appendChild(icon('masked'));
         preview.appendChild(document.createTextNode(
-          m.locked ? '🔒 In a locked chat'
+          m.sealed ? 'Hidden until you continue this chat'
+            : m.locked ? '🔒 In a locked chat'
             : m.type === 'voice' ? `🎤 Voice message (${fmtDuration(m.voice.duration)})` : previewText(m),
         ));
         bottom.appendChild(preview);

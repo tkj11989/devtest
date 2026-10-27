@@ -1467,9 +1467,38 @@ class Store {
     const field = channel === 'sms' ? 'phone' : 'email';
     const owner = field === 'phone' ? this.findByPhone(value) : this.findByEmail(value);
     if (owner && owner !== username) throw new Error(`This ${field === 'phone' ? 'mobile number' : 'email'} is already registered`);
+    const previous = u[field];
     u[field] = value;
     this._contactIdx = null;
+    // A changed mobile number seals older chats until the person continues each one.
+    if (field === 'phone' && previous && previous !== value) u.numberChangedAt = this.stampFor(u);
     if (field === 'email' && u.business) u.business.email = value;
+    this._save();
+  }
+
+  /** When the mobile number last changed, or null. */
+  numberChangedAt(username) {
+    return this.data.users[username]?.numberChangedAt || null;
+  }
+
+  /** The time of a mobile number change while this chat is still sealed for the person, else null. */
+  sealedBefore(username, convId) {
+    const u = this.data.users[username];
+    if (!u?.numberChangedAt) return null;
+    return (u.continuedChats?.[convId] || 0) >= u.numberChangedAt ? null : u.numberChangedAt;
+  }
+
+  /** A time for this account that is always later than its earlier ones (so same-millisecond events still order). */
+  stampFor(u) {
+    u.lastStamp = Math.max(Date.now(), (u.lastStamp || 0) + 1);
+    return u.lastStamp;
+  }
+
+  /** "Continue this chat" after a number change: its earlier messages become readable again. */
+  continueChat(username, convId) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.continuedChats = { ...(u.continuedChats || {}), [convId]: this.stampFor(u) };
     this._save();
   }
 

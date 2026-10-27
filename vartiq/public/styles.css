@@ -224,6 +224,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color:
 }
 .panel { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--panel); }
 .panel.overlay { z-index: 2; }
+.settings-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.number-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 16px; background: var(--accent-soft); color: var(--text); border-bottom: 1px solid var(--border); font-size: 14px; }
+.number-banner span { flex: 1 1 220px; }
+.text.sealed { font-style: italic; color: var(--muted); }
 
 .bar {
   height: 60px;
