@@ -514,8 +514,10 @@ class Store {
 
   /** The photos `viewer` is shown (photos under review are only shown to their owner). */
   visiblePhotos(owner, viewer) {
+    const photos = this.photosOf(owner);
+    if (!photos.length) return []; // most people have none: skip the (costly) who-shares-a-chat check
     if (!this.canSeePhotos(viewer, owner)) return [];
-    return this.photosOf(owner).filter((p) => viewer === owner || !p.hidden);
+    return photos.filter((p) => viewer === owner || !p.hidden);
   }
 
   /** The picture to show for `owner` to `viewer`: `{ id, thumb, count }` (media ids), or null. */

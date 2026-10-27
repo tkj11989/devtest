@@ -641,16 +641,27 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   const notifyStatus = (convId, changed) => {
     if (!changed.length) return;
     const conv = store.getConversation(convId);
-    const messages = changed.map((m) => ({ id: m.id, deliveredTo: m.deliveredTo, readBy: m.readBy }));
-    if (conv) notifyMembers(conv, 'message:status', { convId, messages });
+    if (!conv) return;
+    // Only the person who wrote a message sees its ticks, so each sender gets just their own messages. (Sending every change
+    // to every member made a person opening a big group cost members x messages events.)
+    const bySender = new Map();
+    for (const m of changed) {
+      if (!bySender.has(m.from)) bySender.set(m.from, []);
+      bySender.get(m.from).push({ id: m.id, deliveredTo: [...m.deliveredTo], readBy: [...m.readBy] });
+    }
+    for (const [sender, messages] of bySender) if (conv.members.includes(sender)) notify(sender, 'message:status', { convId, messages });
   };
 
   const peersOf = (u) => store.peersOf(u);
 
   const broadcastPresence = (u) => {
+    // Only online and lastSeen are needed here: building each peer's whole view of the person (picture rules, shared chats)
+    // made one connection cost peers x groups x members, which stalled the server when 500 people were online.
+    const base = store.publicUser(u);
+    const on = isOnline(u);
     for (const p of peersOf(u)) {
-      const { online, lastSeen } = userView(u, p);
-      notify(p, 'presence', { username: u, online, lastSeen });
+      const blocked = store.blockedEither(u, p);
+      notify(p, 'presence', { username: u, online: on && !blocked, lastSeen: blocked ? null : (base?.lastSeen ?? null) });
     }
   };
 
