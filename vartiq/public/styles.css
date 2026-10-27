@@ -451,6 +451,15 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color:
   background: var(--panel-2);
   flex: none;
 }
+/* The message box takes the rest of the row; the tool buttons keep their size. */
+.composer > * { flex: none; }
+.composer #message-input { flex: 1 1 0; min-width: 0; width: auto; }
+/* On phones the message box gets a full-width row; the tools and mic sit on the row below. */
+@media (max-width: 760px) {
+  .composer { flex-wrap: wrap; row-gap: 6px; }
+  .composer #message-input { order: -1; flex: 1 1 100%; }
+  .composer > .emoji-wrap, .composer > .icon-btn { margin-right: 2px; }
+}
 .composer textarea {
   resize: none;
   max-height: 120px;
