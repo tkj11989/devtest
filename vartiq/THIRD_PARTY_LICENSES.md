@@ -16,6 +16,8 @@
 | bytes | 3.1.2 | MIT |
 | call-bind-apply-helpers | 1.0.2 | MIT |
 | call-bound | 1.0.4 | MIT |
+| compressible | 2.0.18 | MIT |
+| compression | 1.8.2 | MIT |
 | content-disposition | 0.5.4 | MIT |
 | content-type | 1.0.5 | MIT |
 | cookie | 0.7.2 | MIT |
@@ -49,8 +51,8 @@
 | gopd | 1.2.0 | MIT |
 | has-symbols | 1.1.0 | MIT |
 | hasown | 2.0.4 | MIT |
-| http_ece | 1.2.0 | MIT |
 | http-errors | 2.0.1 | MIT |
+| http_ece | 1.2.0 | MIT |
 | https-proxy-agent | 7.0.6 | MIT |
 | iconv-lite | 0.4.24 | MIT |
 | inherits | 2.0.4 | ISC |
@@ -76,6 +78,7 @@
 | object-assign | 4.1.1 | MIT |
 | object-inspect | 1.13.4 | MIT |
 | on-finished | 2.4.1 | MIT |
+| on-headers | 1.1.0 | MIT |
 | parseurl | 1.3.3 | MIT |
 | path-to-regexp | 0.1.13 | MIT |
 | pg | 8.23.1 | MIT |

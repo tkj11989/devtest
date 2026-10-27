@@ -171,8 +171,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       system: obj({ event: { const: 'disappearing' }, seconds: { type: ['integer', 'null'] } }),
       text: { type: 'string' },
       ts: { type: 'integer', description: 'ms since epoch' },
-      deliveredTo: arrayOf({ type: 'string' }),
-      readBy: arrayOf({ type: 'string' }),
+      deliveredTo: arrayOf({ type: 'string' }), // see description below
+      readBy: arrayOf({ type: 'string', description: 'for the sender: everybody who read it; for anyone else: only yourself, if you did' }),
       clientId: { type: 'string', description: 'the clientId / Idempotency-Key it was sent with' },
       masked: { type: 'boolean', description: 'recipients should hide the text until tapped' },
       starred: { type: 'boolean', description: 'starred by you' },

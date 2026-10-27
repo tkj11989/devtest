@@ -97,6 +97,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   const run = (fn, status = 200) => async (req, res, next) => {
     try {
       const result = await fn(req);
+      if (req.method !== 'GET') await store.whenSaved(); // acknowledged means saved
       if (result === undefined) return res.status(204).end();
       res.status(status).json(result);
     } catch (err) {

@@ -344,7 +344,7 @@ test('moderation of channels and reports; settings: limits and prices; audit log
   // Limits take effect at once; premium is unaffected.
   store.createChannel('owner', { handle: 'c3x', name: 'C3' });
   const lim = await admin('PUT', '/settings', { token, body: { limits: { freeChatLocks: 1, freeHiddenChats: 0, channelsPerOwner: 2 } } });
-  assert.deepStrictEqual(lim.body.settings.limits, { freeChatLocks: 1, freeHiddenChats: 0, channelsPerOwner: 2, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12 });
+  assert.deepStrictEqual(lim.body.settings.limits, { freeChatLocks: 1, freeHiddenChats: 0, channelsPerOwner: 2, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12, maxGroupMembers: 256 });
   assert.strictEqual((await api('POST', '/channels', { token: owner.token, body: { handle: 'c4x', name: 'C4' } })).body.error.code, 'limit_reached');
   store.register('b1x', 'pass'); store.register('b2x', 'pass');
   store.setLockCode('fanfan', '2468');

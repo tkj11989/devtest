@@ -24,6 +24,9 @@ class Store {
     this.mediaDir = mediaDir || (this.file ? path.join(path.dirname(this.file), 'media') : null);
     this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
     this._saveTimer = null;
+    this._dirty = false;
+    // Acknowledge a change only once it is saved (DURABLE_ACK=0 acknowledges at once and saves a moment later).
+    this.durableAck = process.env.DURABLE_ACK !== '0';
     this._convIdx = null; // username -> [conversations], built on first use
     this._contactIdx = null; // { phone: Map, email: Map }, built on first use
     this._load();
@@ -55,8 +58,34 @@ class Store {
   _save() {
     if (this.pg) return this.pg.schedule();
     if (!this.file) return;
+    this._dirty = true;
     clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => this.flush(), 200);
+  }
+
+  /**
+   * Resolves when every change made so far is saved (immediately when there is nothing to save). The servers wait for this
+   * before telling a client "done", so an acknowledged message survives a crash or power cut. Requests that arrive together
+   * share one save.
+   */
+  async whenSaved() {
+    if (!this.durableAck) return;
+    try {
+      if (this.pg) {
+        if (this.pg.timer || this.pg.running) await this.pg.flush();
+      } else if (this._dirty) {
+        // One save for everybody waiting (at most one every 25 ms), instead of rewriting the whole file per request.
+        this._commit ||= new Promise((resolve, reject) => {
+          setTimeout(() => {
+            this._commit = null;
+            try { this.flush(); resolve(); } catch (err) { reject(err); }
+          }, 25);
+        });
+        await this._commit;
+      }
+    } catch (err) {
+      throw Object.assign(new Error('Could not save right now. Please try again.'), { status: 503, code: 'storage_unavailable', cause: err });
+    }
   }
 
   /** Save now. With PostgreSQL this returns a promise that resolves when the database has the changes. */
@@ -64,6 +93,7 @@ class Store {
     if (this.pg) return this.pg.flush();
     if (!this.file) return undefined;
     clearTimeout(this._saveTimer);
+    this._dirty = false;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.data));
@@ -2796,6 +2826,12 @@ class Store {
     if (rest.e2ee) {
       const mine = new Set(this.devicesOf(username).map((d) => d.id));
       rest.e2ee = { ...rest.e2ee, w: Object.fromEntries(Object.entries(rest.e2ee.w).filter(([id]) => mine.has(id))) };
+    }
+    // Only the sender sees who received and read a message; everybody else just gets their own entry (so a message into a
+    // 500-member group is not 500 names long for each of the 500 people).
+    if (username !== msg.from) {
+      if (Array.isArray(rest.deliveredTo)) rest.deliveredTo = rest.deliveredTo.includes(username) ? [username] : [];
+      if (Array.isArray(rest.readBy)) rest.readBy = rest.readBy.includes(username) ? [username] : [];
     }
     if (rest.poll) rest.poll = Store.pollView(rest.poll, username);
     if (rest.event) rest.event = Store.eventView(rest.event, username);

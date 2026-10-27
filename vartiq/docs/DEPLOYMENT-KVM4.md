@@ -295,6 +295,8 @@ TRANSLATE_WEBHOOK_TOKEN=...
 ACCOUNT_ERASE_DELAY_MS=3600000
 ```
 
+**Reliability settings:** keep `DATABASE_URL` set (PostgreSQL; the file store is for development). The app compresses responses itself; if you turn on `gzip` in nginx as well, add `COMPRESSION=0` to this file so nothing is compressed twice. `DURABLE_ACK` should stay unset (a message is confirmed only once saved). Groups are limited to 256 members (change in Admin → Settings).
+
 **Security settings to add to the same file:**
 
 ```

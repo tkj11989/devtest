@@ -1168,6 +1168,10 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       for (const m of members || []) {
         if (!store.canStartChat(me, String(m).toLowerCase())) throw new ApiError(403, 'not_accepting', `${store.publicUser(String(m).toLowerCase())?.displayName || m} is not accepting new chats or groups`);
       }
+      const maxMembers = store.getSettings().limits.maxGroupMembers;
+      if (new Set([me, ...(members || []).map((m) => String(m).toLowerCase())]).size > maxMembers) {
+        throw new ApiError(400, 'group_too_large', `A group can have at most ${maxMembers} members`);
+      }
       const conv = store.createGroup(me, name, members);
       for (const m of conv.members) {
         notify(m, 'conversation:new', { conversation: store.summarize(conv, m), users: usersFor(conv.members, m) });

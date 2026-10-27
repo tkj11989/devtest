@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const crypto = require('crypto');
+const compression = require('compression');
 const path = require('path');
 const http = require('http');
 const https = require('https');
@@ -233,6 +234,9 @@ function createApp({
     res.set('Permissions-Policy', 'geolocation=(self), microphone=(self), camera=(self), payment=(), usb=(), serial=(), hid=(), display-capture=()');
     next();
   });
+  // JSON and text are sent compressed (a member of a big group has a 90 KB chat list). COMPRESSION=0 turns it off, for example
+  // when nginx already compresses.
+  if (process.env.COMPRESSION !== '0') app.use(compression({ threshold: 1024 }));
   // Headers for every page: the app may only load its own scripts (so an injected script cannot run or phone home), nothing may
   // frame it, browsers must keep using https once they have seen it, and files are never guessed to be another type.
   // The admin dashboard, the guardian page and the API docs set their own, stricter or special policies below.
@@ -287,7 +291,9 @@ function createApp({
   const handle = (fn) => async (payload, ack) => {
     const reply = typeof ack === 'function' ? ack : () => {};
     try {
-      reply({ ok: true, ...(await fn(payload || {})) });
+      const result = await fn(payload || {});
+      await store.whenSaved(); // acknowledged means saved
+      reply({ ok: true, ...result });
     } catch (err) {
       reply({ ok: false, error: err.message, ...(err.code ? { code: err.code } : {}) });
     }
@@ -543,6 +549,7 @@ if (require.main === module) {
         console.error(`Refusing to start in production with testing switches on: ${unsafe.join(', ')}. Remove them from the environment file.`);
         process.exit(1);
       }
+      if (!process.env.DATABASE_URL) console.warn('Production is using the data/db.json file store, which rewrites the whole file on every change. Set DATABASE_URL to use PostgreSQL.');
       if (!process.env.PUBLIC_URL) console.warn('PUBLIC_URL is not set: parent/guardian links, payment returns and the CORS allow-list will not work properly.');
     }
     // Browsers only allow camera/microphone on https:// or localhost, so serve

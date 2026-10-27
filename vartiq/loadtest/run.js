@@ -121,7 +121,12 @@ const png = (w, h) => { const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0);
     const r = await call(L3, owner, 'POST', '/conversations', { type: 'group', name: `Group ${k}`, members });
     if (r.status === 201) groups.push({ id: r.body.conversation?.id || r.body.id, owner, members: [owner.username, ...members] });
   });
-  // one big group with everybody
+  // the default group size limit refuses a 500-member group; then the administrator raises it for this stress test
+  const refused = await call(L3, ok[0], 'POST', '/conversations', { type: 'group', name: 'Everyone', members: ok.slice(1).map((u) => u.username) });
+  report.phases.groupLimit = { defaultRefused: refused.status === 400 && refused.body?.error?.code === 'group_too_large' };
+  if (!report.phases.groupLimit.defaultRefused) defect('medium', 'a 500-member group was not refused by the default group size limit');
+  const admToken = (await fetch(`${BASE}/admin/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'root', password: 'correct-horse-battery' }) }).then((r) => r.json())).token;
+  await fetch(`${BASE}/admin/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admToken}` }, body: JSON.stringify({ limits: { maxGroupMembers: 1000 } }) });
   const big = await call(L3, ok[0], 'POST', '/conversations', { type: 'group', name: 'Everyone', members: ok.slice(1).map((u) => u.username) });
   report.phases.chats = { ...stats(L3), directs: directs.length, groups: groups.length, bigGroup: big.status, bigGroupMsg: big.body?.error?.message };
   console.log('  ', JSON.stringify(report.phases.chats));

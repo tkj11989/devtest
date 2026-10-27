@@ -387,6 +387,14 @@ Fingerprint / face uses WebAuthn platform authenticators (Touch ID, Face ID, Win
 
 REST: `PUT/DELETE /conversations/{id}/hide`, `PUT /hidden-contacts/{username}`, `POST /hidden-chats/reveal`, `GET /hidden-chats`, `POST /hidden-chats/close`, `POST /hidden-chats/clear`, `POST /chat-lock/clear`, `POST /biometric/challenge`, `POST /biometric`, `DELETE /biometric/{id}`. Wherever a code is asked, send `{ "code" }` or `{ "biometric": { id, clientDataJSON, authenticatorData, signature } }`. `GET /conversations` never lists hidden chats (it returns `hiddenCount`).
 
+## Reliability and scale
+
+- **Acknowledged means saved.** A message, vote or any change is confirmed to the sender only after it is on disk (file store) or in PostgreSQL; requests that arrive together share one save. A crash or `kill -9` right after the confirmation loses nothing. `DURABLE_ACK=0` turns this off (faster, but the last ~0.2 s can be lost in a crash). A save that fails is answered with `503 storage_unavailable` and retried by the client.
+- **Group size**: at most 256 members by default (Admin → Settings → *Most members in a group*, 3 to 1000; `400 group_too_large`). Groups are fixed at creation.
+- **Receipts**: only the sender sees who received and read a message; everybody else gets just their own entry. Delivery and read ticks go only to the sender.
+- **Compression**: JSON and text responses are compressed (`COMPRESSION=0` if nginx already does it).
+- **Load test**: `loadtest/` runs 500 users against a real server; results in [docs/TEST-REPORT-500-USERS.md](docs/TEST-REPORT-500-USERS.md). Use PostgreSQL in production: the file store rewrites the whole file on every change.
+
 ## Security
 
 See [docs/SECURITY.md](docs/SECURITY.md) for what is protected and the open risks. Settings that matter in production:

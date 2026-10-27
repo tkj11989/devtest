@@ -12,7 +12,7 @@ Date: 27 Oct 2026 · Test machine: 4 CPU, 16 GB · One Node process serving (fil
 |---|---|---|
 | Sign-up of 500 users (1,000 requests) | 0 errors, p95 46 ms | 0 errors, p95 71 ms |
 | 500 websocket connections | 500/500, p95 88 ms | 500/500, p95 86 ms |
-| 10,000 messages sent | 0 errors, p50 8 ms, p95 34 ms | 0 errors, p50 15 ms, p95 54 ms |
+| 10,000 messages sent | 0 errors, p50 8 ms, p95 34 ms (first round) | 0 errors, p50 15 ms, p95 54 ms (first round) |
 | Deliveries over the socket | 22,810/22,810 | 22,800/22,800 |
 | Delivery delay (send to receiver) | p95 about 35 ms | p95 about 55 ms |
 | Poll and event tallies (80 checks) | all exact | all exact |
@@ -34,16 +34,23 @@ Date: 27 Oct 2026 · Test machine: 4 CPU, 16 GB · One Node process serving (fil
 2. **Every connection cost members × groups × members (high with PostgreSQL).** Telling a person's contacts that they came online built each contact's full profile view, including the picture-visibility check, which scans group member lists. With 500 people online this stalled reads for up to 55 seconds and made a reconnect storm take 33 seconds. Presence now computes only online / last seen, and the picture check is skipped for people without photos. Reconnect storm: 33 s to 6 s; reads at p99: 16 s to 0.4 s; whole run: 157 s to 62 s.
 3. Browser console warning "Unrecognized feature: bluetooth" from the Permissions-Policy header removed.
 
-## Open findings (not fixed)
+## Findings closed afterwards (second round, same test re-run)
 
-| # | Severity | Finding | Advice |
+| # | Finding | Fix | Result |
 |---|---|---|---|
-| 1 | Medium | **A message can be lost if the server is killed within about 0.2 s of acknowledging it** (changes are saved in the background after 150 to 200 ms). A normal stop (`systemctl stop`) flushes first and lost nothing; a crash or power cut can lose the last fraction of a second, in both the file store and PostgreSQL. | Accept, or make message sends wait for the save (costs latency). Use UPS/clean shutdowns. |
-| 2 | Medium | **Very large simultaneous bursts are slow:** 500 people all posting into a 500-member group at the same instant took 18 s to deliver (250,000 deliveries, about 13,000 a second); a single message into that group takes 35 ms. Each message carries its growing delivered/read lists. | Fine for normal chat. For groups beyond a few hundred members, cap group size, or send counts instead of name lists. |
-| 3 | Medium | **The chat list is large for people in a big group:** `GET /conversations` is about 90 KB for a member of a 500-member group and is not compressed. | Turn on gzip in nginx for `application/json`; consider a group size limit. |
-| 4 | Low | **One server process, file store:** the whole database file (5.5 MB here) is rewritten on every change; PostgreSQL mode keeps the data safer and uses more memory (415 MB vs 341 MB). | Use PostgreSQL in production (already in the guide). |
-| 5 | Info | A user blocked by someone can still "send": the message is accepted and silently never delivered (by design; verified the blocker never receives it). | none |
-| 6 | Info | No group size limit: a group with all 500 users was created. | Decide a maximum (for example 256) if you want one. |
+| 1 | A message acknowledged less than 0.2 s before a hard kill was lost (both stores) | The server now answers "done" only after the change is saved (`store.whenSaved()`, one shared save for everybody waiting; `DURABLE_ACK=0` restores the old behaviour; a failed save is reported as `503 storage_unavailable`) | `kill -9` right after the last acknowledgement: **0 lost** with the file store and with PostgreSQL (was 30 of 30). Cost: sending takes about 50 ms instead of 10 ms at p50 (p95 91 ms) |
+| 2 | 500 people posting into a 500-member group at once took 18 s | Everybody except the sender now gets only their own entry in `deliveredTo` / `readBy` (the sender still sees all) | Same burst: **10.6 s** (file) and **11.7 s** (PostgreSQL); p95 per sender 12 s down to 4.5 to 5.6 s |
+| 3 | 90 KB uncompressed chat list | Responses are compressed (`compression`, 1 KB threshold; `COMPRESSION=0` turns it off if nginx does it) | Covered by a test; `Content-Encoding: gzip` |
+| 4 | File store rewrites the whole file on every change | The server warns at start in production when `DATABASE_URL` is not set; the guide already recommends PostgreSQL. With durable acknowledgement, saves are grouped (at most one every 25 ms) | Load run unchanged in length (54 s file, 61 s PostgreSQL) |
+| 5 | Blocked sender is accepted silently | By design (the blocked person is not told); verified the blocker never receives it | none |
+| 6 | No group size limit | New admin limit *Most members in a group* (default **256**, 3 to 1000, `400 group_too_large`) | The 500-member group is refused by default; the stress test raises the limit first |
+
+Second-round figures: 500/500 sign-ups, sockets and reconnects; 0 missing deliveries out of about 22,900; polls and events exact; 0 defects in both runs; server memory 452 MB (file) / 465 MB (PostgreSQL); restart check 0 differences.
+
+## Still true
+
+* A hard power cut during the 25 ms group save is the only window left; PostgreSQL's own durability settings apply from there.
+* A burst of 500 simultaneous posts into one 500-member group still takes about 10 s, because each of the 250,000 deliveries is a separate message to a separate person; ordinary chat (one message into that group: 76 ms) is not affected. The default group limit of 256 halves the worst case.
 
 ## Not covered
 

@@ -264,3 +264,38 @@ test('old password login: ten wrong passwords lock the account for a while', asy
   const r = await env.api('POST', '/auth/login', null, { username: 'olduser', password: 'right-password' });
   assert.strictEqual(r.status, 429);
 });
+
+test('big groups: a group size limit, compressed responses, shorter delivery lists for everybody but the sender', async (t) => {
+  const store = new Store({ file: null });
+  const app = createApp({ store, otp: { sender: async () => {} }, rateLimit: { max: 100000, authMax: 100000 } });
+  await new Promise((r) => app.server.listen(0, r));
+  t.after(() => { app.io.close(); app.server.close(); });
+  const base = `http://localhost:${app.server.address().port}/api/v1`;
+  const owner = store.register('owner', 'pass');
+  const names = [];
+  for (let i = 0; i < 12; i++) { names.push(`mem${i}`); store.register(`mem${i}`, 'pass'); }
+  const s = store.getSettings(); s.limits.maxGroupMembers = 10; store.settingsCache = s;
+  const post = (body, token = owner.token) => fetch(`${base}/conversations`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const tooBig = await post({ type: 'group', name: 'Big', members: names });
+  assert.strictEqual(tooBig.status, 400);
+  assert.strictEqual((await tooBig.json()).error.code, 'group_too_large');
+  const ok = await post({ type: 'group', name: 'Ok', members: names.slice(0, 9) });
+  assert.strictEqual(ok.status, 201);
+  const conv = (await ok.json()).conversation;
+
+  const sent = store.addMessage(conv.id, 'owner', 'hello');
+  for (const n of names.slice(0, 5)) store.addDelivered(sent, n);
+  store.markRead(conv.id, 'mem1');
+  const asOwner = store.viewFor(sent, 'owner');
+  const asM1 = store.viewFor(sent, 'mem1');
+  const asM7 = store.viewFor(sent, 'mem7');
+  assert.ok(asOwner.deliveredTo.length >= 5 && asOwner.readBy.includes('mem1'), 'the sender sees everyone');
+  assert.deepStrictEqual([asM1.deliveredTo, asM1.readBy], [['mem1'], ['mem1']], 'a member sees only their own entry');
+  assert.deepStrictEqual([asM7.deliveredTo, asM7.readBy], [[], []]);
+
+  // Large JSON is compressed when the client accepts it.
+  for (let i = 0; i < 40; i++) store.addMessage(conv.id, 'owner', `message number ${i} with some words in it`);
+  const res = await fetch(`${base}/conversations/${conv.id}/messages?limit=50`, { headers: { Authorization: `Bearer ${owner.token}`, 'Accept-Encoding': 'gzip' } });
+  assert.strictEqual(res.headers.get('content-encoding'), 'gzip');
+  assert.strictEqual((await res.json()).messages.length, 41);
+});

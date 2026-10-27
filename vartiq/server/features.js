@@ -43,7 +43,7 @@ const DEFAULT_SETTINGS = {
   // Everything is on, except the developer tools: API keys and webhooks are restricted
   // (web app and mobile) until an administrator switches them on.
   features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
-  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12 },
+  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12, maxGroupMembers: 256 },
   prices: {}, // plan id -> price override
   disabledPlans: [], // plans nobody can buy right now
   announcement: '',
@@ -52,7 +52,7 @@ const DEFAULT_SETTINGS = {
   legal: { ...DEFAULT_LEGAL }, // company details printed in the Terms and Privacy Notice (Admin → Settings → Legal)
 };
 
-const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20] };
+const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20], maxGroupMembers: [3, 1000] };
 
 /** Merge a settings patch into `current`, validating everything. Returns the new settings and what changed. */
 function applySettings(current, patch) {
