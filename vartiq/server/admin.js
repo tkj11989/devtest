@@ -188,7 +188,8 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     if (!u) throw fail(404, 'not_found', 'User not found');
     return u;
   };
-  router.get('/users/:username', auth, run((req) => ({ user: user(req) })));
+  // Looking at a person's account details is itself recorded (who looked at whom), for accountability.
+  router.get('/users/:username', auth, run((req) => { const u = user(req); log(req, 'view-user', u.username, null); return { user: u }; }));
 
   router.post('/users/:username/suspend', auth, run((req) => {
     const u = user(req);

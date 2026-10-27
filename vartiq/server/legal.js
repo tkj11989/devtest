@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-27';
+const VERSION = '2026-10-28';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -115,6 +115,8 @@ function privacyNotice() {
           ['Messages: the text, the sender, the chat, the time, delivery and read status. Voice notes (audio)', 'To deliver your messages and show your chats on all your devices', 'When you send a message'],
           ['Chats you belong to and the members of your groups', 'To deliver messages to the right people', 'When you start or join a chat'],
           ['Status updates (text or photo)', 'To show them to your contacts for 24 hours, then they are removed', 'When you post one'],
+          ['Who viewed your status updates, and when', 'To show you who saw your status. Deleted with the status after 24 hours', 'When someone views a status'],
+          ['Developer tools, if you use them: API keys (kept only as a hash), webhook addresses and a short log of recent deliveries', 'To let your own software use your account and to show you whether deliveries worked', 'When you create a key or webhook'],
           ['Channel posts and channels you create or follow', 'Channels are public: anyone can read them and see who owns them', 'When you create, post to or follow a channel'],
           ['Who viewed your profile and when (last view date only)', 'To show you the people who looked at your profile. Kept for 90 days. You can switch this off, which also erases your list', 'When someone opens your profile, if both of you have the setting on'],
           ['Call history: who, when, call type, how long; whether a call was recorded', 'To show your call history. The call itself is not stored by us', 'During and after a call'],
@@ -159,7 +161,7 @@ function privacyNotice() {
         'Other users: what the app is designed to show them: your name, "about" line, whether you are online and when you were last seen (you can limit this), your business profile, public channel posts, status updates, and messages you send to them.',
         'Service providers (data processors) who work for us under contract: a text-message and email provider (to send login codes); a cloud hosting and network provider, including a content delivery and security provider such as Cloudflare if we use one; a database provider; a relay (TURN) provider that helps voice and video calls connect when a direct connection is not possible. Call audio and video are encrypted in transit.',
         'An identity verification provider, only if you choose to verify. Your ID number is sent to it once to confirm it, together with the one-time code. {brand} does not store your ID number or any ID details; we keep only that you are verified and when.',
-        '{paymentProvider} (our payment provider), only if you buy Premium. You pay on its own page, which handles your card, UPI or bank details; we receive a confirmation with the amount and a payment number, and nothing else about how you paid except the kind of method (for example UPI or card).',
+        '{paymentProvider} (our payment provider), only if you buy Premium. You pay on its own page, which handles your card, UPI or bank details; we send it your {brand} username, the plan and an order reference so the payment can be matched to you (not your name, mobile number or email), and we receive a confirmation with the amount and a payment number, and nothing else about how you paid except the kind of method (for example UPI or card).',
         'The push services of browser makers (Google, Mozilla, Apple, Microsoft), only if you turn notifications on. Notifications pass through the push service of your browser. It can see that a notification was sent to your device and when, but a notification carries no message text.',
         'A map service, only if you tap "Open in map" on a location someone shared: your browser or map app opens with that position, and the map service you use can then see it. {brand} itself loads no maps.',
         'A parent or guardian, if you are under 18: they see your name and username, can switch calls, location sharing, being found by new people and public channels on or off, and can disable or delete your account. They cannot read your messages, which are end-to-end encrypted.',
@@ -182,7 +184,11 @@ function privacyNotice() {
         rows: [
           ['Account data (profile, settings, contact details)', 'Until you delete your account; then erased within 24 hours'],
           ['Messages and voice notes', 'Until you or the sender delete them, or the chat\'s disappearing-message timer removes them; the content of the messages you sent is erased within 24 hours of deleting your account (see section 7)'],
-          ['Status updates', '24 hours'],
+          ['Status updates and who viewed them', '24 hours'],
+          ['Logged-in devices (name and times)', 'Until you sign the device out, 30 days after you last used it, or you delete your account'],
+          ['Login PIN (a hash) and counters of wrong guesses', 'Until you remove the PIN or delete your account'],
+          ['Polls and events', 'Like messages: until the sender deletes them or a disappearing-message timer removes them, or the chat or account is deleted. Your votes and answers are removed when you delete your account'],
+          ['Developer API keys, webhooks and their delivery log', 'Until you delete them or delete your account'],
           ['Notification settings of a device', 'Until you turn notifications off on that device, log out, or delete your account (and removed at once if the browser says the device is gone)'],
           ['A shared location', 'A location you share once is a message and is kept like one. A live location keeps only the latest position (no trail), and it is erased when the time you chose is up (at most 8 hours) or when you tap Stop sharing; the chat then shows "Live location ended"'],
           ['Profile photos', 'Until you remove them or delete your account (then erased within 24 hours). A photo that was reported and removed by us is deleted too'],
@@ -200,7 +206,7 @@ function privacyNotice() {
     },
     {
       title: '7. Your rights and choices',
-      p: ['Under the DPDP Act (and similar laws) you have rights over your personal data. In the app, go to Profile → Privacy and consent:'],
+      p: ['Under the DPDP Act (and similar laws) you have rights over your personal data. In the app, go to Settings → Privacy and consent:'],
       ul: [
         'Access: see what data we hold about you and download a copy ("Download my data").',
         'Correction: change your name, "about" line and other profile details yourself at any time.',
@@ -230,7 +236,7 @@ function privacyNotice() {
     {
       title: '10. Cookies and storage on your device',
       p: [
-        'The {brand} web app uses your browser\'s storage only for things the app needs: to keep you logged in, to keep your device\'s encryption key, to remember settings such as your theme, and (if you leave it on) to keep a copy of your chats so they open faster. You can clear this in Profile → Chats on this device, and it is removed when you log out. If you turn on notifications, a small background script (a service worker) is added to your browser so notifications can be shown. Your browser asks you before the app may send notifications or read your location, and you can change both in your browser\'s site settings at any time.',
+        'The {brand} web app uses your browser\'s storage only for things the app needs: to keep you logged in, to keep your device\'s encryption key, to remember settings such as your theme, and (if you leave it on) to keep a copy of your chats so they open faster. You can clear this in Settings → Chats on this device, and it is removed when you log out. If you turn on notifications, a small background script (a service worker) is added to your browser so notifications can be shown. Your browser asks you before the app may send notifications or read your location, and you can change both in your browser\'s site settings at any time.',
       ],
     },
     {
@@ -244,7 +250,15 @@ function privacyNotice() {
       ],
     },
     {
-      title: '12. Changes to this notice',
+      title: '12. If you are in the EU, the UK or another country with its own privacy law',
+      p: [
+        'We use your data on these grounds: to provide the service you asked for (contract); with your consent for optional things such as message translation, identity verification and, for a young person, their parent\'s or guardian\'s agreement; to keep the service secure and prevent abuse (our legitimate interest); and to keep accounting records (a legal duty).',
+        'Besides the rights in section 7 you can ask us to restrict how we use your data, to move it ("Download my data" gives you a file you can reuse), and to stop uses based on our legitimate interest. We do not make decisions about you by automated means that have legal or similarly significant effects. You may complain to your national data protection authority.',
+        'When data is processed by a provider outside your country we require the safeguards the law asks for, for example standard contractual clauses. Contact us (section 9) for a copy.',
+      ],
+    },
+    {
+      title: '13. Changes to this notice',
       p: [
         'We will update this notice when our practices change. The version date is at the top. If a change is important, we will tell you in the app and ask you to accept again before you keep using it.',
       ],
@@ -324,7 +338,7 @@ function termsOfUse() {
     {
       title: '9. Suspending or ending accounts',
       p: [
-        'You may delete your account at any time in the app (Profile \u2192 Privacy and consent). Your account is then permanently disabled: your login stops working at once, and your chats, media and personal data are erased within 24 hours (a basic record that the account existed is kept; see the Privacy Notice). You can sign up again as a new account. We may suspend or end an account, with or without notice, if you break these Terms or the law, if we are required to, or to protect people or the service. We will tell you why where we can.',
+        'You may delete your account at any time in the app (Settings \u2192 Privacy and consent). Your account is then permanently disabled: your login stops working at once, and your chats, media and personal data are erased within 24 hours (a basic record that the account existed is kept; see the Privacy Notice). You can sign up again as a new account. We may suspend or end an account, with or without notice, if you break these Terms or the law, if we are required to, or to protect people or the service. We will tell you why where we can.',
       ],
     },
     {
@@ -348,9 +362,48 @@ function termsOfUse() {
   ];
 }
 
+/** The page app stores ask for: how to delete an account and its data, with or without the app. */
+function deletionPage() {
+  return [
+    {
+      title: 'Delete your {brand} account',
+      p: ['You can delete your account and the personal data in it. This page says how, what is erased, and what we keep.'],
+    },
+    {
+      title: 'In the app (fastest)',
+      ul: [
+        'Open {brand}, go to Settings → Privacy and consent → Delete my account.',
+        'Confirm with the code we send by SMS to your mobile number.',
+        'Your login stops working at once. Within 24 hours your chats and the messages you sent (including voice notes), photos, statuses, channels, product catalogue, developer keys, devices and encryption keys, mobile number, email and profile are erased.',
+      ],
+    },
+    {
+      title: 'If you cannot open the app or no longer have the number',
+      ul: [
+        'Write to {contactEmail} or to our Grievance Officer, {grievanceName} ({grievanceEmail}), from the email on your account if you added one, with the mobile number or username of the account and the words "Delete my account".',
+        'We will check that you are the account holder (for example with a code sent to the account\'s number) and reply within {responseDays} days. Deleting is free.',
+        'A parent or guardian can delete a young person\'s account from the private link we sent them.',
+      ],
+    },
+    {
+      title: 'What is erased and what is kept',
+      ul: [
+        'Erased: your profile, mobile number, email, date of birth, photos, statuses, devices and keys, settings, parent or guardian details, and the content of the messages you sent. You leave your groups, and your votes and answers are removed from polls and events.',
+        'Kept: a basic record that the account existed (username, registration and deletion dates, what you accepted and when), and payment records (amount, date, plan, payment number, without your name or contact details) for as long as accounting law requires. Messages other people received remain on their own devices only as far as they already saved them.',
+        'Backups: erased data may remain in backups for up to {backupDays} days and is then overwritten.',
+      ],
+    },
+    {
+      title: 'Questions',
+      p: ['{company}, {address}. Email {contactEmail}. Grievance Officer: {grievanceName}, {grievanceEmail}{grievancePhone}.'],
+    },
+  ];
+}
+
 const DOCS = {
   privacy: { title: 'Privacy Notice', sections: privacyNotice },
   terms: { title: 'Terms of Use', sections: termsOfUse },
+  'delete-account': { title: 'Delete your account', sections: deletionPage },
 };
 
 const fill = (text, d) => String(text)
@@ -399,7 +452,7 @@ function documentHtml(id, d) {
     if (s.paragraphs.length > 1) parts.push(...s.paragraphs.slice(1).map(paragraphHtml));
     return parts.join('\n');
   }).join('\n');
-  const other = id === 'privacy' ? ['terms', 'Terms of Use'] : ['privacy', 'Privacy Notice'];
+  const other = id === 'privacy' ? ['terms', 'Terms of Use'] : id === 'terms' ? ['privacy', 'Privacy Notice'] : ['privacy', 'Privacy Notice'];
   const setup = d.configured ? '' : '<p class="warn">This page still shows placeholders in [square brackets]. An administrator must fill in the company details (Admin → Settings → Legal) before launch.</p>';
   return `<!doctype html>
 <html lang="en">

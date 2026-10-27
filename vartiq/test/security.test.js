@@ -299,3 +299,30 @@ test('big groups: a group size limit, compressed responses, shorter delivery lis
   assert.strictEqual(res.headers.get('content-encoding'), 'gzip');
   assert.strictEqual((await res.json()).messages.length, 41);
 });
+
+test('privacy: deletion page, data export covers what we hold, admin views are recorded, texts point to Settings', async (t) => {
+  const env = await setup(t);
+  const reg = await env.signUp('Asha', '+919800000020');
+  const name = reg.body.user.username;
+  await env.api('PUT', '/me/login-pin', reg.body.token, { pin: '482913' });
+  const page = await env.raw('GET', '/legal/delete-account');
+  assert.strictEqual(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Delete my account/);
+  assert.match(html, /Settings/);
+  assert.doesNotMatch(await (await env.raw('GET', '/legal/privacy')).text(), /Profile → Privacy and consent/);
+  assert.ok((await env.api('GET', '/legal')).body.documents.some((d) => d.id === 'delete-account'));
+
+  const exp = await env.api('GET', '/me/export', reg.body.token);
+  assert.strictEqual(exp.status, 200);
+  assert.strictEqual(exp.body.account.loginPinSet, true);
+  assert.ok(Array.isArray(exp.body.account.loggedInDevices) && exp.body.account.loggedInDevices.length >= 1);
+  assert.ok(Array.isArray(exp.body.account.orders));
+  assert.strictEqual(exp.body.account.birthDate, '1990-01-01');
+  assert.ok(!JSON.stringify(exp.body).includes('loginPin":{'), 'the PIN hash is not exported');
+
+  const adm = (await (await env.raw('POST', '/admin/api/login', { body: { username: 'root', password: 'correct-horse-battery' } })).json()).token;
+  await env.raw('GET', `/admin/api/users/${name}`, { token: adm });
+  const audit = await (await env.raw('GET', '/admin/api/audit', { token: adm })).json();
+  assert.ok(audit.entries.some((e) => e.action === 'view-user' && e.target === name), 'an administrator opening an account is recorded');
+});

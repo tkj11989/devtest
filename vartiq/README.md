@@ -407,6 +407,10 @@ See [docs/SECURITY.md](docs/SECURITY.md) for what is protected and the open risk
 - **Sessions** end after 30 days without use; the user can see and sign out devices, or log out everywhere (`GET`/`DELETE /me/sessions`, `PUT /me/login-pin`). Other open devices get a *New login* notice (`security:login`).
 - Signing up with a registered number, or logging in with an unknown one, gives the same answer as any request and sends nothing, so numbers cannot be probed.
 
+## Privacy review
+
+[docs/PRIVACY-COMPLIANCE.md](docs/PRIVACY-COMPLIANCE.md) lists every piece of data the app captures against the Privacy Notice, the download and the deletion, the answers for Google Play *Data safety* and Apple *App Privacy*, a check against DPDP, GDPR and COPPA, and what you must do before launch. Public pages: `/legal/privacy`, `/legal/terms`, `/legal/delete-account`.
+
 ## Terms of Use, Privacy Notice and consent
 
 Everything people agree to, and their rights over their data, is built in. **The texts are written from what the app actually does, but they are not legal advice: have a lawyer review them (and the company details and retention periods) before go-live.**
