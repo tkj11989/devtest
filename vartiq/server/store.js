@@ -124,7 +124,7 @@ class Store {
   }
 
   /** Someone accepted the current Terms and Privacy Notice (`items` e.g. ['terms','age']) and maybe gave optional consents. */
-  recordConsent(username, { version, items = [], optional = {}, via = 'app' }) {
+  recordConsent(username, { version, items = [], optional = {}, via = 'app', lang = null }) {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
     const now = Date.now();
@@ -132,8 +132,9 @@ class Store {
     c.version = version;
     c.at = now;
     c.accepted = [...new Set([...(c.accepted || []), ...items])];
+    if (lang) c.lang = lang; // the language of the notice the person read when accepting
     for (const [id, granted] of Object.entries(optional)) c.optional[id] = { granted: !!granted, at: now, version };
-    c.history = [...(c.history || []), { at: now, action: 'accept', version, items: [...items, ...Object.keys(optional).map((k) => `${k}:${optional[k] ? 'granted' : 'withdrawn'}`)], via }].slice(-100);
+    c.history = [...(c.history || []), { at: now, action: 'accept', version, items: [...items, ...Object.keys(optional).map((k) => `${k}:${optional[k] ? 'granted' : 'withdrawn'}`)], via, ...(lang ? { lang } : {}) }].slice(-100);
     u.consent = c;
     this._save();
     return c;

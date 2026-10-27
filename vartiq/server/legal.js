@@ -10,7 +10,11 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-28';
+const VERSION = '2026-10-29';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -29,9 +33,10 @@ const DEFAULT_LEGAL = {
   backupDays: 30,
   responseDays: 15,
   requireForLegacy: false,
+  reviewedLanguages: '', // language codes whose translation a qualified translator has checked, e.g. "hi,bn,ta" (hides the "not yet checked" note)
 };
 
-const FIELD_LIMITS = { brand: 60, company: 120, address: 300, contactEmail: 120, grievanceName: 80, grievanceEmail: 120, grievancePhone: 30, city: 60, hosting: 120, providers: 500, paymentProvider: 60 };
+const FIELD_LIMITS = { brand: 60, company: 120, address: 300, contactEmail: 120, grievanceName: 80, grievanceEmail: 120, grievancePhone: 30, city: 60, hosting: 120, providers: 500, paymentProvider: 60, reviewedLanguages: 200 };
 
 /** Company details to print: settings first, then LEGAL_* environment variables, then a visible placeholder. */
 function details(settings = {}, env = process.env) {
@@ -49,6 +54,7 @@ function details(settings = {}, env = process.env) {
     hosting: pick('hosting', 'LEGAL_HOSTING', '[hosting location]'),
     providers: s.providers || env.LEGAL_PROVIDERS || '',
     paymentProvider: s.paymentProvider || env.LEGAL_PAYMENT_PROVIDER || 'Razorpay', // change it with the payment vendor
+    reviewedLanguages: String(s.reviewedLanguages || env.LEGAL_REVIEWED_LANGUAGES || '').split(',').map((x) => x.trim()).filter(Boolean),
     backupDays: s.backupDays || 30,
     responseDays: s.responseDays || 15,
     configured: !!((s.company || env.LEGAL_COMPANY) && (s.address || env.LEGAL_ADDRESS) && (s.grievanceName || env.LEGAL_GRIEVANCE_NAME) && (s.grievanceEmail || env.LEGAL_GRIEVANCE_EMAIL)),
@@ -406,6 +412,72 @@ const DOCS = {
   'delete-account': { title: 'Delete your account', sections: deletionPage },
 };
 
+// ---------- languages ----------
+//
+// The notice is written once, in English. For every language of the Eighth Schedule of India's Constitution (the DPDP Act asks
+// that the notice can be read in English or any of them) a file in `legal-i18n/<code>.json` maps each English text, by a hash of
+// its exact wording, to its translation. A text with no translation is shown in English, and a test fails until it is added,
+// so a changed sentence can never silently show an out-of-date translation. {brand}, {company} ... stay as they are.
+
+const LANGUAGES = [
+  { code: 'en', name: 'English', native: 'English' },
+  { code: 'as', name: 'Assamese', native: 'অসমীয়া' },
+  { code: 'bn', name: 'Bengali', native: 'বাংলা' },
+  { code: 'brx', name: 'Bodo', native: 'बड़ो' },
+  { code: 'doi', name: 'Dogri', native: 'डोगरी' },
+  { code: 'gu', name: 'Gujarati', native: 'ગુજરાતી' },
+  { code: 'hi', name: 'Hindi', native: 'हिन्दी' },
+  { code: 'kn', name: 'Kannada', native: 'ಕನ್ನಡ' },
+  { code: 'ks', name: 'Kashmiri', native: 'کٲشُر', rtl: true },
+  { code: 'kok', name: 'Konkani', native: 'कोंकणी' },
+  { code: 'mai', name: 'Maithili', native: 'मैथिली' },
+  { code: 'ml', name: 'Malayalam', native: 'മലയാളം' },
+  { code: 'mni', name: 'Manipuri (Meitei)', native: 'ꯃꯩꯇꯩꯂꯣꯟ' },
+  { code: 'mr', name: 'Marathi', native: 'मराठी' },
+  { code: 'ne', name: 'Nepali', native: 'नेपाली' },
+  { code: 'or', name: 'Odia', native: 'ଓଡ଼ିଆ' },
+  { code: 'pa', name: 'Punjabi', native: 'ਪੰਜਾਬੀ' },
+  { code: 'sa', name: 'Sanskrit', native: 'संस्कृतम्' },
+  { code: 'sat', name: 'Santali', native: 'ᱥᱟᱱᱛᱟᱲᱤ' },
+  { code: 'sd', name: 'Sindhi', native: 'سنڌي', rtl: true },
+  { code: 'ta', name: 'Tamil', native: 'தமிழ்' },
+  { code: 'te', name: 'Telugu', native: 'తెలుగు' },
+  { code: 'ur', name: 'Urdu', native: 'اردو', rtl: true },
+];
+const LANG = new Map(LANGUAGES.map((l) => [l.code, l]));
+
+/** Wording of the sign-up notice and of the page around a document (also translated). */
+const UI_TEXT = {
+  beforeContinue: 'Before you continue',
+  fact1: 'We keep your mobile number, name, chats and settings on our servers. Messages you type in the app are end-to-end encrypted.',
+  fact2: "We don't sell your data or read your phone's contacts.",
+  fact3: 'You can download or delete your data any time in Settings.',
+  readTerms: 'Read the Terms of Use',
+  readPrivacy: 'Read the Privacy Notice',
+  noticeLanguage: 'Language of this notice',
+  version: 'version',
+  languages: 'Languages',
+  translationNote: 'This translation was prepared with automated tools and has not yet been checked by a certified translator. If anything is unclear, the English version applies.',
+};
+
+const keyOf = (text) => crypto.createHash('sha1').update(String(text)).digest('hex').slice(0, 10);
+const dictCache = new Map();
+/** `{ reviewed, strings }` of a language, or null (English, unknown, or no file). */
+function dictionary(code) {
+  if (!code || code === 'en' || !LANG.has(code)) return null;
+  if (!dictCache.has(code)) {
+    let data = null;
+    try {
+      data = JSON.parse(fs.readFileSync(path.join(__dirname, 'legal-i18n', `${code}.json`), 'utf8'));
+    } catch { /* no translation yet: English is shown */ }
+    dictCache.set(code, data);
+  }
+  return dictCache.get(code);
+}
+/** The text in `lang` (or as written, when there is no translation for it). */
+const tr = (text, lang) => dictionary(lang)?.strings?.[keyOf(text)] ?? text;
+const langOf = (code) => (LANG.has(String(code || '').toLowerCase()) ? String(code).toLowerCase() : 'en');
+
 const fill = (text, d) => String(text)
   .replace(/\{brand\}/g, d.brand)
   .replace(/\{company\}/g, d.company)
@@ -415,23 +487,29 @@ const fill = (text, d) => String(text)
   .replace(/\{grievanceEmail\}/g, d.grievanceEmail)
   .replace(/\{grievancePhone\}/g, d.grievancePhone ? `, phone ${d.grievancePhone}` : '')
   .replace(/\{city\}/g, d.city)
+  .replace(/\{paymentProvider\}/g, d.paymentProvider)
   .replace(/\{hosting\}/g, d.hosting)
   .replace(/\{backupDays\}/g, String(d.backupDays))
   .replace(/\{responseDays\}/g, String(d.responseDays));
 
 /** The document as plain data (for mobile apps): `[{ title, paragraphs, bullets, table }]`. */
-function documentData(id, d) {
+function documentData(id, d, langCode = 'en') {
   const doc = DOCS[id];
   if (!doc) return null;
+  const lang = langOf(langCode);
+  const t = (x) => fill(tr(x, lang), d);
+  const reviewed = lang === 'en' || !!dictionary(lang)?.reviewed || (d.reviewedLanguages || []).includes(lang);
   return {
     id,
-    title: doc.title,
+    title: tr(doc.title, lang),
     version: VERSION,
+    language: lang,
+    ...(lang !== 'en' ? { translationChecked: reviewed } : {}),
     sections: doc.sections().map((s) => ({
-      title: fill(s.title, d),
-      paragraphs: [...(s.p || []), ...(s.p2 || [])].map((t) => fill(t, d)),
-      bullets: (s.ul || []).map((t) => fill(t, d)),
-      table: s.table ? { head: s.table.head, rows: s.table.rows.map((r) => r.map((c) => fill(c, d))) } : null,
+      title: t(s.title),
+      paragraphs: [...(s.p || []), ...(s.p2 || [])].map(t),
+      bullets: (s.ul || []).map(t),
+      table: s.table ? { head: s.table.head.map(t), rows: s.table.rows.map((r) => r.map(t)) } : null,
     })),
   };
 }
@@ -439,8 +517,9 @@ function documentData(id, d) {
 const paragraphHtml = (t) => `<p>${esc(t).replace(/\n/g, '<br>')}</p>`;
 
 /** A complete, self-contained HTML page for a document. */
-function documentHtml(id, d) {
-  const data = documentData(id, d);
+function documentHtml(id, d, langCode = 'en') {
+  const lang = langOf(langCode);
+  const data = documentData(id, d, lang);
   if (!data) return null;
   const body = data.sections.map((s) => {
     const parts = [`<h2>${esc(s.title)}</h2>`];
@@ -452,10 +531,15 @@ function documentHtml(id, d) {
     if (s.paragraphs.length > 1) parts.push(...s.paragraphs.slice(1).map(paragraphHtml));
     return parts.join('\n');
   }).join('\n');
-  const other = id === 'privacy' ? ['terms', 'Terms of Use'] : id === 'terms' ? ['privacy', 'Privacy Notice'] : ['privacy', 'Privacy Notice'];
+  const other = id === 'privacy' ? ['terms', 'Terms of Use'] : ['privacy', 'Privacy Notice'];
+  const q = lang === 'en' ? '' : `?lang=${lang}`;
+  const meta = LANG.get(lang);
+  const ui = (key) => tr(UI_TEXT[key], lang);
+  const note = lang !== 'en' && !data.translationChecked ? `<p class="warn">${esc(ui('translationNote'))}</p>` : '';
+  const picker = `<details class="langs"><summary>${esc(ui('languages'))}: ${esc(meta.native)}</summary><p>${LANGUAGES.map((l) => `<a lang="${l.code}" href="/legal/${id}${l.code === 'en' ? '' : `?lang=${l.code}`}"${l.code === lang ? ' aria-current="true"' : ''}>${esc(l.native)}</a>`).join(' · ')}</p></details>`;
   const setup = d.configured ? '' : '<p class="warn">This page still shows placeholders in [square brackets]. An administrator must fill in the company details (Admin → Settings → Legal) before launch.</p>';
   return `<!doctype html>
-<html lang="en">
+<html lang="${lang}" dir="${meta.rtl ? 'rtl' : 'ltr'}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -470,14 +554,16 @@ function documentHtml(id, d) {
   .scroll { overflow-x: auto; } table { border-collapse: collapse; width: 100%; font-size: 14.5px; margin: 8px 0; }
   th, td { text-align: left; vertical-align: top; padding: 8px 10px; border: 1px solid var(--line); } th { background: var(--soft); }
   .warn { color: var(--warn); border: 1px solid var(--warn); padding: 8px 12px; border-radius: 8px; }
-  nav a { margin-right: 14px; }
+  nav a { margin-inline-end: 14px; } .langs { margin: 10px 0; } .langs a { white-space: nowrap; } html[dir=rtl] th, html[dir=rtl] td { text-align: right; }
 </style>
 </head>
 <body>
 <main>
-<nav><a href="/">← ${esc(d.brand)}</a> <a href="/legal/${other[0]}">${esc(other[1])}</a></nav>
+<nav><a href="/">← ${esc(d.brand)}</a> <a href="/legal/${other[0]}${q}">${esc(tr(other[1], lang))}</a></nav>
+${picker}
 <h1>${esc(data.title)}</h1>
-<p class="meta">${esc(d.brand)} · version ${esc(VERSION)} · ${esc(d.company)}</p>
+<p class="meta">${esc(d.brand)} · ${esc(ui('version'))} ${esc(VERSION)} · ${esc(d.company)}</p>
+${note}
 ${setup}
 ${body}
 </main>
@@ -486,15 +572,40 @@ ${body}
 }
 
 /** What the sign-up screen and mobile apps need: versions, the consent texts, links, and who is responsible. */
-function summary(settings, env = process.env) {
+function summary(settings, env = process.env, langCode = 'en') {
   const d = details(settings, env);
+  const lang = langOf(langCode);
+  const ui = Object.fromEntries(Object.entries(UI_TEXT).map(([k, v]) => [k, tr(v, lang)]));
   return {
+    language: lang,
+    languages: LANGUAGES.map((l) => ({ code: l.code, name: l.name, native: l.native, rtl: !!l.rtl })),
+    ui,
     version: VERSION,
     company: { name: d.company, address: d.address, contactEmail: d.contactEmail, grievanceOfficer: { name: d.grievanceName, email: d.grievanceEmail, phone: d.grievancePhone || null } },
     configured: d.configured,
-    documents: Object.entries(DOCS).map(([id, doc]) => ({ id, title: doc.title, url: `/legal/${id}`, json: `/api/v1/legal/${id}` })),
-    consents: CONSENTS.map((c) => ({ id: c.id, required: c.required, title: c.title, text: fill(c.text, d), askAt: c.askAt || null })),
+    documents: Object.entries(DOCS).map(([id, doc]) => ({ id, title: tr(doc.title, lang), url: `/legal/${id}${lang === 'en' ? '' : `?lang=${lang}`}`, json: `/api/v1/legal/${id}${lang === 'en' ? '' : `?lang=${lang}`}` })),
+    consents: CONSENTS.map((c) => ({ id: c.id, required: c.required, title: tr(c.title, lang), text: fill(tr(c.text, lang), d), askAt: c.askAt ? tr(c.askAt, lang) : null })),
   };
 }
 
-module.exports = { VERSION, DEFAULT_LEGAL, FIELD_LIMITS, CONSENTS, consentItem, details, documentData, documentHtml, summary, fill, esc };
+/** A language code to record with an acceptance: one of ours, or null (English and unknown codes are stored as `en`). */
+const consentLang = (code) => (code ? langOf(code) : null);
+
+/** Every English text that has to be translated, in a stable order (documents, consents, sign-up notice, page wording). */
+function sourceStrings() {
+  const out = new Set();
+  const add = (x) => { if (x && /\S/.test(x)) out.add(x); };
+  for (const doc of Object.values(DOCS)) {
+    add(doc.title);
+    for (const sec of doc.sections()) {
+      add(sec.title);
+      [...(sec.p || []), ...(sec.p2 || []), ...(sec.ul || [])].forEach(add);
+      if (sec.table) { sec.table.head.forEach(add); sec.table.rows.forEach((r) => r.forEach(add)); }
+    }
+  }
+  for (const c of CONSENTS) { add(c.title); add(c.text); add(c.askAt); }
+  Object.values(UI_TEXT).forEach(add);
+  return [...out];
+}
+
+module.exports = { consentLang, LANGUAGES, UI_TEXT, keyOf, tr, dictionary, langOf, sourceStrings, VERSION, DEFAULT_LEGAL, FIELD_LIMITS, CONSENTS, consentItem, details, documentData, documentHtml, summary, fill, esc };

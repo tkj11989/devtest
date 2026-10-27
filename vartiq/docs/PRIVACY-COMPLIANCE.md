@@ -71,7 +71,7 @@ Reviewed 28 Oct 2026 against the code (what is really stored), the Privacy Notic
 | | Verifiable parental consent for children, no tracking, no behavioural monitoring, no targeted ads to children | Yes: guardian link, controls; no ads or tracking anywhere. Link proves access to the guardian's number or email, not parenthood (stated in the Terms) |
 | | Data erased when purpose ends; retention stated | Yes (24 h after deletion; table of periods; backups {backupDays} days) |
 | | Breach notification to the Board and people | Stated in the notice; **you need a written incident procedure** |
-| | Notice available in English and Eighth-Schedule languages | **Open**: English only |
+| | Notice available in English and Eighth-Schedule languages | **Met, pending review**: all 22 Eighth-Schedule languages (`server/legal-i18n/`, picker on sign-up and the gate, `?lang=` on the pages and API). The translations are AI-prepared and show a "not yet checked" note until a certified translator signs them off and the code is added to *Reviewed languages*. Review first: brx, doi, ks, kok, mai, mni, sat, sd, sa |
 | | Significant Data Fiduciary duties (DPO, audits) | Only if the government designates you; not assessed |
 | Google Play | Privacy policy link; Data safety form; in-app and web deletion; sensitive permissions explained | Yes (see section 3); notifications and location are asked only when the person turns them on |
 | Apple | Privacy labels; account deletion in-app; **user-generated content**: report mechanism, blocking, published contact, filtering | Deletion yes; blocking yes; contact yes; reporting exists for channels and profile photos but **not for individual messages** (they are end-to-end encrypted); Apple may ask for it |
@@ -83,7 +83,7 @@ Reviewed 28 Oct 2026 against the code (what is really stored), the Privacy Notic
 1. Fill in **Admin → Settings → Legal**: company name, address, contact email, Grievance Officer name, email and phone, hosting location, providers. Until then the pages show `[placeholders]` and the admin overview says so.
 2. Have a lawyer read the Privacy Notice, Terms and deletion page (they are written from the code, not from a template).
 3. Sign data-processing agreements with every provider named in the notice.
-4. Decide the languages for the notice (DPDP) and translate it; raise the version when you change text.
+4. Have certified translators check each language in `server/legal-i18n/`, then list the checked codes in Admin → Settings → Legal → Reviewed languages (or `LEGAL_REVIEWED_LANGUAGES`). Raise the version when you change English text; run `node scripts/legal-i18n.js missing <code>` to see what needs translating.
 5. Write an incident-response and breach-notification procedure; decide who answers rights requests within the stated {responseDays} days.
 6. If you will serve the US, EU or UK: COPPA method, EU/UK representative, transfer clauses.
 7. Fill in the store forms using section 3 and publish the three URLs: `/legal/privacy`, `/legal/terms`, `/legal/delete-account`.

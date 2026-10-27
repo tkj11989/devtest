@@ -32,7 +32,7 @@ const FEATURES = [
   { id: 'developerApi', group: 'Developers', label: 'Developer API', description: 'API keys and webhooks. Restricted by default: off hides it in the web and mobile apps, blocks creating keys and webhooks, and stops API-key access.' },
 ];
 
-const { DEFAULT_LEGAL, FIELD_LIMITS } = require('./legal');
+const { DEFAULT_LEGAL, FIELD_LIMITS, LANGUAGES } = require('./legal');
 const PLAN_IDS = Object.keys(require('./payments').DEFAULT_PLANS);
 const IDS = FEATURES.map((f) => f.id);
 /** Features an administrator has to switch on. */
@@ -134,6 +134,11 @@ function applySettings(current, patch) {
         if (typeof v !== 'boolean') throw bad('legal.requireForLegacy must be true or false');
       } else {
         if (typeof v !== 'string' || v.trim().length > FIELD_LIMITS[k]) throw bad(`legal.${k} must be text of up to ${FIELD_LIMITS[k]} characters`);
+        if (k === 'reviewedLanguages' && v.trim()) {
+          const known = new Set(LANGUAGES.map((x) => x.code));
+          const bad2 = v.split(',').map((x) => x.trim()).filter((x) => x && !known.has(x));
+          if (bad2.length) throw bad(`legal.reviewedLanguages: unknown language code ${bad2.join(', ')}`);
+        }
         if ((k === 'contactEmail' || k === 'grievanceEmail') && v.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())) throw bad(`legal.${k} must be an email address`);
       }
       set(`legal ${k}`, next.legal, k, typeof v === 'string' ? v.trim() : v);

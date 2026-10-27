@@ -11,6 +11,7 @@ const ref = (name) => ({ $ref: `#/components/schemas/${name}` });
 const arrayOf = (schema) => ({ type: 'array', items: schema });
 const obj = (properties, required) => ({ type: 'object', properties, ...(required ? { required } : {}) });
 const jsonBody = (schema, example) => ({ required: true, content: { 'application/json': { schema, ...(example ? { example } : {}) } } });
+const LANG_PARAM = { name: 'lang', in: 'query', required: false, description: 'language of the text: `en` (default) or an Eighth-Schedule language code (`as bn brx doi gu hi kn ks kok mai ml mni mr ne or pa sa sat sd ta te ur`). Translations are prepared with automated tools until the operator marks a language as reviewed; the English text applies if anything is unclear.', schema: { type: 'string' } };
 const ok = (schema, description = 'OK') => ({ description, content: { 'application/json': { schema } } });
 const noContent = { description: 'Done (no body)' };
 const errors = (...codes) => Object.fromEntries(codes.map((c) => [c, { $ref: `#/components/responses/E${c}` }]));
@@ -286,6 +287,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     ConsentAccept: obj({
       terms: { type: 'boolean', description: 'must be true: read and accepted the Terms of Use and Privacy Notice' },
       version: { type: 'string', description: 'the current `version` from `GET /legal` (sign-up only)' },
+      lang: { type: 'string', description: 'optional: language code of the notice the person read (`GET /legal?lang=`, e.g. `hi`, `ta`); recorded with the acceptance' },
     }, ['terms']),
     ConsentStatus: obj({
       version: { type: 'string' },
@@ -583,15 +585,16 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/legal': {
       get: op(T.me, 'Terms, Privacy Notice and consent texts', {
         auth: false,
+        params: [LANG_PARAM],
         description: 'Everything a sign-up screen needs: the current `version`, the documents (`url` is a readable page, `json` the same as data), the exact consent wording, and who is responsible (company, Grievance Officer). `configured: false` means the company details are still placeholders.',
-        responses: { 200: ok(obj({ version: { type: 'string' }, configured: { type: 'boolean' }, company: { type: 'object' }, documents: arrayOf({ type: 'object' }), consents: arrayOf({ type: 'object' }) })) },
+        responses: { 200: ok(obj({ version: { type: 'string' }, configured: { type: 'boolean' }, company: { type: 'object' }, documents: arrayOf({ type: 'object' }), consents: arrayOf({ type: 'object' }), language: { type: 'string' }, languages: arrayOf({ type: 'object' }), ui: { type: 'object' } })) },
       }),
     },
     '/legal/{doc}': {
       get: op(T.me, 'One legal document as data', {
         auth: false,
         description: '`privacy` or `terms`, as `{ id, title, version, sections: [{ title, paragraphs, bullets, table }] }`. The same text is a page at `/legal/privacy` and `/legal/terms`.',
-        params: [{ name: 'doc', in: 'path', required: true, schema: { type: 'string', enum: ['privacy', 'terms'] } }],
+        params: [{ name: 'doc', in: 'path', required: true, schema: { type: 'string', enum: ['privacy', 'terms'] } }, LANG_PARAM],
         responses: { 200: ok({ type: 'object' }), ...errors(404) },
       }),
     },

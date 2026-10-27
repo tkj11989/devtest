@@ -582,7 +582,7 @@
           displayName: authForm.displayName.value.trim(),
           phone: fullPhone(authForm),
           phoneOtp: phoneField.proof(),
-          consent: { terms: true, version: state.legal.version },
+          consent: { terms: true, version: state.legal.version, lang: state.legal.language },
           birthDate: authForm.birthDate.value,
           ...(paintGuardianBox() ? {
             guardian: {
@@ -740,13 +740,60 @@
   const consentById = (id) => state.legal?.consents?.find((c) => c.id === id);
   /** The exact wording a person agrees to (the server records which version they accepted). */
   const consentText = (id) => consentById(id)?.text || '';
+  /** The notice language: what the person picked, else their browser's language when we have it, else English. */
+  const preferredLegalLang = () => {
+    const saved = storage.get('chat.legalLang');
+    if (saved) return saved;
+    const guess = (navigator.language || 'en').toLowerCase().split('-')[0];
+    return guess;
+  };
   function paintConsentTexts() {
-    if (!state.legal) return;
+    const l = state.legal;
+    if (!l) return;
+    const ui = l.ui || {};
+    const lang = l.language || 'en';
+    const q = lang === 'en' ? '' : `?lang=${lang}`;
+    const rtl = !!l.languages?.find((x) => x.code === lang)?.rtl;
+    const note = lang !== 'en' && ui.translationNote ? ui.translationNote : '';
+    for (const box of ['consent', 'gate']) {
+      const sel = $(`#${box}-lang`);
+      if (sel) {
+        if (!sel.options.length) {
+          for (const x of [{ code: 'en', native: 'English' }, ...(l.languages || []).filter((y) => y.code !== 'en')]) sel.appendChild(Object.assign(document.createElement('option'), { value: x.code, textContent: x.native, lang: x.code }));
+        }
+        sel.value = lang;
+      }
+      $(`#${box}-lang-label`).textContent = ui.noticeLanguage || 'Language of this notice';
+      const n = $(`#${box}-note`);
+      n.textContent = note;
+      n.classList.toggle('hidden', !note);
+      $(`#${box}-link-terms`).href = `/legal/terms${q}`;
+      $(`#${box}-link-privacy`).href = `/legal/privacy${q}`;
+    }
+    $('#consent-title').textContent = ui.beforeContinue || 'Before you continue';
+    $('#consent-fact1').textContent = ui.fact1 || '';
+    $('#consent-fact2').textContent = ui.fact2 || '';
+    $('#consent-fact3').textContent = ui.fact3 || '';
+    $('#consent-link-terms').textContent = ui.readTerms || 'Read the Terms of Use';
+    $('#consent-link-privacy').textContent = ui.readPrivacy || 'Read the Privacy Notice';
+    $('#gate-link-terms').textContent = l.documents?.find((d) => d.id === 'terms')?.title || 'Terms of Use';
+    $('#gate-link-privacy').textContent = l.documents?.find((d) => d.id === 'privacy')?.title || 'Privacy Notice';
+    for (const id of ['#consent-box', '#consent-gate']) {
+      $(id).setAttribute('lang', lang);
+      $(id).setAttribute('dir', rtl ? 'rtl' : 'ltr');
+    }
     $('#consent-terms-text').textContent = consentText('terms');
     $('#gate-terms-text').textContent = consentText('terms');
   }
-  function loadLegal() {
-    return fetch('/api/v1/legal').then((r) => r.json()).then((l) => { state.legal = l; paintConsentTexts(); }).catch(() => {});
+  function loadLegal(lang = preferredLegalLang()) {
+    const q = lang && lang !== 'en' ? `?lang=${encodeURIComponent(lang)}` : '';
+    return fetch(`/api/v1/legal${q}`).then((r) => r.json()).then((l) => { state.legal = l; paintConsentTexts(); }).catch(() => {});
+  }
+  for (const id of ['#consent-lang', '#gate-lang']) {
+    $(id).addEventListener('change', (e) => {
+      storage.set('chat.legalLang', e.target.value);
+      loadLegal(e.target.value);
+    });
   }
   loadLegal();
 
@@ -1234,7 +1281,7 @@
       return;
     }
     try {
-      await emit('consent:accept', { terms: true });
+      await emit('consent:accept', { terms: true, lang: state.legal?.language });
       location.reload();
     } catch (err) {
       $('#gate-error').textContent = err.message;

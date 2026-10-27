@@ -364,6 +364,7 @@
       text('grievanceName', 'Grievance Officer name'), text('grievanceEmail', 'Grievance Officer email'),
       text('grievancePhone', 'Grievance Officer phone (optional)'), text('hosting', 'Where the servers are', 'e.g. India (Mumbai)'),
       text('paymentProvider', 'Payment provider named in the Privacy Notice', 'Razorpay'),
+      text('reviewedLanguages', 'Languages a certified translator has checked (hides the "not checked" note)', 'e.g. hi,bn,ta'),
     ];
     const days = (k, label) => { const i = h('input', { type: 'number', min: 1, max: 365, value: L[k], disabled: !isSuper(), 'aria-label': label }); i.dataset.k = k; return [label, i]; };
     const nums = [days('backupDays', 'Days deleted data may stay in backups'), days('responseDays', 'Days to answer a rights request')];

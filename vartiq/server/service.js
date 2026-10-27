@@ -1002,11 +1002,11 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     },
 
     /** Accept the current Terms of Use and Privacy Notice. Needed again whenever they change. */
-    consentAccept(me, { terms } = {}) {
+    consentAccept(me, { terms, lang } = {}) {
       if (terms !== true) {
         throw new ApiError(400, 'consent_required', 'Accept the Terms of Use and Privacy Notice to continue');
       }
-      store.recordConsent(me, { version: legal.VERSION, items: ['terms'], via: 'app' });
+      store.recordConsent(me, { version: legal.VERSION, items: ['terms'], via: 'app', lang: legal.consentLang(lang) });
       return actions.consentStatus(me);
     },
 

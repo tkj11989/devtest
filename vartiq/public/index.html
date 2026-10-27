@@ -31,7 +31,9 @@
     <div class="maintenance-card gate-card">
       <h2 id="gate-title">Please review our Terms and Privacy Notice</h2>
       <p id="gate-text">We have updated our Terms of Use and Privacy Notice. To keep using VartiQ you need to accept them.</p>
-      <p class="consent-links"><a href="/legal/terms" target="_blank" rel="noopener">Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Notice</a></p>
+      <label class="consent-lang"><span id="gate-lang-label">Language of this notice</span> <select id="gate-lang" aria-labelledby="gate-lang-label"></select></label>
+      <p class="consent-links"><a id="gate-link-terms" href="/legal/terms" target="_blank" rel="noopener">Terms of Use</a> · <a id="gate-link-privacy" href="/legal/privacy" target="_blank" rel="noopener">Privacy Notice</a></p>
+      <p id="gate-note" class="muted small-note hidden"></p>
       <label class="agree"><input type="checkbox" id="gate-terms" /> <span id="gate-terms-text">I have read and agree to the Terms of Use and Privacy Notice.</span></label>
       <p id="gate-error" class="error" role="alert"></p>
       <button class="primary wide" type="button" id="gate-accept">Accept and continue</button>
@@ -142,13 +144,15 @@
 
         <div class="consent register-only hidden" id="consent-box" role="group" aria-labelledby="consent-title">
           <strong id="consent-title" class="consent-title">Before you continue</strong>
+          <label class="consent-lang"><span id="consent-lang-label">Language of this notice</span> <select id="consent-lang" aria-labelledby="consent-lang-label"></select></label>
           <ul class="consent-facts">
-            <li>We keep your mobile number, name, chats and settings on our servers. Messages you type in the app are end-to-end encrypted.</li>
-            <li>We don't sell your data or read your phone's contacts.</li>
-            <li>You can download or delete your data any time in Profile.</li>
+            <li id="consent-fact1">We keep your mobile number, name, chats and settings on our servers. Messages you type in the app are end-to-end encrypted.</li>
+            <li id="consent-fact2">We don't sell your data or read your phone's contacts.</li>
+            <li id="consent-fact3">You can download or delete your data any time in Settings.</li>
           </ul>
+          <p id="consent-note" class="muted small-note hidden"></p>
           <label class="agree"><input type="checkbox" name="agreeTerms" /> <span id="consent-terms-text">I have read and agree to the Terms of Use and Privacy Notice.</span></label>
-          <p class="consent-links"><a href="/legal/terms" target="_blank" rel="noopener">Read the Terms of Use</a> · <a href="/legal/privacy" target="_blank" rel="noopener">Read the Privacy Notice</a></p>
+          <p class="consent-links"><a id="consent-link-terms" href="/legal/terms" target="_blank" rel="noopener">Read the Terms of Use</a> · <a id="consent-link-privacy" href="/legal/privacy" target="_blank" rel="noopener">Read the Privacy Notice</a></p>
         </div>
 
         <div class="passcode-box hidden" id="passcode-box" role="group" aria-labelledby="passcode-title">

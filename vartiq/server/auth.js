@@ -143,7 +143,7 @@ function createAuth({ store, otp, linking, onLogin = () => {}, assertSignupsOpen
       }
       otp.consume(body.phoneOtp.requestId);
       if (email) otp.consume(body.emailOtp.requestId);
-      store.recordConsent(result.user.username, { version: legal.VERSION, items: ['terms'], via: 'registration' });
+      store.recordConsent(result.user.username, { version: legal.VERSION, items: ['terms'], via: 'registration', lang: legal.consentLang(consent.lang) });
       const { guardianToken, ...session } = result;
       if (!guardianToken) return session;
       // The private link goes to the parent or guardian now. If it cannot be delivered the account stays (waiting), and the

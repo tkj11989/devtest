@@ -200,9 +200,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.put('/me/appearance', ...authed, json, run((req) => actions.setAppearance(req.user, req.body)));
   // Terms of Use, Privacy Notice and consent; download or delete your data.
   const legal = require('./legal');
-  router.get('/legal', (req, res) => res.json(legal.summary(store.getSettings())));
+  router.get('/legal', (req, res) => res.json(legal.summary(store.getSettings(), process.env, req.query.lang)));
   router.get('/legal/:doc', (req, res) => {
-    const doc = legal.documentData(req.params.doc, legal.details(store.getSettings()));
+    const doc = legal.documentData(req.params.doc, legal.details(store.getSettings()), req.query.lang);
     if (!doc) return res.status(404).json({ error: { code: 'not_found', message: 'No such document' } });
     return res.json(doc);
   });

@@ -330,7 +330,7 @@ function createApp({
   // Terms of Use and Privacy Notice: public pages (company details come from the dashboard's Legal settings).
   const legal = require('./legal');
   app.get('/legal/:doc', (req, res) => {
-    const html = legal.documentHtml(req.params.doc, legal.details(store.getSettings()));
+    const html = legal.documentHtml(req.params.doc, legal.details(store.getSettings()), req.query.lang);
     if (!html) return res.status(404).send('Not found');
     return res.type('html').send(html);
   });

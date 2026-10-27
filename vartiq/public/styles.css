@@ -1393,7 +1393,9 @@ html[data-avatar-shape="square"] .avatar { border-radius: 6px; }
 /* ---------- consent ---------- */
 .consent { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
 .consent-title { font-weight: 600; font-size: 14px; }
-.consent-facts { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.consent-facts { margin: 0; padding-inline-start: 18px; font-size: 13px; color: var(--muted); }
+.consent-lang { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.consent-lang select { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line, #d5dde9); background: var(--bg-elev, transparent); color: inherit; font: inherit; }
 label.agree { display: flex; gap: 10px; align-items: flex-start; flex-direction: row; font-size: 14px; color: var(--text); cursor: pointer; }
 label.agree input[type=checkbox] { width: 20px; min-width: 20px; height: 20px; flex: 0 0 20px; margin: 2px 0 0; padding: 0; accent-color: var(--primary); }
 label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
