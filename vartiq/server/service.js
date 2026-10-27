@@ -110,7 +110,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       if (hiddenFrom(username, m.convId, lockKey)) return null;
       return isUnlocked(username, m.convId, { lockKey }) ? payload : { message: redactMessage(m) };
     }
-    if (event === 'location:update') {
+    if (event === 'poll:update' || event === 'event:update' || event === 'event:reminder' || event === 'location:update') {
       // A moving position is content: only for chats that are open in this app session (a locked chat loads fresh when unlocked).
       const id = payload.convId;
       return hiddenFrom(username, id, lockKey) || !isUnlocked(username, id, { lockKey }) ? null : payload;
@@ -123,7 +123,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   };
   // Events that only name a chat (no content): dropped for closed hidden chats.
   const CONV_EVENTS = new Set(['typing', 'message:status', 'message:deleted', 'message:expired', 'message:starred']);
-  const LOCK_SENSITIVE = new Set(['message:new', 'location:update', 'conversation:new', 'conversation:updated', ...CONV_EVENTS]);
+  const LOCK_SENSITIVE = new Set(['message:new', 'location:update', 'poll:update', 'event:update', 'event:reminder', 'conversation:new', 'conversation:updated', ...CONV_EVENTS]);
 
   /**
    * Prove it is you: the secret code, or a fingerprint/face check from an enrolled device
@@ -463,6 +463,73 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   const liveEnded = (conv, id) => {
     const r = store.endLiveLocation(id);
     if (r) sendLive(conv, r.message);
+  };
+
+  // ---------- polls and events ----------
+
+  const planBad = (msg) => new ApiError(400, 'invalid_request', msg);
+
+  /** Tell everyone in the chat about a changed poll or event (each person gets their own view of it). */
+  const planChanged = (convId, message, event) => {
+    const conv = store.getConversation(convId);
+    if (!conv) return;
+    for (const m of conv.members) if (Store.visibleTo(message, m)) notify(m, event, { convId, message: store.viewFor(message, m) });
+  };
+
+  const textField = (v, what, max, { required = false } = {}) => {
+    const s = String(v ?? '').trim();
+    if (required && !s) throw planBad(`${what} is required`);
+    if (s.length > max) throw planBad(`${what} can be at most ${max} characters`);
+    return s;
+  };
+
+  /** Check an event's fields (Premium rules included) and return the clean version. */
+  const checkEvent = (f, premium, { keepPast = false, current } = {}) => {
+    const title = textField(f.title, 'The title', 100, { required: true });
+    const description = textField(f.description, 'The description', 1000);
+    const location = textField(f.location, 'The place', 200);
+    const startsAt = Math.round(Number(f.startsAt));
+    const now = Date.now();
+    if (!Number.isFinite(startsAt)) throw planBad('startsAt is required (milliseconds since 1970)');
+    if (!keepPast && (startsAt < now - 60 * 1000 || startsAt > now + Store.EVENT_MAX_AHEAD_MS)) throw planBad('The start must be in the future and within 2 years');
+    let endsAt = null;
+    if (f.endsAt !== undefined && f.endsAt !== null && f.endsAt !== '') {
+      endsAt = Math.round(Number(f.endsAt));
+      if (!Number.isFinite(endsAt) || endsAt <= startsAt || endsAt - startsAt > 7 * 24 * 3600 * 1000) throw planBad('The end must be after the start, and at most 7 days later');
+    }
+    const reminder = f.reminderMinutes === undefined || f.reminderMinutes === null ? 60 : Number(f.reminderMinutes);
+    if (!Store.REMINDERS.includes(reminder)) throw planBad(`reminderMinutes must be one of ${Store.REMINDERS.join(', ')}`);
+    const repeat = f.repeat || 'none';
+    if (!Store.REPEATS.includes(repeat)) throw planBad(`repeat must be one of ${Store.REPEATS.join(', ')}`);
+    // Keeping what the event already has is always fine; choosing something new from the Premium set needs Premium.
+    const extras = [reminder !== 60 && reminder !== current?.reminder && 'Choosing the reminder time', repeat !== 'none' && repeat !== (current?.repeat || 'none') && 'Repeating events'].filter(Boolean);
+    if (extras.length && !premium) throw new ApiError(402, 'premium_required', `${extras.join(' and ')} ${extras.length > 1 ? 'are' : 'is'} a Premium feature.`);
+    return { title, description, location, startsAt, endsAt, reminder, repeat };
+  };
+
+  /** Polls whose time is up close; events get their reminder; repeating events move to their next date. */
+  const runPlans = () => {
+    const due = store.plansDue();
+    for (const id of due.close) {
+      const r = store.closePoll(id);
+      if (r) planChanged(r.convId, r.message, 'poll:update');
+    }
+    for (const id of due.rolled) {
+      const f = store.findPlan(id);
+      if (f) planChanged(f.convId, f.message, 'event:update');
+    }
+    for (const id of due.remind) {
+      const f = store.findPlan(id);
+      const conv = f && store.getConversation(f.convId);
+      if (!conv) continue;
+      const rsvp = f.message.event.rsvp || {};
+      const to = conv.members.filter((m) => m === f.message.from || rsvp[m] === 'yes' || rsvp[m] === 'maybe');
+      for (const m of to) {
+        if (!Store.visibleTo(f.message, m)) continue;
+        notify(m, 'event:reminder', { convId: f.convId, message: store.viewFor(f.message, m) });
+        if (push) push.reminder?.(m, conv, f.message);
+      }
+    }
   };
 
   /** One live share per person per chat: starting another ends the earlier one. */
@@ -1375,6 +1442,133 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { sent };
     },
 
+    // ----- polls -----
+
+    /**
+     * Ask the chat a question: `{ convId, question, options: [text, …] }`. Free: one choice, up to 6 options, votes visible.
+     * Premium adds `multi` (several choices), `anonymous` (no names), `closesAt` (closes by itself) and up to 12 options.
+     */
+    sendPoll(me, { convId, question, options, multi, anonymous, closesAt, clientId }, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const lim = store.getSettings().limits;
+      const premium = store.isPremium(me);
+      const q = textField(question, 'The question', 200, { required: true });
+      if (!Array.isArray(options)) throw planBad('options must be a list of texts');
+      const seen = new Set();
+      const texts = [];
+      for (const o of options) {
+        const t = textField(o, 'An option', 80);
+        if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); texts.push(t); }
+      }
+      if (texts.length < 2) throw planBad('A poll needs at least 2 different options');
+      if (texts.length > lim.premiumPollOptions) throw planBad(`A poll can have at most ${lim.premiumPollOptions} options`);
+      if (texts.length > lim.freePollOptions && !premium) throw new ApiError(402, 'premium_required', `A free account can add ${lim.freePollOptions} options to a poll. Premium allows ${lim.premiumPollOptions}.`);
+      const extras = [multi && 'Multiple choice', anonymous && 'Anonymous voting', closesAt && 'Closing automatically'].filter(Boolean);
+      if (extras.length && !premium) throw new ApiError(402, 'premium_required', `${extras.join(' and ')} ${extras.length > 1 ? 'are' : 'is'} a Premium feature.`);
+      let closes = null;
+      if (closesAt) {
+        closes = Number(closesAt);
+        const now = Date.now();
+        if (!Number.isFinite(closes) || closes < now + 60 * 1000 || closes > now + Store.POLL_MAX_CLOSE_MS) throw planBad('closesAt must be between 1 minute and 30 days from now (milliseconds since 1970)');
+      }
+      const dup = store.findByClientId(convId, me, clientId);
+      if (dup) return { message: store.viewFor(dup, me) };
+      const poll = {
+        question: q,
+        options: texts.map((text, i) => ({ id: `o${i + 1}`, text })),
+        multi: !!multi, anonymous: !!anonymous, ...(closes ? { closesAt: Math.round(closes) } : {}), votes: {},
+      };
+      return { message: sendMessage(me, convId, q, { clientId, poll }) };
+    },
+
+    /** Vote: `options` is a list of option ids (one, or several in a multiple-choice poll); an empty list withdraws the vote. */
+    votePoll(me, { id, options }, ctx) {
+      const found = store.findPlan(String(id || ''));
+      if (!found?.message.poll || !store.isMember(found.convId, me)) throw new ApiError(404, 'not_found', 'Poll not found');
+      requireUnlocked(me, found.convId, ctx);
+      try {
+        store.votePoll(me, found.message.id, options);
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      planChanged(found.convId, found.message, 'poll:update');
+      return { message: store.viewFor(found.message, me) };
+    },
+
+    /** Close a poll now (only the person who made it). Results stay visible. */
+    closePoll(me, { id }, ctx) {
+      const found = store.findPlan(String(id || ''));
+      if (!found?.message.poll || !store.isMember(found.convId, me)) throw new ApiError(404, 'not_found', 'Poll not found');
+      requireUnlocked(me, found.convId, ctx);
+      if (found.message.from !== me) throw new ApiError(403, 'forbidden', 'Only the person who made the poll can close it');
+      store.closePoll(found.message.id);
+      planChanged(found.convId, found.message, 'poll:update');
+      return { message: store.viewFor(found.message, me) };
+    },
+
+    // ----- events -----
+
+    /**
+     * Plan something: `{ convId, title, startsAt (ms since 1970), endsAt?, location?, description?, reminderMinutes? }`. Everyone in the
+     * chat can answer yes / maybe / no, and those who did get a reminder (default 1 hour before). Premium: any reminder time
+     * (0, 15, 30, 60, 120 or 1440 minutes) and repeating weekly or monthly.
+     */
+    sendEvent(me, { convId, title, description, startsAt, endsAt, location, reminderMinutes, repeat, clientId }, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const premium = store.isPremium(me);
+      const event = checkEvent({ title, description, startsAt, endsAt, location, reminderMinutes, repeat }, premium);
+      const dup = store.findByClientId(convId, me, clientId);
+      if (dup) return { message: store.viewFor(dup, me) };
+      return { message: sendMessage(me, convId, event.title, { clientId, event: { ...event, rsvp: { [me]: 'yes' } } }) };
+    },
+
+    /** Answer an event: `status` is "yes", "maybe", "no", or null to take the answer back. */
+    rsvpEvent(me, { id, status }, ctx) {
+      const found = store.findPlan(String(id || ''));
+      if (!found?.message.event || !store.isMember(found.convId, me)) throw new ApiError(404, 'not_found', 'Event not found');
+      requireUnlocked(me, found.convId, ctx);
+      try {
+        store.rsvpEvent(me, found.message.id, status === undefined ? null : status);
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      planChanged(found.convId, found.message, 'event:update');
+      return { message: store.viewFor(found.message, me) };
+    },
+
+    /** Change an event (only the person who made it); everyone is told. */
+    updateEvent(me, { id, ...fields }, ctx) {
+      const found = store.findPlan(String(id || ''));
+      if (!found?.message.event || !store.isMember(found.convId, me)) throw new ApiError(404, 'not_found', 'Event not found');
+      requireUnlocked(me, found.convId, ctx);
+      if (found.message.from !== me) throw new ApiError(403, 'forbidden', 'Only the person who made the event can change it');
+      if (found.message.event.canceledAt) throw new ApiError(409, 'event_canceled', 'This event was canceled');
+      const cur = found.message.event;
+      const merged = checkEvent({
+        title: fields.title ?? cur.title, description: fields.description ?? cur.description, location: fields.location ?? cur.location,
+        startsAt: fields.startsAt ?? cur.startsAt,
+        // Moving the start moves the end with it, unless a new end is given.
+        endsAt: fields.endsAt !== undefined ? fields.endsAt : (cur.endsAt && fields.startsAt !== undefined ? cur.endsAt + (Math.round(Number(fields.startsAt)) - cur.startsAt) : cur.endsAt),
+        reminderMinutes: fields.reminderMinutes ?? cur.reminder, repeat: fields.repeat ?? cur.repeat,
+      }, store.isPremium(me), { keepPast: fields.startsAt === undefined, current: cur });
+      store.updateEvent(found.message.id, merged);
+      planChanged(found.convId, found.message, 'event:update');
+      return { message: store.viewFor(found.message, me) };
+    },
+
+    /** Cancel an event (only the person who made it). The card stays, marked as canceled. */
+    cancelEvent(me, { id }, ctx) {
+      const found = store.findPlan(String(id || ''));
+      if (!found?.message.event || !store.isMember(found.convId, me)) throw new ApiError(404, 'not_found', 'Event not found');
+      requireUnlocked(me, found.convId, ctx);
+      if (found.message.from !== me) throw new ApiError(403, 'forbidden', 'Only the person who made the event can cancel it');
+      store.updateEvent(found.message.id, { canceledAt: true });
+      planChanged(found.convId, found.message, 'event:update');
+      return { message: store.viewFor(found.message, me) };
+    },
+
     // ----- location sharing -----
 
     /**
@@ -1732,6 +1926,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   /** Delete messages whose timer ran out, and tell everyone in those chats. */
   const pruneExpired = () => {
     endDueLocations();
+    runPlans();
     for (const { convId, ids } of store.pruneMessages()) {
       const conv = store.getConversation(convId);
       if (conv) notifyMembers(conv, 'message:expired', { convId, ids });
@@ -1785,6 +1980,8 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     uploadPhoto: 'profilePhotos', setMainPhoto: 'profilePhotos',
     pushSubscribe: 'push', pushTest: 'push',
     sendLocation: 'location', updateLocation: 'location',
+    sendPoll: 'polls', votePoll: 'polls',
+    sendEvent: 'events', rsvpEvent: 'events', updateEvent: 'events',
   };
   const assertFeature = (id) => {
     if (!store.featureOn(id)) throw new ApiError(403, 'feature_disabled', `${featureLabel[id] || id} is turned off by the administrator`);
@@ -1871,6 +2068,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     expireSubscriptions,
     eraseDueAccounts,
     releaseGuardians,
+    runPlans,
     rotatePhotos,
     cutDeadSockets,
     notifyNewLogin,

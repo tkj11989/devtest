@@ -165,7 +165,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       e2ee: { oneOf: [{ $ref: '#/components/schemas/Envelope' }], description: 'end-to-end encrypted message: `text` is absent and the content is in this envelope. Messages without it (REST API, business auto replies, older messages) are not end-to-end encrypted.' },
       convId: { type: 'string' },
       from: { type: 'string', description: 'username of the sender' },
-      type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location'], description: 'absent for text messages; `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
+      type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location', 'poll', 'event'], description: 'absent for text messages; `poll` / `event` = see `poll` / `event` (readable by the server, not end-to-end encrypted); `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
       expiresAt: { type: 'integer', description: 'disappearing messages: when it will be deleted (ms since epoch)' },
       auto: { type: 'string', enum: ['greeting', 'away'], description: "a business's automatic reply" },
       system: obj({ event: { const: 'disappearing' }, seconds: { type: ['integer', 'null'] } }),
@@ -177,6 +177,21 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       masked: { type: 'boolean', description: 'recipients should hide the text until tapped' },
       starred: { type: 'boolean', description: 'starred by you' },
       deleted: { type: 'boolean' },
+      poll: obj({
+        question: { type: 'string' },
+        options: arrayOf(obj({ id: { type: 'string' }, text: { type: 'string' }, votes: { type: 'integer' }, voters: arrayOf({ type: 'string' }) })),
+        multi: { type: 'boolean' }, anonymous: { type: 'boolean', description: 'no `voters` lists' },
+        closesAt: { type: ['integer', 'null'] }, closed: { type: 'boolean' }, closedAt: { type: 'integer' },
+        total: { type: 'integer', description: 'people who voted' }, mine: arrayOf({ type: 'string' }),
+      }),
+      event: obj({
+        title: { type: 'string' }, description: { type: 'string' }, location: { type: 'string' },
+        startsAt: { type: 'integer' }, endsAt: { type: ['integer', 'null'] },
+        reminder: { type: 'integer', description: 'minutes before the start' }, repeat: { type: 'string', enum: ['none', 'weekly', 'monthly'] }, canceled: { type: 'boolean' },
+        counts: obj({ yes: { type: 'integer' }, maybe: { type: 'integer' }, no: { type: 'integer' } }),
+        going: arrayOf({ type: 'string' }), maybe: arrayOf({ type: 'string' }), notGoing: arrayOf({ type: 'string' }),
+        mine: { type: ['string', 'null'], enum: ['yes', 'maybe', 'no', null] },
+      }),
       location: obj({ lat: { type: 'number' }, lon: { type: 'number' }, acc: { type: 'integer', description: 'accuracy in metres' } }, ['lat', 'lon']),
       live: obj({ startedAt: { type: 'integer' }, until: { type: 'integer', description: 'when the share stops by itself' }, updatedAt: { type: 'integer' }, endedAt: { type: 'integer', description: 'set when the share has ended; the position is then erased' } }, ['startedAt', 'until']),
       voice: obj({ mediaId: { type: 'string' }, duration: { type: 'integer', description: 'seconds' }, mime: { type: 'string' } }),
@@ -838,6 +853,43 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
       }),
     },
+    '/conversations/{id}/polls': {
+      post: op(T.msg, 'Ask the chat a question (poll)', {
+        description: 'Free: one choice, up to 6 options (admin setting), votes visible by name. **Premium**: `multi` (several choices), `anonymous` (no names), `closesAt` (closes by itself; 1 minute to 30 days ahead, ms since 1970) and up to 12 options (`402 premium_required` otherwise). Polls are readable by the server (not end-to-end encrypted). Everyone in the chat gets a `poll:update` event when votes change.',
+        params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
+        body: jsonBody(obj({ question: { type: 'string', maxLength: 200 }, options: { type: 'array', items: { type: 'string', maxLength: 80 }, minItems: 2, maxItems: 12 }, multi: { type: 'boolean' }, anonymous: { type: 'boolean' }, closesAt: { type: 'integer' } }, ['question', 'options']), { question: 'Where to eat?', options: ['Pizza', 'Sushi', 'Thali'] }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 402, 403, 404, 423) },
+      }),
+    },
+    '/polls/{id}/vote': {
+      put: op(T.msg, 'Vote in a poll', {
+        description: '`options` is a list of option ids: one (or several in a multiple-choice poll). Voting again replaces the earlier vote; an empty list withdraws it. `409 poll_closed` once closed.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ options: arrayOf({ type: 'string' }) }, ['options']), { options: ['o1'] }),
+        responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 409, 423) },
+      }),
+    },
+    '/polls/{id}/close': { post: op(T.msg, 'Close a poll now', { description: 'Only the person who made it. The results stay visible.', params: [idParam('id')], responses: { 200: ok(obj({ message: ref('Message') })), ...errors(401, 403, 404, 423) } }) },
+    '/conversations/{id}/events': {
+      post: op(T.msg, 'Plan an event', {
+        description: 'A card with title, date and time, place and description. Everyone in the chat can answer yes / maybe / no (the maker starts as "yes"), and people who said yes or maybe get a reminder (default 60 minutes before; also as a push notification). **Premium**: choose the reminder (`reminderMinutes` 0, 15, 30, 60, 120 or 1440) and `repeat` (`weekly` or `monthly`: after it is over the card moves to the next date and answers start again). Events are readable by the server (not end-to-end encrypted). Changes arrive as `event:update`, reminders as `event:reminder`.',
+        params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
+        body: jsonBody(obj({ title: { type: 'string', maxLength: 100 }, description: { type: 'string', maxLength: 1000 }, location: { type: 'string', maxLength: 200 }, startsAt: { type: 'integer', description: 'ms since 1970, in the future, within 2 years' }, endsAt: { type: 'integer' }, reminderMinutes: { type: 'integer', enum: [0, 15, 30, 60, 120, 1440] }, repeat: { type: 'string', enum: ['none', 'weekly', 'monthly'] } }, ['title', 'startsAt']), { title: 'Sunday trek', location: 'Sinhagad', startsAt: 1893456000000 }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 402, 403, 404, 423) },
+      }),
+    },
+    '/events/{id}/rsvp': {
+      put: op(T.msg, 'Answer an event', {
+        description: '`status`: `yes`, `maybe`, `no`, or `null` to take the answer back. `409 event_canceled` after cancelling.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ status: { type: ['string', 'null'], enum: ['yes', 'maybe', 'no', null] } }, ['status']), { status: 'yes' }),
+        responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 409, 423) },
+      }),
+    },
+    '/events/{id}': {
+      patch: op(T.msg, 'Change an event', { description: 'Only the person who made it. Send any of `title`, `description`, `location`, `startsAt` (the end moves with it unless `endsAt` is sent), `endsAt`, `reminderMinutes`, `repeat`. A new start brings the reminder back.', params: [idParam('id')], body: jsonBody(obj({ title: { type: 'string' }, description: { type: 'string' }, location: { type: 'string' }, startsAt: { type: 'integer' }, endsAt: { type: ['integer', 'null'] }, reminderMinutes: { type: 'integer' }, repeat: { type: 'string' } })), responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 402, 403, 404, 409, 423) } }),
+    },
+    '/events/{id}/cancel': { post: op(T.msg, 'Cancel an event', { description: 'Only the person who made it. The card stays, marked as canceled.', params: [idParam('id')], responses: { 200: ok(obj({ message: ref('Message') })), ...errors(401, 403, 404, 423) } }) },
     '/conversations/{id}/location': {
       post: op(T.msg, 'Share a location (once or live)', {
         description: 'Share where you are: once (`live` 0 or absent), or **live** for 900 (15 min), 3600 (1 h) or 28800 (8 h) seconds. In an end-to-end encrypted chat send the position inside an `e2ee` envelope (payload `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`); otherwise send `location`. A live share is moved with `PUT /live-locations/{id}` (at most every 4 seconds), ends by itself at `live.until` or with `DELETE /live-locations/{id}`, and the position is then erased from the message. One live share per person per chat: a new one ends the earlier one. No trail is kept: each update replaces the previous position.',
@@ -1342,6 +1394,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /conversations/{id}/hide': 'unhideChat',
     'put /hidden-contacts/{username}': 'hideContactChat',
     'post /conversations/{id}/location': 'shareLocation',
+    'post /conversations/{id}/polls': 'createPoll',
+    'put /polls/{id}/vote': 'votePoll',
+    'post /polls/{id}/close': 'closePoll',
+    'post /conversations/{id}/events': 'createEvent',
+    'put /events/{id}/rsvp': 'answerEvent',
+    'patch /events/{id}': 'updateEvent',
+    'post /events/{id}/cancel': 'cancelEvent',
     'put /live-locations/{id}': 'updateLiveLocation',
     'delete /live-locations/{id}': 'stopLiveLocation',
     'get /me/photos': 'listMyPhotos',

@@ -12,6 +12,8 @@ const FEATURES = [
   { id: 'voiceMessages', group: 'Messaging', label: 'Voice messages', description: 'Recording and sending voice messages.' },
   { id: 'disappearing', group: 'Messaging', label: 'Disappearing messages', description: 'Setting auto-delete timers on chats.' },
   { id: 'push', group: 'Messaging', label: 'Push notifications', description: 'Notifications on people\'s devices for new messages and calls when the app is closed. Off: no notifications are sent and nobody can turn them on (turning them off always works).' },
+  { id: 'polls', group: 'Messaging', label: 'Polls', description: 'Creating polls in chats. Off: no new polls can be made or voted on (existing ones stay visible).' },
+  { id: 'events', group: 'Messaging', label: 'Events', description: 'Creating events (date, place, replies, reminders) in chats. Off: no new events or replies (existing ones stay visible).' },
   { id: 'location', group: 'Messaging', label: 'Location sharing', description: 'Sharing a location, once or live, in a chat. Off: the buttons are hidden and live updates are refused (stopping a share always works).' },
   { id: 'calls', group: 'Messaging', label: 'Voice & video calls', description: 'Starting and joining calls.' },
   { id: 'callRecording', group: 'Messaging', label: 'Call recording', description: 'Asking to record a call. Recording only starts when everyone in the call agrees, and is saved on the requester\'s own device. Off: the Record button is hidden and requests are refused (stopping always works).' },
@@ -41,7 +43,7 @@ const DEFAULT_SETTINGS = {
   // Everything is on, except the developer tools: API keys and webhooks are restricted
   // (web app and mobile) until an administrator switches them on.
   features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
-  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5 },
+  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12 },
   prices: {}, // plan id -> price override
   disabledPlans: [], // plans nobody can buy right now
   announcement: '',
@@ -50,7 +52,7 @@ const DEFAULT_SETTINGS = {
   legal: { ...DEFAULT_LEGAL }, // company details printed in the Terms and Privacy Notice (Admin → Settings → Legal)
 };
 
-const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10] };
+const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20] };
 
 /** Merge a settings patch into `current`, validating everything. Returns the new settings and what changed. */
 function applySettings(current, patch) {
@@ -79,6 +81,7 @@ function applySettings(current, patch) {
       set(`limit ${k}`, next.limits, k, v);
     }
   }
+  if (next.limits.premiumPollOptions < next.limits.freePollOptions) throw bad('limits.premiumPollOptions cannot be lower than freePollOptions');
   if (next.limits.premiumProfilePhotos < next.limits.freeProfilePhotos) throw bad('limits.premiumProfilePhotos cannot be lower than freeProfilePhotos');
   if (patch.prices !== undefined) {
     for (const [plan, v] of Object.entries(patch.prices || {})) {

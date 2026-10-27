@@ -128,7 +128,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
     return { sender, group: conv.type === 'group' ? conv.name : null };
   };
 
-  const LABEL = { voice: 'Voice message', location: 'Location' };
+  const LABEL = { voice: 'Voice message', location: 'Location', poll: 'Poll', event: 'Event' };
 
   return {
     enabled,
@@ -184,6 +184,20 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
       if (msg.type !== 'call' && now - (lastSent.get(key) || 0) < minGapMs) return;
       lastSent.set(key, now);
       deliver(to, { kind: msg.type === 'call' ? 'missed' : 'message', title, body, tag, ...(convId ? { convId } : {}) }, { topic: undefined }).catch(() => {});
+    },
+
+    /** An event the person said yes or maybe to (or made) is about to start. */
+    reminder(to, conv, msg) {
+      if (!enabled() || isOnline(to) || store.isClosed(to) || !store.pushSubs(to).length || !store.pushPrefs(to).messages) return;
+      const generic = store.isChatLocked(to, conv.id) || store.isChatHidden(to, conv.id);
+      const detail = !generic && store.pushPrefs(to).preview;
+      deliver(to, {
+        kind: 'reminder',
+        title: detail ? msg.event.title : 'VartiQ',
+        body: detail ? 'Starting soon' : 'An event is about to start',
+        tag: `event-${msg.id}`,
+        ...(generic ? {} : { convId: conv.id }),
+      }, { ttl: 3600 }).catch(() => {});
     },
 
     /** Someone is calling `to`. (Wakes the app; the call itself rings once the app is open.) */

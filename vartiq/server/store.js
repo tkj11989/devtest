@@ -294,6 +294,12 @@ class Store {
           delete m.location;
           delete m.live;
           this._live?.delete(m.id);
+          if (m.poll || m.event) { delete m.poll; delete m.event; delete m.type; this._plans?.delete(m.id); }
+          this._touchMsg(conv.id, m);
+        } else if (m.poll?.votes?.[username] || m.event?.rsvp?.[username]) {
+          // Votes and replies of the person who left are removed from other people's polls and events.
+          delete m.poll?.votes?.[username];
+          delete m.event?.rsvp?.[username];
           this._touchMsg(conv.id, m);
         }
       }
@@ -877,6 +883,158 @@ class Store {
   // (`location`). A live share also carries `live: { until, endedAt? }`, which the server does see and enforce:
   // updates replace the previous position (no trail is kept) and stop at `until` or when the sender stops sharing,
   // at which point the position is erased from the message.
+
+  // ---------- polls and events ----------
+  //
+  // A poll or an event is a message (type `poll` / `event`) whose content the server can read, so it can count votes and
+  // replies, close a poll on time and remind people before an event. They are not end-to-end encrypted.
+
+  static POLL_MAX_CLOSE_MS = 30 * 24 * 3600 * 1000;
+  static EVENT_MAX_AHEAD_MS = 2 * 365 * 24 * 3600 * 1000;
+  static RSVP = ['yes', 'maybe', 'no'];
+  static REMINDERS = [0, 15, 30, 60, 120, 1440]; // minutes before the start
+  static REPEATS = ['none', 'weekly', 'monthly'];
+
+  /** Every poll and event message: id -> convId (built once, then kept up to date). */
+  _planIndex() {
+    if (!this._plans) {
+      this._plans = new Map();
+      for (const [convId, msgs] of Object.entries(this.data.messages)) {
+        for (const m of msgs) if ((m.poll || m.event) && !m.deleted) this._plans.set(m.id, convId);
+      }
+    }
+    return this._plans;
+  }
+
+  /** The poll or event message `id`: { convId, message }, or null. */
+  findPlan(id) {
+    const convId = this._planIndex().get(String(id));
+    const message = convId && (this.data.messages[convId] || []).find((x) => x.id === id);
+    return message && (message.poll || message.event) && !message.deleted ? { convId, message } : null;
+  }
+
+  /** What a poll looks like to `viewer`: counts, their own choice, and who voted unless the poll is anonymous. */
+  static pollView(p, viewer) {
+    const votes = p.votes || {};
+    const options = p.options.map((o) => {
+      const who = Object.entries(votes).filter(([, ids]) => ids.includes(o.id)).map(([u]) => u);
+      return { id: o.id, text: o.text, votes: who.length, ...(p.anonymous ? {} : { voters: who.slice(0, 100) }) };
+    });
+    return {
+      question: p.question, options, multi: !!p.multi, anonymous: !!p.anonymous,
+      closesAt: p.closesAt || null, closed: !!p.closedAt, ...(p.closedAt ? { closedAt: p.closedAt } : {}),
+      total: Object.keys(votes).length, mine: votes[viewer] || [],
+    };
+  }
+
+  /** What an event looks like to `viewer`: the details, the counts and names for yes / maybe / no, and their own reply. */
+  static eventView(e, viewer) {
+    const rsvp = e.rsvp || {};
+    const by = (s) => Object.entries(rsvp).filter(([, v]) => v === s).map(([u]) => u);
+    const lists = { yes: by('yes'), maybe: by('maybe'), no: by('no') };
+    return {
+      title: e.title, description: e.description || '', location: e.location || '', startsAt: e.startsAt, endsAt: e.endsAt || null,
+      reminder: e.reminder, repeat: e.repeat || 'none', canceled: !!e.canceledAt,
+      counts: { yes: lists.yes.length, maybe: lists.maybe.length, no: lists.no.length },
+      going: lists.yes.slice(0, 100), maybe: lists.maybe.slice(0, 100), notGoing: lists.no.slice(0, 100), mine: rsvp[viewer] || null,
+    };
+  }
+
+  /** Choose (or change) the options a person voted for; `[]` withdraws the vote. */
+  votePoll(username, id, optionIds, now = Date.now()) {
+    const found = this.findPlan(id);
+    const p = found?.message.poll;
+    if (!p) throw Object.assign(new Error('Poll not found'), { status: 404, code: 'not_found' });
+    if (!this.isMember(found.convId, username)) throw Object.assign(new Error('Not a member of this chat'), { status: 403, code: 'forbidden' });
+    if (p.closedAt || (p.closesAt && p.closesAt <= now)) throw Object.assign(new Error('This poll is closed'), { status: 409, code: 'poll_closed' });
+    const ids = [...new Set((Array.isArray(optionIds) ? optionIds : []).map(String))];
+    if (ids.some((x) => !p.options.some((o) => o.id === x))) throw Object.assign(new Error('Unknown option'), { status: 400, code: 'invalid_request' });
+    if (ids.length > 1 && !p.multi) throw Object.assign(new Error('Choose one option'), { status: 400, code: 'invalid_request' });
+    p.votes ||= {};
+    if (ids.length) p.votes[username] = ids;
+    else delete p.votes[username];
+    this._touchMsg(found.convId, found.message);
+    this._save();
+    return found;
+  }
+
+  /** Close a poll now (its creator) or because its time is up. Returns { convId, message } or null if it was already closed. */
+  closePoll(id, now = Date.now()) {
+    const found = this.findPlan(id);
+    const p = found?.message.poll;
+    if (!p || p.closedAt) return null;
+    p.closedAt = now;
+    this._touchMsg(found.convId, found.message);
+    this._save();
+    return found;
+  }
+
+  rsvpEvent(username, id, status) {
+    const found = this.findPlan(id);
+    const e = found?.message.event;
+    if (!e) throw Object.assign(new Error('Event not found'), { status: 404, code: 'not_found' });
+    if (!this.isMember(found.convId, username)) throw Object.assign(new Error('Not a member of this chat'), { status: 403, code: 'forbidden' });
+    if (e.canceledAt) throw Object.assign(new Error('This event was canceled'), { status: 409, code: 'event_canceled' });
+    if (status !== null && !Store.RSVP.includes(status)) throw Object.assign(new Error('status must be "yes", "maybe", "no" or null'), { status: 400, code: 'invalid_request' });
+    e.rsvp ||= {};
+    if (status) e.rsvp[username] = status;
+    else delete e.rsvp[username];
+    this._touchMsg(found.convId, found.message);
+    this._save();
+    return found;
+  }
+
+  /** Change an event's details or cancel it. A new start time brings the reminder back. */
+  updateEvent(id, patch, now = Date.now()) {
+    const found = this.findPlan(id);
+    const e = found?.message.event;
+    if (!e) throw Object.assign(new Error('Event not found'), { status: 404, code: 'not_found' });
+    for (const k of ['title', 'description', 'location', 'startsAt', 'endsAt', 'reminder', 'repeat']) if (patch[k] !== undefined) e[k] = patch[k];
+    if (patch.startsAt !== undefined || patch.reminder !== undefined) delete e.remindedAt;
+    if (patch.canceledAt) e.canceledAt = now;
+    if (patch.title !== undefined) found.message.text = patch.title;
+    this._touchMsg(found.convId, found.message);
+    this._save();
+    return found;
+  }
+
+  /**
+   * What is due: polls to close, events to remind about, repeating events whose time has passed (moved on to the next date,
+   * replies cleared). Returns `{ close: [id], remind: [{id}], rolled: [id] }` and marks reminders as sent.
+   */
+  plansDue(now = Date.now()) {
+    const out = { close: [], remind: [], rolled: [] };
+    for (const [id, convId] of this._planIndex()) {
+      const m = (this.data.messages[convId] || []).find((x) => x.id === id);
+      if (!m || m.deleted || this.isClosed(m.from)) { this._planIndex().delete(id); continue; }
+      if (m.poll && !m.poll.closedAt && m.poll.closesAt && m.poll.closesAt <= now) out.close.push(id);
+      const e = m.event;
+      if (!e || e.canceledAt) continue;
+      if (!e.remindedAt && e.reminder !== null && e.reminder !== undefined && e.startsAt - e.reminder * 60000 <= now && now < (e.endsAt || e.startsAt) + 3600000) {
+        e.remindedAt = now;
+        this._touchMsg(convId, m);
+        out.remind.push(id);
+      }
+      const over = (e.endsAt || e.startsAt) + 3600000 <= now;
+      if (over && e.repeat && e.repeat !== 'none') {
+        const step = (t) => {
+          if (e.repeat === 'weekly') return t + 7 * 24 * 3600000;
+          const d = new Date(t); d.setUTCMonth(d.getUTCMonth() + 1); return d.getTime();
+        };
+        const length = e.endsAt ? e.endsAt - e.startsAt : 0;
+        let start = e.startsAt;
+        while ((start + length) + 3600000 <= now) start = step(start);
+        e.startsAt = start;
+        if (e.endsAt) e.endsAt = start + length;
+        e.rsvp = {};
+        delete e.remindedAt;
+        this._touchMsg(convId, m);
+        out.rolled.push(id);
+      }
+    }
+    if (out.remind.length || out.rolled.length) this._save();
+    return out;
+  }
 
   /** The live messages still running: id -> convId (built once, then kept up to date). */
   _liveIndex() {
@@ -2608,6 +2766,8 @@ class Store {
       const mine = new Set(this.devicesOf(username).map((d) => d.id));
       rest.e2ee = { ...rest.e2ee, w: Object.fromEntries(Object.entries(rest.e2ee.w).filter(([id]) => mine.has(id))) };
     }
+    if (rest.poll) rest.poll = Store.pollView(rest.poll, username);
+    if (rest.event) rest.event = Store.eventView(rest.event, username);
     return rest;
   }
 
@@ -2750,7 +2910,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -2768,7 +2928,7 @@ class Store {
     }
 
     text = voice || e2ee ? '' : String(text || '').trim();
-    if (!voice && !e2ee && !text && !place) throw new Error('Message is empty');
+    if (!voice && !e2ee && !text && !place && !poll && !event) throw new Error('Message is empty');
     if (text.length > 4000) throw new Error('Message is too long');
     const msg = {
       id: crypto.randomBytes(8).toString('hex'),
@@ -2789,7 +2949,9 @@ class Store {
       if (place.location) msg.location = place.location;
       if (place.live) msg.live = { startedAt: msg.ts, until: msg.ts + place.live * 1000 };
     }
-    if (masked && !voice && !place) msg.masked = true;
+    if (poll) { msg.type = 'poll'; msg.poll = poll; }
+    if (event) { msg.type = 'event'; msg.event = event; }
+    if (masked && !voice && !place && !poll && !event) msg.masked = true;
     if (statusReply) msg.statusReply = statusReply;
     if (auto) msg.auto = auto; // 'greeting' | 'away' (business automatic replies)
     if (conv.disappearAfter) msg.expiresAt = msg.ts + conv.disappearAfter * 1000;
@@ -2798,6 +2960,7 @@ class Store {
     const list = this.data.messages[convId];
     list.push(msg);
     if (msg.live) this._liveIndex().set(msg.id, convId);
+    if (msg.poll || msg.event) this._planIndex().set(msg.id, convId);
     this._touchList('messages', convId);
     this._save();
     return list[list.length - 1]; // the tracked copy (the same object when nothing is tracked)
@@ -3060,6 +3223,7 @@ Store.WEBHOOK_EVENTS = [
   'status:new', 'status:viewed', 'status:deleted',
   'chatlock:update',
   'conversation:updated', 'message:expired', 'location:update',
+  'poll:update', 'event:update', 'event:reminder',
   'ping',
 ];
 Store.NOISY_EVENTS = ['typing', 'presence'];

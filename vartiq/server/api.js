@@ -401,6 +401,34 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.patch('/push/settings', ...authed, json, run((req) => actions.pushSettings(req.user, req.body || {})));
   router.post('/push/test', ...authed, run((req) => actions.pushTest(req.user)));
 
+  // ---------- polls and events ----------
+
+  router.post('/conversations/:id/polls', ...authed, json, run((req) => actions.sendPoll(req.user, {
+    convId: p(req, 'id'),
+    question: req.body?.question,
+    options: req.body?.options,
+    multi: req.body?.multi,
+    anonymous: req.body?.anonymous,
+    closesAt: req.body?.closesAt,
+    clientId: idempotency(req),
+  }, req.ctx), 201));
+  router.put('/polls/:id/vote', ...authed, json, run((req) => actions.votePoll(req.user, { id: p(req, 'id'), options: req.body?.options }, req.ctx)));
+  router.post('/polls/:id/close', ...authed, run((req) => actions.closePoll(req.user, { id: p(req, 'id') }, req.ctx)));
+  router.post('/conversations/:id/events', ...authed, json, run((req) => actions.sendEvent(req.user, {
+    convId: p(req, 'id'),
+    title: req.body?.title,
+    description: req.body?.description,
+    startsAt: req.body?.startsAt,
+    endsAt: req.body?.endsAt,
+    location: req.body?.location,
+    reminderMinutes: req.body?.reminderMinutes,
+    repeat: req.body?.repeat,
+    clientId: idempotency(req),
+  }, req.ctx), 201));
+  router.put('/events/:id/rsvp', ...authed, json, run((req) => actions.rsvpEvent(req.user, { id: p(req, 'id'), status: req.body?.status }, req.ctx)));
+  router.patch('/events/:id', ...authed, json, run((req) => actions.updateEvent(req.user, { id: p(req, 'id'), ...(req.body || {}) }, req.ctx)));
+  router.post('/events/:id/cancel', ...authed, run((req) => actions.cancelEvent(req.user, { id: p(req, 'id') }, req.ctx)));
+
   // ---------- location sharing ----------
 
   router.post('/conversations/:id/location', ...authed, json, run((req) => actions.sendLocation(req.user, {
