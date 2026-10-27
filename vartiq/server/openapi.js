@@ -418,7 +418,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
           email: 'hello@pizza.example',
           emailOtp: { requestId: 'otp_a93e…', code: '105577' },
           business: { category: 'Restaurant', timezone: 'Asia/Kolkata' },
-          consent: { terms: true, version: '2026-10-26' },
+          consent: { terms: true, version: '2026-10-27' },
           birthDate: '1990-05-17',
         }),
         responses: { 201: ok(ref('Session'), 'Account created; `token` is a login session. For someone under 18 the response also has `guardian` (`state: "pending"`, whether the private link reached the parent, and the masked contacts): the account cannot be used until the parent or guardian agrees.'), ...errors(400, 403, 409, 429, 503) },

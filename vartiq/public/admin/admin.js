@@ -387,7 +387,7 @@
   async function settings() {
     const { settings: s } = await loadSettings();
     const num = (v, min) => h('input', { type: 'number', min, value: v, disabled: !isSuper() });
-    const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1), minAge = num(s.limits.minAge, 5), freePhotos = num(s.limits.freeProfilePhotos, 1), premiumPhotos = num(s.limits.premiumProfilePhotos, 1);
+    const locks = num(s.limits.freeChatLocks, 0), hidden = num(s.limits.freeHiddenChats, 0), channelsMax = num(s.limits.channelsPerOwner, 1), products = num(s.limits.catalogueMax, 1), minAge = num(s.limits.minAge, 5), freePhotos = num(s.limits.freeProfilePhotos, 1), premiumPhotos = num(s.limits.premiumProfilePhotos, 1), freePoll = num(s.limits.freePollOptions, 2), premiumPoll = num(s.limits.premiumPollOptions, 2);
     const price = (id) => h('input', { type: 'number', min: 1, step: '0.01', placeholder: 'default', value: s.prices[id] ?? '', disabled: !isSuper() });
     const PLANS = [['daily', 'Daily'], ['monthly', 'Monthly'], ['quarterly', '3 months'], ['halfyearly', '6 months'], ['yearly', 'Yearly']];
     const prices = Object.fromEntries(PLANS.map(([id]) => [id, price(id)]));
@@ -400,8 +400,9 @@
         h('div', { class: 'row' }, h('label', {}, 'Locked chats (free)', locks), h('label', {}, 'Hidden chats (free)', hidden)),
         h('div', { class: 'row' }, h('label', {}, 'Channels per owner', channelsMax), h('label', {}, 'Products per catalogue', products)),
         h('div', { class: 'row' }, h('label', {}, 'Profile photos (free account)', freePhotos), h('label', {}, 'Profile photos (Premium)', premiumPhotos)),
+        h('div', { class: 'row' }, h('label', {}, 'Poll options (free account)', freePoll), h('label', {}, 'Poll options (Premium)', premiumPoll)),
         h('div', { class: 'row' }, h('label', {}, 'Youngest age allowed to sign up (5 to 17; under 18 needs a parent or guardian)', minAge)),
-        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value), minAge: Number(minAge.value), freeProfilePhotos: Number(freePhotos.value), premiumProfilePhotos: Number(premiumPhotos.value) } }, 'Limits saved') }, 'Save limits'))),
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: !isSuper(), onclick: () => saveSettings({ limits: { freeChatLocks: Number(locks.value), freeHiddenChats: Number(hidden.value), channelsPerOwner: Number(channelsMax.value), catalogueMax: Number(products.value), minAge: Number(minAge.value), freeProfilePhotos: Number(freePhotos.value), premiumProfilePhotos: Number(premiumPhotos.value), freePollOptions: Number(freePoll.value), premiumPollOptions: Number(premiumPoll.value) } }, 'Limits saved') }, 'Save limits'))),
       legalCard(s),
       h('div', { class: 'card' }, h('h3', {}, 'Premium plans and prices'),
         h('p', { class: 'muted' }, 'Leave a field empty to use the default price. Changes apply to new purchases.'),

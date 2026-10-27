@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-10-26';
+const VERSION = '2026-10-27';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -104,6 +104,7 @@ function privacyNotice() {
           ['Email address (optional for a personal account, required for a business)', 'To send you a code to prove the address is yours, and for a business to show its contact email', 'Only if you give one'],
           ['Devices you are logged in on (a name such as "Chrome on Windows", when you logged in and last used it)', 'To show you which devices are logged in to your account, warn you about a new login, and let you sign them out. A login ends after 30 days without use', 'At every login'],
           ['Login PIN (only if you choose one; kept as a salted hash, never in readable form)', 'To ask for a second step at login, so a stolen SMS code alone cannot open your account', 'When you turn it on'],
+          ['Polls and events you create or answer in a chat (the question, options, title, date, place, details, and your votes and answers)', 'To count votes, show results, close polls on time and send event reminders to people in the chat. Unlike normal messages these are readable by our server and are not end-to-end encrypted', 'When you create or answer one'],
           ['Name, username, "about" line', 'To show who you are to the people you chat with', 'At sign-up and when you edit your profile'],
           ['Profile photos you add (a picture and a small thumbnail of each), and who you let see them', 'To show your picture next to your name to the people you choose (everyone, your contacts, or nobody; for people under 18, only people they chat with)', 'When you add a photo'],
           ['Reports about a photo (who reported it, why, when)', 'To review reported photos and keep people safe', 'When someone reports a photo'],

@@ -10,6 +10,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Voice and video calls**, 1:1 and **group calls** (up to 6 people, peer-to-peer WebRTC): ringing on all devices, accept/decline, mute, camera on/off, **hold**, call timer, join a group call that's already running, and call history in the chat (missed / declined / duration, tap to call back)
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
+- **Polls and events** in any chat: a poll (one question, 2 to 6 options, one choice, names visible) and an event (title, date and time, place, details, Going / Maybe / Can't go, a reminder before it starts). Premium adds multiple-choice, anonymous and self-closing polls (up to 12 options), and any reminder time and weekly or monthly repeating events. See "Polls and events" below.
 - **Profile photos**: up to **2** for a free account and **5** with Premium; the first is your picture, shown in chat lists, headers, groups and calls (initials when there is none); you choose who sees them (everyone, my contacts, nobody); anyone can report a photo and administrators review reports
 - **Parental control for under-18s**: date of birth at sign-up; 8 to 17 needs a parent or guardian (name, relationship, mobile number or email), who agrees through a private link before the account opens and can then switch calls, location sharing, being found by new people and public channels on or off, or disable or delete the account
 - **Push notifications**: a notification on the device for a new message or an incoming call while the app is closed (Web Push; works in Chrome, Edge, Firefox and Safari, and on iPhone/iPad once VartiQ is added to the Home Screen). People choose what they get; notifications say who and what kind, never the message
@@ -261,6 +262,8 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 | Hidden chats (Hide chat) | up to **1** | unlimited |
 | Badge | none | gold ★ next to the name |
 | Profile photos | up to **2** | up to **5** |
+| Polls | one choice, up to 6 options, names visible | several choices, anonymous, closes by itself, up to 12 options |
+| Events | answers + a reminder 1 hour before | any reminder time, weekly/monthly repeat |
 | Parental controls (under-18 accounts): the parent or guardian changes calls, location sharing, being found by new people, public channels | safe defaults, cannot be changed | changeable at any time |
 
 Past a free limit, locking or hiding shows *"Premium required"* with the plans (API: `402 premium_required`). Everything else is the same on both. Profile → **Premium** shows the plan, how much of the free allowance you use, and **Upgrade / Extend**.
@@ -422,6 +425,26 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Admin switch**: *Profile photos* in Features. Off: photos are hidden everywhere and cannot be added; removing always works.
 - **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
 - **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
+
+## Polls and events
+
+Two buttons in the chat composer (📊 and 📅). Both are cards in the chat that update live for everyone.
+
+| | Free | Premium |
+|---|---|---|
+| Poll options | 2 to **6** | up to **12** |
+| Choices per voter | one | one or several |
+| Voting | names visible | can be **anonymous** |
+| Closing | the maker closes it | also **closes by itself** (1 minute to 30 days) |
+| Event answers | Going / Maybe / Can't go, names listed | same |
+| Event reminder | 1 hour before | 0, 15, 30, 60, 120 or 1440 minutes before |
+| Repeating events | no | **weekly or monthly** (after it is over the card moves to the next date and answers start again) |
+
+- A poll's maker can close it; an event's maker can edit it (moving the start moves the end) or cancel it (the card stays, marked canceled). Only members of the chat can see or answer; votes and answers of someone who deletes their account are removed.
+- **Reminders** go to the maker and to everyone who answered Going or Maybe: a *Reminder* on screen and, when the app is closed, a push notification (text shown only if "preview" is on and the chat is not locked or hidden).
+- **Privacy**: polls and events are **readable by the server** (it counts, closes and reminds), so they are not end-to-end encrypted even in an encrypted chat; the card shows the open-lock mark and the Privacy Notice says so. Locked and hidden chats withhold them like any message.
+- **Admin**: switches *Polls* and *Events* in Features (off: no new ones or answers; closing and cancelling still work) and the limits *Poll options (free)* / *(Premium)* in Settings.
+- **API**: `POST /conversations/{id}/polls`, `PUT /polls/{id}/vote`, `POST /polls/{id}/close`, `POST /conversations/{id}/events`, `PUT /events/{id}/rsvp`, `PATCH /events/{id}`, `POST /events/{id}/cancel`. Messages have `type: "poll"` (`poll`) or `"event"` (`event`). Socket: `poll:send`, `poll:vote`, `poll:close`, `event:send`, `event:rsvp`, `event:edit`, `event:cancel`; server → client `poll:update`, `event:update`, `event:reminder`.
 
 ## Parental control (under 18)
 

@@ -229,7 +229,7 @@ function createApp({
   // Browser features this app uses: location (sharing), microphone and camera (voice notes and calls). Nothing embedded in a page
   // may use them, and the features it never uses are switched off.
   app.use((req, res, next) => {
-    res.set('Permissions-Policy', 'geolocation=(self), microphone=(self), camera=(self), payment=(), usb=(), serial=(), hid=(), bluetooth=(), display-capture=()');
+    res.set('Permissions-Policy', 'geolocation=(self), microphone=(self), camera=(self), payment=(), usb=(), serial=(), hid=(), display-capture=()');
     next();
   });
   // Headers for every page: the app may only load its own scripts (so an injected script cannot run or phone home), nothing may

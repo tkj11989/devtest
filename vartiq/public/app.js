@@ -247,7 +247,7 @@
   }
 
   /** Text for a message in lists and previews. */
-  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
+  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'poll' && m.poll ? `📊 ${m.poll.question}` : m.type === 'event' && m.event ? `📅 ${m.event.title}` : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
 
   const openLockSvg = () => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -675,6 +675,8 @@
     disappearing: ['#menu-timer', '#btn-default-timer@.link-row'],
     calls: ['#call-buttons', '#btn-join-call'],
     location: ['#btn-place'],
+    polls: ['#btn-poll'],
+    events: ['#btn-event'],
     profilePhotos: ['#btn-photos'],
     push: ['#btn-notifications'],
     callRecording: ['#call-record'],
@@ -1393,6 +1395,9 @@
     socket.on('disconnect', () => setOffline(true));
     onOrdered('message:new', ({ message }) => onMessage(message));
     onOrdered('location:update', ({ message }) => onLocationUpdate(message));
+    onOrdered('poll:update', ({ message }) => onPlanUpdate(message));
+    onOrdered('event:update', ({ message }) => onPlanUpdate(message));
+    socket.on('event:reminder', ({ message }) => { toast(`Reminder: ${message.event.title} starts ${new Date(message.event.startsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); onPlanUpdate(message); });
     socket.on('call:incoming', (call) => localNotifyCall(call));
     onOrdered('message:starred', ({ convId, id, starred }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
@@ -1970,7 +1975,7 @@
       }
       const status = mine && !m.deleted ? statusOf(m, conv) : null;
       const covered = m.masked && !m.deleted && !mine && !state.revealed.has(m.id);
-      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}${m.type === 'location' && !m.deleted ? ` place${m.live && window.Place.liveActive(m.live) ? ' live-on' : ''}` : ''}`);
+      const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}${(m.type === 'poll' || m.type === 'event') && !m.deleted ? ' plan' : ''}${m.type === 'location' && !m.deleted ? ` place${m.live && window.Place.liveActive(m.live) ? ' live-on' : ''}` : ''}`);
       bubble.dataset.id = m.id;
       if (conv.type === 'group' && !mine && first) {
         const author = el('div', 'author', displayName(m.from));
@@ -1986,6 +1991,10 @@
         bubble.appendChild(voicePlayer(m));
       } else if (m.type === 'location') {
         bubble.appendChild(placeCard(m, mine));
+      } else if (m.type === 'poll' && m.poll) {
+        bubble.appendChild(pollCard(m, mine));
+      } else if (m.type === 'event' && m.event) {
+        bubble.appendChild(eventCard(m, mine));
       } else if (covered) {
         const cover = el('button', 'masked-cover');
         cover.type = 'button';
@@ -2637,7 +2646,7 @@
     const prefs = state.notif?.preferences || { messages: true, preview: true };
     if (!prefs.messages || msg.type === 'call' || msg.type === 'system') return;
     const generic = conv.locked || conv.hidden || !prefs.preview;
-    const what = msg.type === 'voice' ? 'Voice message' : msg.type === 'location' ? 'Location' : 'New message';
+    const what = msg.type === 'voice' ? 'Voice message' : msg.type === 'location' ? 'Location' : msg.type === 'poll' ? 'Poll' : msg.type === 'event' ? 'Event' : 'New message';
     const title = generic ? 'VartiQ' : conv.type === 'group' ? conv.name : displayName(msg.from);
     const body = !generic && conv.type === 'group' ? `${displayName(msg.from)}: ${what}` : what;
     serviceWorkerReady().then((reg) => reg?.showNotification(title, {
@@ -2775,6 +2784,182 @@
       }
     }
   }
+
+  // ---------- polls and events ----------
+  //
+  // A poll or an event is a card in the chat. The server counts the votes and answers and tells everyone; these cards are
+  // readable by the server (not end-to-end encrypted), which the card footer says when the chat itself is encrypted.
+
+  /** Put a changed poll or event card in place (from a reply or an update from the server). */
+  function onPlanUpdate(msg) {
+    const list = state.messages.get(msg.convId);
+    const i = list ? list.findIndex((m) => m.id === msg.id) : -1;
+    if (i >= 0) list[i] = { ...list[i], ...msg };
+    const conv = state.conversations.get(msg.convId);
+    if (conv?.lastMessage?.id === msg.id) conv.lastMessage = { ...conv.lastMessage, ...msg };
+    if (msg.convId === state.activeId) renderMessages();
+    renderChatList();
+  }
+  async function planAction(event, payload) {
+    try {
+      const res = await emit(event, payload);
+      if (res?.message) onPlanUpdate(res.message);
+    } catch (err) {
+      if (err.code === 'premium_required') offerUpgrade(err.message);
+      else toast(err.message);
+    }
+  }
+  const fmtEventWhen = (ev) => {
+    const a = new Date(ev.startsAt);
+    const day = a.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: a.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+    let out = `${day}, ${timeOf(ev.startsAt)}`;
+    if (ev.endsAt) out += ` to ${new Date(ev.endsAt).toDateString() === a.toDateString() ? timeOf(ev.endsAt) : new Date(ev.endsAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+    return out;
+  };
+
+  function pollCard(m, mine) {
+    const p = m.poll;
+    const card = el('div', 'plan-card poll-card');
+    const title = el('div', 'plan-title');
+    title.append('📊 ', p.question);
+    card.appendChild(title);
+    const kind = [p.multi ? 'Choose one or more' : 'Choose one', p.anonymous ? 'anonymous' : null, p.closed ? 'closed' : p.closesAt ? `closes ${new Date(p.closesAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : null].filter(Boolean).join(' · ');
+    card.appendChild(el('div', 'plan-sub', kind));
+    const top = Math.max(1, ...p.options.map((o) => o.votes));
+    for (const o of p.options) {
+      const chosen = p.mine.includes(o.id);
+      const row = el('button', `poll-opt${chosen ? ' chosen' : ''}`);
+      row.type = 'button';
+      row.disabled = !!p.closed || !!m.localStatus;
+      const bar = el('span', 'poll-bar');
+      bar.style.width = `${p.total ? Math.round((o.votes / p.total) * 100) : 0}%`;
+      const label = el('span', 'poll-label');
+      label.append(el('span', 'poll-mark', p.multi ? (chosen ? '☑' : '☐') : (chosen ? '●' : '○')), el('span', 'poll-text', o.text), el('span', 'poll-count', String(o.votes)));
+      row.append(bar, label);
+      if (o.voters?.length) row.title = o.voters.map(displayName).join(', ');
+      row.addEventListener('click', () => {
+        let next;
+        if (p.multi) next = chosen ? p.mine.filter((x) => x !== o.id) : [...p.mine, o.id];
+        else next = chosen ? [] : [o.id];
+        planAction('poll:vote', { id: m.id, options: next });
+      });
+      card.appendChild(row);
+    }
+    card.appendChild(el('div', 'plan-sub', `${p.total} ${p.total === 1 ? 'vote' : 'votes'}${p.anonymous ? '' : ' · tap an option to see who'}`));
+    if (mine && !p.closed && !m.localStatus) {
+      const close = el('button', 'link plan-action', 'Close poll');
+      close.type = 'button';
+      close.addEventListener('click', () => { if (confirm('Close this poll? Nobody can vote after that.')) planAction('poll:close', { id: m.id }); });
+      card.appendChild(close);
+    }
+    return card;
+  }
+
+  function eventCard(m, mine) {
+    const e = m.event;
+    const card = el('div', `plan-card event-card${e.canceled ? ' canceled' : ''}`);
+    const title = el('div', 'plan-title');
+    title.append('📅 ', e.title);
+    card.appendChild(title);
+    if (e.canceled) card.appendChild(el('div', 'plan-warn', 'Canceled'));
+    card.appendChild(el('div', 'plan-when', fmtEventWhen(e) + (e.repeat !== 'none' ? ` · repeats ${e.repeat}` : '')));
+    if (e.location) card.appendChild(el('div', 'plan-sub', `📍 ${e.location}`));
+    if (e.description) card.appendChild(el('div', 'plan-desc', e.description));
+    if (!e.canceled) {
+      const bar = el('div', 'rsvp-row');
+      for (const [status, label] of [['yes', 'Going'], ['maybe', 'Maybe'], ['no', "Can't go"]]) {
+        const b = el('button', `rsvp${e.mine === status ? ' chosen' : ''}`);
+        b.type = 'button';
+        b.disabled = !!m.localStatus;
+        b.append(label, el('small', '', String(status === 'no' ? e.counts.no : e.counts[status])));
+        b.addEventListener('click', () => planAction('event:rsvp', { id: m.id, status: e.mine === status ? null : status }));
+        bar.appendChild(b);
+      }
+      card.appendChild(bar);
+    }
+    const names = (label, list) => (list.length ? el('div', 'plan-sub', `${label}: ${list.map(displayName).join(', ')}`) : null);
+    for (const n of [names('Going', e.going), names('Maybe', e.maybe), names("Can't go", e.notGoing)]) if (n) card.appendChild(n);
+    if (mine && !e.canceled && !m.localStatus) {
+      const acts = el('div', 'plan-actions');
+      const edit = el('button', 'link plan-action', 'Edit');
+      edit.type = 'button';
+      edit.addEventListener('click', () => eventDialog(m));
+      const cancel = el('button', 'link plan-action', 'Cancel event');
+      cancel.type = 'button';
+      cancel.addEventListener('click', () => { if (confirm('Cancel this event? Everyone sees it as canceled.')) planAction('event:cancel', { id: m.id }); });
+      acts.append(edit, cancel);
+      card.appendChild(acts);
+    }
+    return card;
+  }
+
+  async function pollDialog() {
+    const convId = state.activeId;
+    if (!convId) return;
+    await dialog({
+      title: 'Create a poll',
+      text: 'Everyone in this chat can vote. Polls are readable by the VartiQ server so it can count votes (they are not end-to-end encrypted). Premium: several choices, anonymous voting, closing by itself and more options.',
+      fields: [
+        { name: 'question', label: 'Question', type: 'text', maxLength: 200, placeholder: 'Where shall we eat?' },
+        { name: 'options', label: 'Options (one per line, at least 2)', type: 'textarea', maxLength: 1200, rows: 5, placeholder: 'Pizza\nSushi\nThali' },
+        { name: 'multi', type: 'checkbox', required: false, label: 'Allow more than one choice (Premium)' },
+        { name: 'anonymous', type: 'checkbox', required: false, label: 'Anonymous: hide who voted (Premium)' },
+        { name: 'closes', label: 'Closes (Premium)', value: '0', options: [['0', 'Never, I close it'], ['3600', 'In 1 hour'], ['86400', 'In 1 day'], ['259200', 'In 3 days'], ['604800', 'In 7 days']] },
+      ],
+      submit: 'Send poll',
+      onSubmit: async (v) => {
+        const options = String(v.options || '').split('\n').map((x) => x.trim()).filter(Boolean);
+        const res = await emit('poll:send', {
+          convId, question: v.question, options, clientId: newClientId(),
+          ...(v.multi ? { multi: true } : {}), ...(v.anonymous ? { anonymous: true } : {}),
+          ...(Number(v.closes) ? { closesAt: Date.now() + Number(v.closes) * 1000 } : {}),
+        });
+        upsertMessage(res.message);
+        refreshConversation(convId);
+      },
+    });
+  }
+
+  const localInput = (ts) => { const d = new Date(ts - new Date(ts).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+  /** Plan an event, or (with `existing`) change one you made. */
+  async function eventDialog(existing = null) {
+    const convId = existing ? existing.convId : state.activeId;
+    if (!convId) return;
+    const e = existing?.event;
+    const inOneHour = Math.ceil((Date.now() + 3600000) / 900000) * 900000;
+    await dialog({
+      title: existing ? 'Change event' : 'Plan an event',
+      text: 'Everyone in this chat can answer Going, Maybe or Can\'t go, and people who answered Going or Maybe get a reminder. Events are readable by the VartiQ server so it can send reminders (they are not end-to-end encrypted).',
+      fields: [
+        { name: 'title', label: 'What is it?', type: 'text', maxLength: 100, value: e?.title, placeholder: 'Sunday trek' },
+        { name: 'startsAt', label: 'Starts', type: 'datetime-local', value: localInput(e?.startsAt || inOneHour) },
+        { name: 'endsAt', label: 'Ends (optional)', type: 'datetime-local', required: false, value: e?.endsAt ? localInput(e.endsAt) : '' },
+        { name: 'location', label: 'Where (optional)', type: 'text', required: false, maxLength: 200, value: e?.location },
+        { name: 'description', label: 'Details (optional)', type: 'textarea', required: false, maxLength: 1000, rows: 3, value: e?.description },
+        { name: 'reminder', label: 'Reminder', value: String(e?.reminder ?? 60), options: [['60', '1 hour before'], ['0', 'At the start (Premium)'], ['15', '15 minutes before (Premium)'], ['30', '30 minutes before (Premium)'], ['120', '2 hours before (Premium)'], ['1440', '1 day before (Premium)']] },
+        { name: 'repeat', label: 'Repeats', value: e?.repeat || 'none', options: [['none', 'Does not repeat'], ['weekly', 'Every week (Premium)'], ['monthly', 'Every month (Premium)']] },
+      ],
+      submit: existing ? 'Save' : 'Send event',
+      onSubmit: async (v) => {
+        const starts = new Date(v.startsAt).getTime();
+        if (!Number.isFinite(starts)) throw new Error('Choose when it starts');
+        const body = {
+          title: v.title, startsAt: starts, endsAt: v.endsAt ? new Date(v.endsAt).getTime() : (existing ? null : undefined),
+          location: v.location || '', description: v.description || '', reminderMinutes: Number(v.reminder), repeat: v.repeat,
+        };
+        if (existing) {
+          const res = await emit('event:edit', { id: existing.id, ...body });
+          onPlanUpdate(res.message);
+        } else {
+          const res = await emit('event:send', { convId, ...body, clientId: newClientId() });
+          upsertMessage(res.message);
+          refreshConversation(convId);
+        }
+      },
+    });
+  }
+  $('#btn-poll').addEventListener('click', pollDialog);
+  $('#btn-event').addEventListener('click', () => eventDialog());
 
   async function placeDialog() {
     const convId = state.activeId;
@@ -3904,14 +4089,19 @@
         if (f.type === 'checkbox') {
           const row = el('label', 'agree');
           const tick = el('input');
-          Object.assign(tick, { type: 'checkbox', name: f.name, required: f.required !== false });
+          Object.assign(tick, { type: 'checkbox', name: f.name, required: f.required !== false, checked: !!f.checked });
           row.append(tick, el('span', '', f.label));
           box.appendChild(row);
           continue;
         }
         const label = el('label', '', f.label);
         let input;
-        if (f.options) {
+        if (f.type === 'textarea') {
+          input = el('textarea');
+          Object.assign(input, { name: f.name, required: f.required !== false, maxLength: f.maxLength || 1000, rows: f.rows || 4 });
+          if (f.placeholder) input.placeholder = f.placeholder;
+          if (f.value !== undefined) input.value = f.value;
+        } else if (f.options) {
           input = el('select');
           for (const [value, text] of f.options) input.appendChild(new Option(text, value));
           input.name = f.name;
