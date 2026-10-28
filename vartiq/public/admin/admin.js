@@ -109,7 +109,7 @@
   const pages = { overview, users, channels, payments, features, settings, audit, admins };
 
   async function route() {
-    const page = (location.hash.replace('#', '') || 'overview').split('/')[0];
+    const page = state.admin?.limited ? 'admins' : (location.hash.replace('#', '') || 'overview').split('/')[0];
     const render = pages[page] || overview;
     document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === (pages[page] ? page : 'overview')));
     closeDrawer();
@@ -466,6 +466,7 @@
         } }, 'Set up two-step sign-in'));
     };
     await paintTwoStep();
+    if (state.admin.limited) return h('div', {}, head('Set up two-step sign-in'), h('div', { class: 'card' }, h('h3', {}, 'Two-step sign-in'), twoStep));
     const endAll = h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: async () => { const r = await attempt(() => api('POST', '/sessions/end', {})); if (r) toast(`${r.ended} other session(s) signed out`); } }, 'Sign out my other sessions'),
       isSuper() && h('button', { class: 'btn danger', onclick: async () => { if (confirm('Sign out every other administrator?')) { const r = await attempt(() => api('POST', '/sessions/end', { all: true })); if (r) toast(`${r.ended} session(s) signed out`); } } }, 'Sign out all administrators'));
@@ -498,7 +499,7 @@
     try {
       const me = await api('GET', '/me');
       state.admin = me.admin;
-      await loadSettings();
+      if (!state.admin.limited) await loadSettings(); // until two-step sign-in is set up the server allows nothing else
     } catch {
       return;
     }
