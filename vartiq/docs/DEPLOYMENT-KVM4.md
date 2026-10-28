@@ -262,6 +262,10 @@ LEGAL_GRIEVANCE_NAME=Grievance Officer name
 LEGAL_GRIEVANCE_EMAIL=grievance@prayuktech.com
 LEGAL_CITY=City for courts
 LEGAL_HOSTING=India (your data centre location)
+LEGAL_PAYMENT_PROVIDER=Razorpay
+# Languages whose translation a certified translator has checked (comma separated, e.g. hi,ta). Others show a "not yet checked" note.
+# Review sheets: docs/translation-review/ . Leave empty until a language is signed off.
+LEGAL_REVIEWED_LANGUAGES=
 
 # ---- calls (Phase 7): short-lived credentials for your own TURN server
 TURN_URLS=turn:turn.prayuktech.com:3478?transport=udp,turn:turn.prayuktech.com:3478?transport=tcp,turns:turn.prayuktech.com:5349?transport=tcp   # last one: after 7.2
