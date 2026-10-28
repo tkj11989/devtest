@@ -245,6 +245,20 @@ test('admin two-step sign-in: needs the code, a code works once, required mode l
   assert.strictEqual((await env.raw('GET', '/admin/api/me', { token: boss.body.token })).status, 401, 'all administrators were signed out');
 });
 
+test('admin two-step sign-in survives a restart and a password change; ADMIN_RESET_2FA clears it', () => {
+  const store = new Store({ file: null });
+  store.upsertAdmin('boss', 'long-password-one', 'super');
+  store.data.admins.boss.totp = { secret: 'ABCDEFGHIJKLMNOP', last: 1 };
+  store.upsertAdmin('boss', 'long-password-one', 'super'); // what every start does with ADMIN_PASSWORD
+  assert.strictEqual(store.data.admins.boss.totp.secret, 'ABCDEFGHIJKLMNOP');
+  store.upsertAdmin('boss', 'long-password-two', 'super'); // a password change
+  assert.ok(store.verifyAdmin('boss', 'long-password-two'));
+  assert.strictEqual(store.data.admins.boss.totp.secret, 'ABCDEFGHIJKLMNOP');
+  assert.strictEqual(store.clearAdminTotp('boss'), true);
+  assert.strictEqual(store.data.admins.boss.totp, undefined);
+  assert.strictEqual(store.clearAdminTotp('nobody'), false);
+});
+
 test('chat lock: wrong-code attempts are kept with the account (a restart does not reset them)', async (t) => {
   const env = await setup(t);
   const reg = await env.signUp('Asha', '+919800000015');

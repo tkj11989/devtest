@@ -306,7 +306,11 @@ function createApp({
   // Administrator accounts come from the environment (ADMIN_USERNAME, ADMIN_PASSWORD) or the `admin` option.
   const adminUser = adminOptions.username ?? process.env.ADMIN_USERNAME ?? 'admin';
   const adminPassword = adminOptions.password ?? process.env.ADMIN_PASSWORD;
-  if (adminPassword) store.upsertAdmin(adminUser, adminPassword, 'super');
+  if (adminPassword) {
+    store.upsertAdmin(adminUser, adminPassword, 'super');
+    // Lost phone: start once with ADMIN_RESET_2FA=1, sign in, set up two-step again, then remove the line.
+    if (process.env.ADMIN_RESET_2FA === '1' && store.clearAdminTotp(adminUser)) console.warn(`Two-step sign-in cleared for ${adminUser} (ADMIN_RESET_2FA=1): remove that line after you have set it up again.`);
+  }
   const adminRouter = createAdminRouter({
     store,
     service,

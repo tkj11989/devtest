@@ -401,7 +401,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) for what is protected and the open risk
 
 - `NODE_ENV=production`: the server refuses to start if a testing switch (`OTP_DEV_CODES`, `*_SANDBOX`, `WEBHOOKS_ALLOW_PRIVATE`, `PREMIUM_FOR_ALL`) is on.
 - `OTP_DAILY_SMS_LIMIT` (for example `2000`) and `OTP_ALLOWED_PREFIXES` (for example `+91`) protect against SMS bills.
-- `ADMIN_REQUIRE_2FA=1` makes authenticator-app sign-in mandatory for administrators (they set it up on first login: Administrators → Two-step sign-in).
+- `ADMIN_REQUIRE_2FA=1` makes authenticator-app sign-in mandatory for administrators (they set it up on first login: Administrators → Two-step sign-in). It is kept across restarts and password changes. **Lost phone:** add `ADMIN_RESET_2FA=1` to the environment file, restart once, sign in and set up two-step again, then remove the line (another super admin can also use *Reset 2-step* on the Administrators page).
 - `CORS_ORIGINS` (comma list); without it, and with `PUBLIC_URL` set, only your own address may call the API from a browser.
 - **Login PIN** (users): Profile → Devices, browsers and PIN. Asked at every login. Support can remove a forgotten one (Admin → Users).
 - **Sessions** end after 30 days without use; the user can see and sign out devices, or log out everywhere (`GET`/`DELETE /me/sessions`, `PUT /me/login-pin`). Other open devices get a *New login* notice (`security:login`).

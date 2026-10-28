@@ -1196,9 +1196,20 @@ class Store {
     if (!['super', 'support'].includes(role)) throw Object.assign(new Error('role must be "super" or "support"'), { status: 400 });
     const salt = crypto.randomBytes(16).toString('hex');
     const prev = this.data.admins[username];
-    this.data.admins[username] = { username, role, salt, hash: Store._hash(String(password), salt), createdAt: prev?.createdAt || Date.now() };
+    // Two-step sign-in stays: a restart (which re-applies ADMIN_PASSWORD) or a password change must not switch it off.
+    this.data.admins[username] = { username, role, salt, hash: Store._hash(String(password), salt), createdAt: prev?.createdAt || Date.now(), ...(prev?.totp ? { totp: prev.totp } : {}) };
     this._save();
     return { username, role };
+  }
+
+  /** Forget an administrator's authenticator (lost phone). Used by ADMIN_RESET_2FA=1 at start-up. */
+  clearAdminTotp(username) {
+    const a = this.data.admins[String(username || '').trim().toLowerCase()];
+    if (!a) return false;
+    delete a.totp;
+    delete a.totpPending;
+    this._save();
+    return true;
   }
 
   verifyAdmin(username, password) {
