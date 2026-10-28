@@ -219,7 +219,7 @@ REL=/opt/vartiq/releases/$(date +%Y%m%d-%H%M%S)
 sudo -u vartiq mkdir -p "$REL"
 sudo -u vartiq rsync -a --exclude node_modules --exclude data /opt/vartiq/src/vartiq/ "$REL"/
 cd "$REL" && sudo -u vartiq env PATH="$PATH" npm ci --omit=dev --no-audit --no-fund
-PREV=$(readlink -f /opt/vartiq/current || true)
+PREV=$(readlink -e /opt/vartiq/current || true)   # -e: empty on the very first deploy (nothing to roll back to)
 sudo -u vartiq ln -sfn "$REL" /opt/vartiq/current
 sudo systemctl restart vartiq
 sleep 3
