@@ -26,7 +26,7 @@ const FEATURES = [
   { id: 'chatLock', group: 'Privacy', label: 'Chat lock', description: 'Locking more chats. Unlocking and removing locks always work.' },
   { id: 'hideChat', group: 'Privacy', label: 'Hide chat', description: 'Hiding more chats. Unhiding and opening hidden chats always work.' },
   { id: 'business', group: 'Business', label: 'Business profiles', description: 'Creating or editing business profiles (and their auto replies).' },
-  { id: 'bulkMessaging', group: 'Business', label: 'Bulk messaging (campaigns)', description: 'Business accounts sending one message to many people and seeing who received and read it. Off: no new or retried campaigns, and queued ones are paused (people can always stop messages from a business).' },
+  { id: 'bulkMessaging', group: 'Business', label: 'Bulk messaging (campaigns)', description: 'Sending one message to many people and seeing who received and read it (business accounts: customers or a list; personal accounts: only people they already chat with). Off: no new or retried campaigns, and queued ones are paused (people can always stop messages from a business).' },
   { id: 'catalogue', group: 'Business', label: 'Product catalogue', description: 'Editing and viewing product catalogues.' },
   { id: 'premium', group: 'Money', label: 'Premium subscriptions', description: 'Buying Premium (existing Premium keeps working until it ends).' },
   { id: 'verification', group: 'Money', label: 'Identity verification (KYC)', description: 'Starting new identity verifications for the Verified badge.' },
@@ -44,7 +44,7 @@ const DEFAULT_SETTINGS = {
   // Everything is on, except the developer tools: API keys and webhooks are restricted
   // (web app and mobile) until an administrator switches them on.
   features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
-  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12, maxGroupMembers: 256, freeCampaignRecipients: 50, premiumCampaignRecipients: 1000, freeCampaignsPerDay: 2, premiumCampaignsPerDay: 20 },
+  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12, maxGroupMembers: 256, freeCampaignRecipients: 50, premiumCampaignRecipients: 1000, freeCampaignsPerDay: 2, premiumCampaignsPerDay: 20, freeIndividualCampaignRecipients: 20, premiumIndividualCampaignRecipients: 200, freeIndividualCampaignsPerDay: 2, premiumIndividualCampaignsPerDay: 10 },
   prices: {}, // plan id -> price override
   disabledPlans: [], // plans nobody can buy right now
   announcement: '',
@@ -53,7 +53,7 @@ const DEFAULT_SETTINGS = {
   legal: { ...DEFAULT_LEGAL }, // company details printed in the Terms and Privacy Notice (Admin → Settings → Legal)
 };
 
-const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20], maxGroupMembers: [3, 1000], freeCampaignRecipients: [1, 5000], premiumCampaignRecipients: [1, 5000], freeCampaignsPerDay: [1, 1000], premiumCampaignsPerDay: [1, 1000] };
+const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20], maxGroupMembers: [3, 1000], freeCampaignRecipients: [1, 5000], premiumCampaignRecipients: [1, 5000], freeCampaignsPerDay: [1, 1000], premiumCampaignsPerDay: [1, 1000], freeIndividualCampaignRecipients: [1, 1000], premiumIndividualCampaignRecipients: [1, 1000], freeIndividualCampaignsPerDay: [1, 100], premiumIndividualCampaignsPerDay: [1, 100] };
 
 /** Merge a settings patch into `current`, validating everything. Returns the new settings and what changed. */
 function applySettings(current, patch) {
@@ -84,6 +84,8 @@ function applySettings(current, patch) {
   }
   if (next.limits.premiumPollOptions < next.limits.freePollOptions) throw bad('limits.premiumPollOptions cannot be lower than freePollOptions');
   if (next.limits.premiumCampaignRecipients < next.limits.freeCampaignRecipients) throw bad('limits.premiumCampaignRecipients cannot be lower than freeCampaignRecipients');
+  if (next.limits.premiumIndividualCampaignRecipients < next.limits.freeIndividualCampaignRecipients) throw bad('limits.premiumIndividualCampaignRecipients cannot be lower than freeIndividualCampaignRecipients');
+  if (next.limits.premiumIndividualCampaignsPerDay < next.limits.freeIndividualCampaignsPerDay) throw bad('limits.premiumIndividualCampaignsPerDay cannot be lower than freeIndividualCampaignsPerDay');
   if (next.limits.premiumCampaignsPerDay < next.limits.freeCampaignsPerDay) throw bad('limits.premiumCampaignsPerDay cannot be lower than freeCampaignsPerDay');
   if (next.limits.premiumProfilePhotos < next.limits.freeProfilePhotos) throw bad('limits.premiumProfilePhotos cannot be lower than freeProfilePhotos');
   if (patch.prices !== undefined) {

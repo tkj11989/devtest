@@ -354,7 +354,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       name: { type: 'string' },
       text: { type: 'string' },
       status: { type: 'string', enum: ['scheduled', 'sending', 'completed', 'cancelled', 'stopped'] },
-      audience: { type: 'string', enum: ['customers', 'list'] },
+      audience: { type: 'string', enum: ['customers', 'contacts', 'list'] },
       createdAt: { type: 'integer' },
       scheduledAt: { type: ['integer', 'null'] },
       startedAt: { type: ['integer', 'null'] },
@@ -895,7 +895,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/campaigns/audience': {
       get: op(T.camp, 'What a new campaign can reach', {
         description: 'How many customers (people who have written to the business) there are, this account\'s limits (free business vs Premium) and how many campaigns it has started in the last 24 hours.',
-        responses: { 200: ok(obj({ business: { type: 'boolean' }, customers: { type: 'integer' }, limits: obj({ premium: { type: 'boolean' }, recipients: { type: 'integer' }, perDay: { type: 'integer' }, premiumRecipients: { type: 'integer' }, premiumPerDay: { type: 'integer' } }), usedToday: { type: 'integer' }, maxNameLength: { type: 'integer' }, maxTextLength: { type: 'integer' } })), ...errors(401, 403) },
+        responses: { 200: ok(obj({ business: { type: 'boolean' }, customers: { type: 'integer' }, contacts: { type: 'integer', description: 'people you already chat with' }, canSend: { type: 'boolean', description: 'false for an account under 18' }, limits: obj({ premium: { type: 'boolean' }, recipients: { type: 'integer' }, perDay: { type: 'integer' }, premiumRecipients: { type: 'integer' }, premiumPerDay: { type: 'integer' } }), usedToday: { type: 'integer' }, maxNameLength: { type: 'integer' }, maxTextLength: { type: 'integer' } })), ...errors(401, 403) },
       }),
     },
     '/campaigns': {
@@ -905,8 +905,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ campaigns: arrayOf(ref('Campaign')), hasMore: { type: 'boolean' } })), ...errors(401) },
       }),
       post: op(T.camp, 'Send a message to many people (campaign)', {
-        description: 'Business accounts only. Each person gets an ordinary message from the business in their own one-to-one chat (not a group); replies reach the business alone. `audience` is `customers` (everyone who has written to the business) or `list` (`to`: usernames, with or without @, and mobile numbers with country code). `confirmed: true` states that the people agreed to hear from the business. Leave out `scheduleAt` to send now, or give a time (ms since 1970, within 30 days). People under 18, people who blocked the business and people who stopped its messages are never sent to; they appear as `failed` in the report. **Limits** (administrator settings): free business accounts 50 people and 2 campaigns a day, Premium 1000 and 20 (`402 premium_required`, `429 campaign_limit`, `400 too_many_recipients`). Messages are readable by the server (not end-to-end encrypted). `403 feature_disabled` when bulk messaging is off.',
-        body: jsonBody(obj({ name: { type: 'string', maxLength: 80 }, text: { type: 'string', maxLength: 1000 }, audience: { type: 'string', enum: ['customers', 'list'] }, to: { type: 'array', items: { type: 'string' }, description: 'for `list`' }, scheduleAt: { type: 'integer' }, confirmed: { type: 'boolean' } }, ['name', 'text', 'audience', 'confirmed']), { name: 'Diwali offer', text: 'Flat 20% off this week', audience: 'list', to: ['ann', '+919876543210'], confirmed: true }),
+        description: 'Business and personal accounts (not under 18: `403 adult_required`). Each person gets an ordinary message from the business in their own one-to-one chat (not a group); replies reach the business alone. `audience` is `customers` (businesses only: everyone who has written to the business), `contacts` (everyone you already chat with) or `list` (`to`: usernames, with or without @, and mobile numbers with country code). **A personal account can reach only people it already chats with**: anyone else in a list is `failed`. `confirmed: true` states that the people agreed to hear from the business. Leave out `scheduleAt` to send now, or give a time (ms since 1970, within 30 days). People under 18, people who blocked the business and people who stopped its messages are never sent to; they appear as `failed` in the report. **Limits** (administrator settings): free business accounts 50 people and 2 campaigns a day, Premium 1000 and 20; personal accounts 20 and 2, Premium 200 and 10 (`402 premium_required`, `429 campaign_limit`, `400 too_many_recipients`). Messages are readable by the server (not end-to-end encrypted). `403 feature_disabled` when bulk messaging is off.',
+        body: jsonBody(obj({ name: { type: 'string', maxLength: 80 }, text: { type: 'string', maxLength: 1000 }, audience: { type: 'string', enum: ['customers', 'contacts', 'list'] }, to: { type: 'array', items: { type: 'string' }, description: 'for `list`' }, scheduleAt: { type: 'integer' }, confirmed: { type: 'boolean' } }, ['name', 'text', 'audience', 'confirmed']), { name: 'Diwali offer', text: 'Flat 20% off this week', audience: 'list', to: ['ann', '+919876543210'], confirmed: true }),
         responses: { 201: ok(obj({ campaign: ref('Campaign') })), ...errors(400, 401, 402, 403, 429) },
       }),
     },

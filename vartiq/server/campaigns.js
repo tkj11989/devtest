@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Bulk messaging for business accounts: a campaign sends one message to many people, each into their own one-to-one chat with
+ * Bulk messaging for business and personal accounts (a business reaches its customers or a list; a personal account only people it already chats with): a campaign sends one message to many people, each into their own one-to-one chat with
  * the business (so everyone sees an ordinary message from the business, and replies reach the business alone), and keeps a
  * delivery report for it.
  *
@@ -45,16 +45,15 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
 
   const fail = (status, code, message) => new ApiError(status, code, message);
 
+  /** Business accounts and personal accounts have separate (settable) limits; personal ones are smaller. */
   const limitsOf = (me) => {
     const l = store.getSettings().limits;
     const premium = store.isPremium(me);
-    return {
-      premium,
-      recipients: premium ? l.premiumCampaignRecipients : l.freeCampaignRecipients,
-      perDay: premium ? l.premiumCampaignsPerDay : l.freeCampaignsPerDay,
-      premiumRecipients: l.premiumCampaignRecipients,
-      premiumPerDay: l.premiumCampaignsPerDay,
-    };
+    const biz = !!store.getBusiness(me);
+    const [fr, pr, fd, pd] = biz
+      ? [l.freeCampaignRecipients, l.premiumCampaignRecipients, l.freeCampaignsPerDay, l.premiumCampaignsPerDay]
+      : [l.freeIndividualCampaignRecipients, l.premiumIndividualCampaignRecipients, l.freeIndividualCampaignsPerDay, l.premiumIndividualCampaignsPerDay];
+    return { premium, recipients: premium ? pr : fr, perDay: premium ? pd : fd, premiumRecipients: pr, premiumPerDay: pd };
   };
 
   const mine = (me, id) => {
@@ -73,6 +72,18 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
       if (!user || store.isClosed(peer)) continue;
       const wrote = (store.data.messages[conv.id] || []).some((m) => m.from === peer && m.type !== 'system' && !m.auto);
       if (wrote) out.push(peer);
+    }
+    return out;
+  };
+
+  /** People this account already chats with (a one-to-one chat with at least one message): what a personal account can broadcast to. */
+  const contactsOf = (me) => {
+    const out = [];
+    for (const conv of store._convsOf(me)) {
+      if (conv.type !== 'direct') continue;
+      const peer = conv.members.find((m) => m !== me);
+      if (!store.data.users[peer] || store.isClosed(peer)) continue;
+      if ((store.data.messages[conv.id] || []).some((m) => m.type !== 'system' && !m.campaign)) out.push(peer);
     }
     return out;
   };
@@ -184,7 +195,7 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
 
   /** One row of the report. The person's name is shown only where the business already knows who they are. */
   const row = (r, c) => {
-    const known = c.audience === 'customers' || r.k === 'username';
+    const known = c.audience !== 'list' || r.k === 'username';
     const user = known && r.u ? store.publicUser(r.u) : null;
     return {
       to: r.k === 'phone' ? r.n : (r.u || r.n || '—'),
@@ -215,10 +226,6 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
 
   // ---------- actions ----------
 
-  const requireBusiness = (me) => {
-    if (!store.getBusiness(me)) throw fail(403, 'business_required', 'Only business accounts can send campaigns. Turn on your business profile first.');
-  };
-
   const actions = {
     /** What the create screen needs: how many customers there are and what this account's limits are. */
     campaignAudience(me) {
@@ -227,6 +234,8 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
       return {
         business: !!store.getBusiness(me),
         customers: store.getBusiness(me) ? customersOf(me).length : 0,
+        contacts: contactsOf(me).length,
+        canSend: !store.isMinor(me),
         limits,
         usedToday: Object.values(all()).filter((c) => c.owner === me && c.createdAt > day).length,
         maxNameLength: NAME_MAX, maxTextLength: TEXT_MAX,
@@ -234,13 +243,16 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
     },
 
     campaignCreate(me, { name, text, audience, to, scheduleAt, confirmed } = {}) {
-      requireBusiness(me);
+      const biz = !!store.getBusiness(me);
+      if (store.isMinor(me)) throw fail(403, 'adult_required', 'Bulk messages can only be sent from an account of someone aged 18 or over');
       if (confirmed !== true) throw fail(400, 'confirmation_required', 'Confirm that the people you are sending to agreed to receive messages from your business');
       name = String(name || '').trim();
       text = String(text || '').trim();
       if (!name || name.length > NAME_MAX) throw fail(400, 'invalid_request', `Give the campaign a name (up to ${NAME_MAX} characters)`);
       if (!text || text.length > TEXT_MAX) throw fail(400, 'invalid_request', `The message must be 1 to ${TEXT_MAX} characters`);
-      if (!['customers', 'list'].includes(audience)) throw fail(400, 'invalid_request', 'audience must be "customers" or "list"');
+      if (!['customers', 'contacts', 'list'].includes(audience) || (audience === 'customers' && !biz)) {
+        throw fail(400, 'invalid_request', `audience must be ${biz ? '"customers", "contacts" or "list"' : '"contacts" or "list"'}`);
+      }
 
       const limits = limitsOf(me);
       const day = Date.now() - DAY_MS;
@@ -258,8 +270,11 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
         seen.add(key);
         recipients.push({ ...rec, s: 'queued' });
       };
+      const chats = biz ? null : new Set(contactsOf(me)); // a personal account reaches only people it already chats with
       if (audience === 'customers') {
         for (const u of customersOf(me)) add({ u, k: 'username' });
+      } else if (audience === 'contacts') {
+        for (const u of contactsOf(me)) add({ u, k: 'username' });
       } else {
         if (!Array.isArray(to) || !to.length) throw fail(400, 'invalid_request', 'Add the people to send to (usernames or mobile numbers)');
         if (to.length > 5000) throw fail(400, 'too_many_recipients', 'That list is far too long');
@@ -268,10 +283,10 @@ function createCampaigns({ store, sendMessage, notify, ApiError }) {
           if (!s) continue;
           const { u, k } = resolve(s);
           if (u === me) continue;
-          add({ u, k, n: s.slice(0, 40) });
+          add({ u: chats && !chats.has(u) ? null : u, k, n: s.slice(0, 40) });
         }
       }
-      if (!recipients.length) throw fail(400, 'no_recipients', audience === 'customers' ? 'Nobody has written to your business yet, so there is no one to send to.' : 'There is nobody to send to');
+      if (!recipients.length) throw fail(400, 'no_recipients', audience === 'customers' ? 'Nobody has written to your business yet, so there is no one to send to.' : audience === 'contacts' ? 'You have no chats yet, so there is no one to send to.' : 'There is nobody to send to');
       if (recipients.length > limits.recipients) {
         throw limits.premium || limits.recipients >= limits.premiumRecipients
           ? fail(400, 'too_many_recipients', `A campaign can reach at most ${limits.recipients} people. This one has ${recipients.length}.`)

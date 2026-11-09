@@ -82,11 +82,10 @@ test('a campaign goes to each person in their own chat and the report follows se
   assert.deepStrictEqual(list.map((c) => c.name), ['Diwali offer']);
 });
 
-test('only business accounts can send; the sender has to confirm; names, text and audience are checked', async (t) => {
+test('the sender has to confirm; names, text and audience are checked; "customers" is for businesses only', async (t) => {
   const { person, shop } = await setup(t);
   const ann = await person('ann');
-  const r1 = await call(ann.app, 'campaign:create', { name: 'x', text: 'y', audience: 'list', to: ['shop'], ...OK });
-  assert.strictEqual(r1.code, 'business_required');
+  assert.strictEqual((await call(ann.app, 'campaign:create', { name: 'x', text: 'y', audience: 'customers', ...OK })).code, 'invalid_request');
   const bad = (p) => call(shop.app, 'campaign:create', { name: 'n', text: 't', audience: 'list', to: ['ann'], ...OK, ...p });
   assert.strictEqual((await bad({ confirmed: false })).code, 'confirmation_required');
   assert.strictEqual((await bad({ name: '' })).code, 'invalid_request');
@@ -241,11 +240,45 @@ test('REST: the same campaign calls over HTTP, the CSV download, other people ca
   assert.deepStrictEqual([csv.status, csv.type, /attachment; filename="campaign-/.test(csv.disposition)], [200, 'text/csv; charset=utf-8', true]);
   assert.ok(csv.text.includes('"ann","Ann","delivered"'));
   assert.strictEqual((await api(other.token, 'GET', `/campaigns/${id}`)).status, 404, 'not somebody else\'s');
-  assert.strictEqual((await api(other.token, 'POST', '/campaigns', { name: 'n', text: 't', audience: 'list', to: ['ann'], confirmed: true })).status, 403, 'not a business');
   assert.strictEqual((await api(shop.token, 'POST', `/campaigns/${id}/cancel`)).status, 409, 'already finished');
   assert.strictEqual((await api(shop.token, 'DELETE', `/campaigns/${id}`)).status, 204);
 
   // People can stop a business over REST too.
   assert.strictEqual((await api(shop.token, 'PUT', '/me/promotions/rival', { receive: false })).status, 200);
   assert.deepStrictEqual((await api(shop.token, 'GET', '/me/promotions')).body.optedOut, ['rival']);
+});
+
+test('personal accounts can broadcast, but only to people they already chat with, with smaller limits; children cannot', async (t) => {
+  const { store, person, run } = await setup(t);
+  const zoe = await person('zoe');
+  const amy = await person('amy');
+  await person('ben'); // never chatted with zoe
+  const kid = await person('kid');
+  const dm = (await call(zoe.app, 'chat:direct', { username: 'amy' })).conversation;
+  await call(zoe.app, 'message:send', { convId: dm.id, text: 'Hi Amy' });
+
+  const aud = await call(zoe.app, 'campaign:audience', {});
+  assert.deepStrictEqual([aud.business, aud.contacts, aud.limits.recipients, aud.limits.perDay], [false, 1, 20, 2]);
+  const made = await call(zoe.app, 'campaign:create', { name: 'Party', text: 'Party on Saturday!', audience: 'list', to: ['amy', 'ben'], ...OK });
+  assert.ok(made.ok, made.error);
+  run();
+  const rep = (await call(zoe.app, 'campaign:get', { id: made.campaign.id })).campaign;
+  assert.deepStrictEqual([rep.counts.delivered, rep.counts.failed], [1, 1], 'ben is not someone zoe chats with: failed, like any other undeliverable name');
+  assert.strictEqual(store.data.messages['dm:ben:zoe'], undefined);
+  const msgs = (await call(amy.app, 'messages:get', { convId: dm.id })).messages;
+  assert.deepStrictEqual([msgs[1].from, msgs[1].campaign], ['zoe', true]);
+
+  const all = await call(zoe.app, 'campaign:create', { name: 'All', text: 'Hello all', audience: 'contacts', ...OK });
+  assert.strictEqual(all.campaign.counts.total, 1, '"contacts" = the people zoe chats with');
+  assert.strictEqual((await call(zoe.app, 'campaign:create', { name: 'x', text: 'y', audience: 'contacts', ...OK })).code, 'premium_required', 'free personal accounts: 2 a day');
+
+  // Amy can stop broadcasts from zoe like anything else.
+  await call(amy.app, 'promo:set', { business: 'zoe', receive: false });
+  store.activateSubscription('zoe', { plan: 'monthly', expiresAt: Date.now() + 86400000 });
+  const again = await call(zoe.app, 'campaign:create', { name: 'Again', text: 'Hello again', audience: 'contacts', ...OK });
+  run();
+  assert.deepStrictEqual((await call(zoe.app, 'campaign:get', { id: again.campaign.id })).campaign.counts.failedReasons, { opted_out: 1, not_delivered: 0 });
+
+  store.data.users.kid.birthDate = `${new Date().getUTCFullYear() - 12}-01-01`;
+  assert.strictEqual((await call(kid.app, 'campaign:create', { name: 'x', text: 'y', audience: 'list', to: ['amy'], ...OK })).code, 'adult_required');
 });

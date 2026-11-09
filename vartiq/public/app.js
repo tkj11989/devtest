@@ -687,7 +687,7 @@
     translation: ['#menu-translate', '#translate-banner'],
     business: ['#btn-business'],
     catalogue: ['#btn-catalogue-edit', '.catalogue-btn'],
-    bulkMessaging: ['#btn-campaigns'],
+    bulkMessaging: ['#btn-campaigns', '#btn-broadcast'],
     premium: ['#premium-row'],
     verification: ['#verify-row'],
     developerApi: ['#btn-developer'],
@@ -2108,7 +2108,7 @@
       // In a chat that is end-to-end encrypted, mark messages that were not (API apps, automatic replies, older messages).
       if (chatEncrypted && !m.encrypted && !m.deleted && !m.localStatus) meta.appendChild(openLockSvg());
       if (m.auto && !m.deleted) meta.appendChild(el('span', 'auto-label', 'Automated'));
-      if (m.campaign === true && !m.deleted) meta.appendChild(el('span', 'promo-label', 'Promotion'));
+      if (m.campaign === true && !m.deleted) meta.appendChild(el('span', 'promo-label', state.users[m.from]?.business ? 'Promotion' : 'Broadcast'));
       if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Removed on ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
       if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
       if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
@@ -4755,6 +4755,7 @@
     const n = state.me?.business?.productCount || 0;
     $('#btn-catalogue-edit').classList.toggle('hidden', !state.myBusiness);
     $('#btn-campaigns').classList.toggle('hidden', !state.myBusiness);
+    $('#btn-broadcast').classList.toggle('hidden', !!state.myBusiness); // a business opens it from its business profile
     $('#catalogue-edit-sub').textContent = n ? `${n} product${n === 1 ? '' : 's'} with prices` : 'List your products with prices';
   }
 
@@ -5425,6 +5426,7 @@
   // Bulk messaging: campaigns and their delivery reports (see campaigns.js)
   const campaignsUI = window.createCampaignsController({ emit, toast, dialog, openPanel, token: () => state.token });
   $('#btn-campaigns').addEventListener('click', () => campaignsUI.open());
+  $('#btn-broadcast').addEventListener('click', () => campaignsUI.open());
 
   // Status updates (see status.js)
   const statusUpdates = window.createStatusController({

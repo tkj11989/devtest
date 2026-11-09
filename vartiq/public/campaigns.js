@@ -94,24 +94,25 @@ window.createCampaignsController = function createCampaignsController(options) {
   async function create() {
     let aud;
     try { aud = await emit('campaign:audience', {}); } catch (err) { return toast(err.message); }
-    if (!aud.business) return toast('Turn on your business profile first.');
-    const n = aud.customers;
+    if (aud.canSend === false) return toast('Bulk messages can only be sent from an account of someone aged 18 or over.');
+    const biz = aud.business;
+    const n = biz ? aud.customers : aud.contacts;
     dialog({
       title: 'New campaign',
-      text: `Each person gets your message in their own chat with you, and can reply to you alone. Up to ${aud.limits.recipients} people. People under 18, people who blocked you or asked not to hear from you are skipped.`,
+      text: `Each person gets your message in their own chat with you, and can reply to you alone. Up to ${aud.limits.recipients} people${biz ? '' : ' (only people you already chat with)'}. People under 18, people who blocked you or asked not to hear from you are skipped.`,
       submit: 'Send campaign',
       fields: [
         { name: 'name', label: 'Campaign name (only you see it)', type: 'text', maxLength: 80, placeholder: 'e.g. Diwali offer' },
         { name: 'text', label: 'Message', type: 'textarea', maxLength: 1000, rows: 5 },
-        { name: 'audience', label: 'Send to', options: [['customers', `My customers: people who wrote to me (${n})`], ['list', 'A list I type below']], value: n ? 'customers' : 'list' },
+        { name: 'audience', label: 'Send to', options: [[biz ? 'customers' : 'contacts', biz ? `My customers: people who wrote to me (${n})` : `My chats: everyone I already chat with (${n})`], ['list', biz ? 'A list I type below' : 'A list I type below (only people I chat with)']], value: n ? (biz ? 'customers' : 'contacts') : 'list' },
         { name: 'to', label: 'List: usernames or mobile numbers (with country code), one per line', type: 'textarea', required: false, maxLength: 50000, rows: 4, placeholder: 'ann\n+91 98765 43210' },
         { name: 'schedule', label: 'Send at (leave empty to send now)', type: 'datetime-local', required: false, maxLength: 40 },
-        { name: 'confirmed', type: 'checkbox', label: 'I confirm that these people agreed to receive messages from my business.' },
+        { name: 'confirmed', type: 'checkbox', label: biz ? 'I confirm that these people agreed to receive messages from my business.' : 'I confirm that these people are happy to get a message like this from me.' },
       ],
       async onSubmit(v) {
         const to = String(v.to || '').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
         const scheduleAt = v.schedule ? new Date(v.schedule).getTime() : undefined;
-        if (v.audience === 'list' && !to.length) throw new Error('Type at least one username or number, or send to your customers');
+        if (v.audience === 'list' && !to.length) throw new Error('Type at least one username or number, or send to your chats');
         const res = await emit('campaign:create', { name: v.name, text: v.text, audience: v.audience, to, scheduleAt, confirmed: v.confirmed === 'on' });
         state.list.unshift(res.campaign);
         toast(res.campaign.status === 'scheduled' ? 'Campaign scheduled' : 'Campaign started');
