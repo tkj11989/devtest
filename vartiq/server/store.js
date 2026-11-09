@@ -19,7 +19,7 @@ class Store {
     this.premiumForAll = process.env.PREMIUM_FOR_ALL === '1';
     this.forcedOff = String(process.env.DISABLE_FEATURES || '').split(',').map((x) => x.trim()).filter((id) => IDS.includes(id));
     this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
-    this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
+    this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, campaigns: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
     this.mediaDir = mediaDir || (this.file ? path.join(path.dirname(this.file), 'media') : null);
     this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
@@ -47,7 +47,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
+      this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, campaigns: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
       this._convIdx = null;
       this._contactIdx = null;
     } catch (err) {
@@ -236,6 +236,8 @@ class Store {
         apiKeys: own('apiKeys', 'owner').map((k) => ({ id: k.id, name: k.name, preview: k.preview, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt })),
         webhooks: own('webhooks', 'owner').map((w) => ({ id: w.id, url: w.url, events: w.events, active: w.active, createdAt: w.createdAt })),
       },
+      campaigns: own('campaigns', 'owner').map((c) => ({ id: c.id, name: c.name, text: c.text, status: c.status, createdAt: c.createdAt, scheduledAt: c.scheduledAt || null, recipients: c.recipients.map((r) => ({ to: r.u || r.n || null, status: r.s, reason: r.r || null, sentAt: r.m ? r.t : null })) })),
+      promotionsStoppedFrom: [...(u.promoOptOut || [])],
     };
   }
 
@@ -263,6 +265,11 @@ class Store {
     this.dropSessionsOf(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
     for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
+    for (const c of Object.values(this.data.campaigns)) { // nothing more goes out in their name
+      if (c.owner !== username || !['scheduled', 'sending'].includes(c.status)) continue;
+      for (const r of c.recipients) if (r.s === 'queued') r.s = 'cancelled';
+      c.status = 'cancelled'; c.finishedAt = Date.now();
+    }
     this._save();
     return u.deletion;
   }
@@ -292,6 +299,11 @@ class Store {
     this.dropSessionsOf(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
     for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
+    // Their campaigns go; in other people's campaigns they stay only as a number in the totals, with no name or username.
+    for (const [id, c] of Object.entries(this.data.campaigns)) {
+      if (c.owner === username) { delete this.data.campaigns[id]; continue; }
+      for (const r of c.recipients) if (r.u === username) { r.u = null; delete r.n; r.k = 'username'; }
+    }
 
     for (const s of Object.values(this.data.statuses)) {
       if (s.owner === username) this._removeStatus(s);
@@ -1388,6 +1400,7 @@ class Store {
         mediaBytes: Object.values(this.data.media).reduce((n, m) => n + (m.size || 0), 0),
         apiKeys: Object.keys(this.data.apiKeys).length,
         webhooks: Object.keys(this.data.webhooks).length,
+        campaigns: Object.keys(this.data.campaigns).length,
         openReports: this.data.reports.length,
       },
       series: { days, signups, messages, from: startOfToday - (days - 1) * day },
@@ -2848,6 +2861,8 @@ class Store {
       if (Array.isArray(rest.deliveredTo)) rest.deliveredTo = rest.deliveredTo.includes(username) ? [username] : [];
       if (Array.isArray(rest.readBy)) rest.readBy = rest.readBy.includes(username) ? [username] : [];
     }
+    // A campaign message tells its sender which campaign it belongs to; everybody else just learns it is a promotion.
+    if (rest.campaign && username !== msg.from) rest.campaign = true;
     if (rest.poll) rest.poll = Store.pollView(rest.poll, username);
     if (rest.event) rest.event = Store.eventView(rest.event, username);
     return rest;
@@ -2992,7 +3007,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -3036,6 +3051,7 @@ class Store {
     if (masked && !voice && !place && !poll && !event) msg.masked = true;
     if (statusReply) msg.statusReply = statusReply;
     if (auto) msg.auto = auto; // 'greeting' | 'away' (business automatic replies)
+    if (campaign) msg.campaign = String(campaign); // sent by a bulk-messaging campaign (id)
     if (conv.disappearAfter) msg.expiresAt = msg.ts + conv.disappearAfter * 1000;
     if (clientId) msg.clientId = String(clientId).slice(0, 64);
     if (hiddenFor.length) msg.hiddenFor = hiddenFor;

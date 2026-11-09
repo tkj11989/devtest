@@ -12,6 +12,7 @@ const appearance = require('./appearance');
 const guardianRules = require('./guardian');
 const photoRules = require('./photos');
 const BusinessHours = require('../public/business-hours.js');
+const { createCampaigns } = require('./campaigns');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
 class ApiError extends Error {
@@ -1987,6 +1988,10 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     }
   };
 
+  // ---------- bulk messaging (campaigns) ----------
+  const campaigns = createCampaigns({ store, sendMessage, notify, ApiError });
+  Object.assign(actions, campaigns.actions);
+
   // ---------- feature switches and platform status (set by administrators) ----------
 
   const featureLabel = Object.fromEntries(FEATURES.map((f) => [f.id, f.label]));
@@ -2014,6 +2019,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     sendLocation: 'location', updateLocation: 'location',
     sendPoll: 'polls', votePoll: 'polls',
     sendEvent: 'events', rsvpEvent: 'events', updateEvent: 'events',
+    campaignCreate: 'bulkMessaging', campaignRetry: 'bulkMessaging', // reports, cancelling and stopping messages from a business always work
   };
   const assertFeature = (id) => {
     if (!store.featureOn(id)) throw new ApiError(403, 'feature_disabled', `${featureLabel[id] || id} is turned off by the administrator`);
@@ -2102,6 +2108,8 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     releaseGuardians,
     runPlans,
     rotatePhotos,
+    campaigns,
+    runCampaigns: campaigns.tick,
     cutDeadSockets,
     notifyNewLogin,
     refreshPhotos: photosChanged,

@@ -65,6 +65,15 @@ const SOCKET_ACTIONS = {
   'group:create': 'createGroup',
   'messages:get': 'messages',
   'message:send': 'sendText',
+  'campaign:audience': 'campaignAudience',
+  'campaign:create': 'campaignCreate',
+  campaigns: 'campaigns',
+  'campaign:get': 'campaignGet',
+  'campaign:cancel': 'campaignCancel',
+  'campaign:retry': 'campaignRetry',
+  'campaign:delete': 'campaignDelete',
+  'promo:set': 'promoPreference',
+  'promo:list': 'promoOptOuts',
   'voice:send': 'sendVoice',
   'pin:set': 'setLoginPin',
   'sessions:list': 'sessionsList',
@@ -192,6 +201,7 @@ const SOCKET_ACTIONS = {
  *   trustProxy       Express `trust proxy` setting (env TRUST_PROXY) so the real client address is used behind nginx/Cloudflare
  *   push             { vapid, sender, extraHosts } for push notifications (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY, PUSH_SUBJECT; see push.js)
  *   messageSweepMs   how often expired disappearing messages are removed
+ *   campaignSweepMs  how often campaigns that are due are started and the next batch is sent
  *   accountEraseDelayMs  how long after a deletion request the account's data is erased (default 1 hour; never more than 24 hours)
  *   kyc              { gateway, sandbox } for identity verification (see kyc.js; KYC_WEBHOOK_URL, KYC_SANDBOX=1)
  *   otp              { sender, exposeCodes, ttlMs, resendMs, … } for one-time login codes
@@ -209,6 +219,7 @@ function createApp({
   corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
     : (process.env.PUBLIC_URL ? [new URL(process.env.PUBLIC_URL).origin] : '*'),
   messageSweepMs = 5000,
+  campaignSweepMs = 1000,
   subscriptionSweepMs = 60 * 1000,
   deletionSweepMs = 60 * 1000,
   accountEraseDelayMs = Number(process.env.ACCOUNT_ERASE_DELAY_MS) || 60 * 60 * 1000,
@@ -438,6 +449,9 @@ function createApp({
   pruneTimer.unref();
   // Disappearing messages: remove them as soon as their timer runs out.
   const expiryTimer = setInterval(() => { service.pruneExpired(); }, messageSweepMs);
+  // Bulk messaging: start campaigns that are due and send the next batch of the running ones.
+  const campaignTimer = setInterval(() => { try { service.runCampaigns(); } catch (err) { console.warn(`campaigns: ${err.message}`); } }, campaignSweepMs);
+  campaignTimer.unref();
   // Premium that ran out: update badges for everyone.
   const subscriptionTimer = setInterval(() => service.expireSubscriptions(), subscriptionSweepMs);
   // Accounts people asked to delete: their data is erased within 24 hours (by default about an hour after the request).
@@ -453,6 +467,7 @@ function createApp({
   server.on('close', () => {
     clearInterval(pruneTimer);
     clearInterval(expiryTimer);
+    clearInterval(campaignTimer);
     clearInterval(subscriptionTimer);
     clearInterval(deletionTimer);
     clearInterval(guardianTimer);
