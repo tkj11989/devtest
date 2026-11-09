@@ -13,6 +13,7 @@ Reviewed 28 Oct 2026 against the code (what is really stored), the Privacy Notic
 | Login PIN (salted hash), wrong-guess counters | Optional 2nd step | user record | yes (added) | flag only, never the hash | yes |
 | Devices logged in (name, times), device encryption public keys, passkeys (public key) | Security, E2EE | sessions / user record | yes (added) | yes (added) | yes |
 | Messages (E2EE ciphertext for the web app; readable text for API messages), voice notes | Delivery | messages | yes | yes | content erased within 24 h |
+| Bulk messages (campaigns) a business sent: name, text, who, and per person sent / delivered / read / replied / failed; which businesses a person asked to stop | Sending the campaign, delivery report, honouring a stop request | campaigns, user record | yes (business: its campaigns; person: businesses stopped) | yes | owner's campaigns erased; in others' reports a deleted person becomes an unnamed count |
 | Polls and events with votes and answers | Counting, reminders | messages | yes | yes (own view) | votes removed; created ones erased |
 | Statuses and who viewed them | 24-hour updates | statuses | yes (viewers added) | yes (viewers added) | yes |
 | Profile photos | Picture | media | yes | yes (file included) | yes |

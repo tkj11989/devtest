@@ -11,6 +11,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Polls and events** in any chat: a poll (one question, 2 to 6 options, one choice, names visible) and an event (title, date and time, place, details, Going / Maybe / Can't go, a reminder before it starts). Premium adds multiple-choice, anonymous and self-closing polls (up to 12 options), and any reminder time and weekly or monthly repeating events. See "Polls and events" below.
+- **Bulk messaging (campaigns)** for business accounts: send one message to many people (your customers, or a list of usernames and numbers), now or at a set time, and watch a delivery report: **Sent, Delivered, Read, Failed** (and who replied). See "Bulk messaging" below.
 - **Profile photos**: up to **2** for a free account and **5** with Premium; the first is your picture, shown in chat lists, headers, groups and calls (initials when there is none); you choose who sees them (everyone, my contacts, nobody); anyone can report a photo and administrators review reports
 - **Parental control for under-18s**: date of birth at sign-up; 8 to 17 needs a parent or guardian (name, relationship, mobile number or email), who agrees through a private link before the account opens and can then switch calls, location sharing, being found by new people and public channels on or off, or disable or delete the account
 - **Push notifications**: a notification on the device for a new message or an incoming call while the app is closed (Web Push; works in Chrome, Edge, Firefox and Safari, and on iPhone/iPad once VartiQ is added to the Home Screen). People choose what they get; notifications say who and what kind, never the message
@@ -193,7 +194,7 @@ A separate dashboard at **`/admin`** (for example `http://localhost:3000/admin`)
 **The developer API is restricted by default.** Out of the box the *Developer API* switch is **off**: the Developer screen (API keys and webhooks) is hidden in the web app and the mobile apps, creating keys and webhooks is refused (`403 feature_disabled`), API keys stop authenticating (REST and Socket.IO) and webhooks are not delivered. People still use the apps normally. A super admin enables it under **Admin → Features → Developer API** when needed; this also applies to existing installs that never set it.
 
 **Feature switches** (each one is enforced **on the server for every client** and hidden in the apps; nothing is ever deleted):
-New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Call recording · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
+New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Call recording · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Bulk messaging (campaigns) · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
 A switch never traps people: with Chat lock off you can still unlock and remove locks; with Hide chat off you can still unhide; turning translation or timers *off* still works; Premium already bought keeps working; a payment already made can still be confirmed. A disabled feature answers `403 feature_disabled`.
 
 **Maintenance mode** blocks every user call with `503 maintenance` and shows the message in every app (administrators and `/api/v1/config` keep working); apps come back by themselves when it is turned off.
@@ -263,6 +264,7 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 | Badge | none | gold ★ next to the name |
 | Profile photos | up to **2** | up to **5** |
 | Polls | one choice, up to 6 options, names visible | several choices, anonymous, closes by itself, up to 12 options |
+| Campaigns (business accounts) | up to 50 people, 2 a day | up to 1000 people, 20 a day |
 | Events | answers + a reminder 1 hour before | any reminder time, weekly/monthly repeat |
 | Parental controls (under-18 accounts): the parent or guardian changes calls, location sharing, being found by new people, public channels | safe defaults, cannot be changed | changeable at any time |
 
@@ -438,6 +440,19 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Admin switch**: *Profile photos* in Features. Off: photos are hidden everywhere and cannot be added; removing always works.
 - **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
 - **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
+
+## Bulk messaging (campaigns)
+
+**Profile → Business account → Campaigns** (business accounts only). A campaign sends **one message to many people**. Each person gets it as an ordinary message from the business in their **own one-to-one chat** (not a group), marked "Promotion", and replies reach the business alone.
+
+- **Who it goes to:** *My customers* (everyone who has written to the business) or *a list* of usernames and mobile numbers (with country code). Send now, or choose a time up to 30 days ahead. The sender must tick that the people **agreed to receive messages** from the business (`confirmed: true`).
+- **Who it never goes to:** people under 18, people who blocked the business, people who chose **Stop messages like this** (on the message, or in the business profile: *Promotional messages*), deleted accounts. These show as **Failed**; the report says only `opted_out` or `not_delivered`, so it never reveals who blocked the business or which numbers have no account.
+- **The report** (`GET /api/v1/campaigns/{id}`, the Campaigns screen, or a CSV): for each person **Waiting, Sent** (stored and on its way), **Delivered** (reached the device), **Read** (they opened the chat) or **Failed**, plus **Replied**. Delivered and read come from the message itself, so they match the ticks in the chat; a person's state only moves forward, so the report does not change if the message is later deleted or expires. The screen refreshes itself; figures are also pushed as `campaign:update`.
+- **Actions:** cancel (people not yet sent to are skipped), **retry failed** (people who still have not opted out; numbers that had no account are looked up again), delete the record (the messages stay in the chats), download CSV (a value that starts with `=`, `+`, `-` or `@` is quoted so a spreadsheet cannot run it).
+- **Limits** (Admin → Settings → Free account limits): free business accounts **50 people per campaign and 2 campaigns a day**, Premium **1000 and 20**. Over the free limit is `402 premium_required`.
+- **Sending:** a background sender takes 40 people a second and resumes after a restart; each message has a fixed `clientId`, so a retry never sends a second copy. The administrator can switch **Bulk messaging** off (Features: queued campaigns pause; stopping messages from a business always works) and **stop any campaign** in Admin → Campaigns (cancelled, logged in the audit log).
+- **Privacy:** campaign messages are written on the server side, so they are **readable by the server and not end-to-end encrypted**; the Privacy Notice says so. A business's campaign records go with its account when it is deleted, and in other people's reports a deleted person remains only as a number in the totals.
+- **API:** `GET/POST /campaigns`, `GET/DELETE /campaigns/{id}`, `GET /campaigns/{id}/report.csv`, `POST /campaigns/{id}/cancel|retry`, `GET /campaigns/audience`, `PUT /me/promotions/{business}`; Socket.IO `campaign:*` and `promo:*` events.
 
 ## Polls and events
 

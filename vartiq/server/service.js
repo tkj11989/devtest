@@ -238,7 +238,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       plan: premium ? sub.plan : null,
       expiresAt: sub?.expiresAt || null,
       expired: !!sub && !premium,
-      perks: ['Unlimited locked and hidden chats', 'Up to 5 profile photos (free accounts: 2)', 'Call recording', 'Colour themes', 'Custom app icons and avatar shapes'],
+      perks: ['Unlimited locked and hidden chats', 'Up to 5 profile photos (free accounts: 2)', 'Call recording', 'Colour themes', 'Custom app icons and avatar shapes', 'Bulk messages to up to 1000 people at a time (business accounts)'],
       limits: { free: { chatLocks: store.getSettings().limits.freeChatLocks, hiddenChats: store.getSettings().limits.freeHiddenChats }, premium: 'unlimited' },
       usage: { chatLocks: store.lockedChats(me).length, hiddenChats: store.hiddenChats(me).length },
       plans: payments ? payments.listPlans() : [],

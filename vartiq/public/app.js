@@ -687,6 +687,7 @@
     translation: ['#menu-translate', '#translate-banner'],
     business: ['#btn-business'],
     catalogue: ['#btn-catalogue-edit', '.catalogue-btn'],
+    bulkMessaging: ['#btn-campaigns'],
     premium: ['#premium-row'],
     verification: ['#verify-row'],
     developerApi: ['#btn-developer'],
@@ -1361,6 +1362,7 @@
 
     // The administrator can change features, announcements and maintenance at any time.
     socket.on('config:update', applyConfig);
+    socket.on('campaign:update', ({ campaign }) => campaignsUI.onUpdate(campaign)); // a campaign I sent moved on
     socket.on('security:login', (info) => toast(`New login: ${info.name} at ${new Date(info.at).toLocaleTimeString()}. If it was not you, open Profile, Devices and login.`)); // someone logged in to my account
     socket.on('photos:update', (ph) => { state.photos = ph; renderPhotos(); }); // another of my devices changed my photos
     // The parent or guardian agreed, changed what is allowed, or the child turned 18.
@@ -2106,12 +2108,19 @@
       // In a chat that is end-to-end encrypted, mark messages that were not (API apps, automatic replies, older messages).
       if (chatEncrypted && !m.encrypted && !m.deleted && !m.localStatus) meta.appendChild(openLockSvg());
       if (m.auto && !m.deleted) meta.appendChild(el('span', 'auto-label', 'Automated'));
+      if (m.campaign === true && !m.deleted) meta.appendChild(el('span', 'promo-label', 'Promotion'));
       if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Removed on ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
       if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
       if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
       meta.appendChild(document.createTextNode(timeOf(m.ts)));
       if (status) meta.appendChild(icon(status));
       bubble.appendChild(meta);
+      if (m.campaign === true && !m.deleted && m.from !== state.me.username) {
+        const stop = el('button', 'promo-stop', `Stop messages like this from ${displayName(m.from)}`);
+        stop.type = 'button';
+        stop.addEventListener('click', () => stopPromotions(m.from));
+        bubble.appendChild(stop);
+      }
       if (status === 'failed') {
         const retry = el('button', 'retry', 'Not sent. Tap to retry');
         retry.type = 'button';
@@ -3778,6 +3787,17 @@
     return row;
   }
 
+  /** Stop (or start again) a business's promotional messages (campaigns). Chatting with it is not affected. */
+  async function stopPromotions(business) {
+    if (!confirm(`Stop promotional messages from ${displayName(business)}? You can still chat with them, and you can turn these back on from their profile.`)) return;
+    try {
+      await emit('promo:set', { business, receive: false });
+      toast('You will not get promotional messages from them');
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
   function businessCard(b, username) {
     const H = window.BusinessHours;
     const card = el('section', 'info-card biz-card');
@@ -3804,6 +3824,24 @@
     if (b.address) card.appendChild(infoRow('Address', b.address, `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(b.address)}`));
     if (b.email) card.appendChild(infoRow('Email', b.email, `mailto:${b.email}`));
     if (b.website) card.appendChild(infoRow('Website', b.website.replace(/^https?:\/\//, '').replace(/\/$/, ''), b.website));
+    if (username && username !== state.me.username) {
+      const promo = el('button', 'link', 'Promotional messages');
+      promo.type = 'button';
+      let on = true;
+      const label = () => { promo.textContent = on ? 'Promotional messages: on. Tap to stop' : 'Promotional messages: off. Tap to turn on'; };
+      label();
+      emit('promo:list', {}).then((r) => { on = !r.optedOut.includes(username); label(); }).catch(() => {});
+      promo.addEventListener('click', async () => {
+        try {
+          await emit('promo:set', { business: username, receive: !on });
+          on = !on;
+          label();
+        } catch (err) {
+          toast(err.message);
+        }
+      });
+      card.appendChild(promo);
+    }
     if (username && b.productCount) {
       const btn = el('button', 'primary catalogue-btn', `View catalogue (${b.productCount})`);
       btn.type = 'button';
@@ -4716,6 +4754,7 @@
   function updateCatalogueRow() {
     const n = state.me?.business?.productCount || 0;
     $('#btn-catalogue-edit').classList.toggle('hidden', !state.myBusiness);
+    $('#btn-campaigns').classList.toggle('hidden', !state.myBusiness);
     $('#catalogue-edit-sub').textContent = n ? `${n} product${n === 1 ? '' : 's'} with prices` : 'List your products with prices';
   }
 
@@ -5382,6 +5421,10 @@
       }
     },
   });
+
+  // Bulk messaging: campaigns and their delivery reports (see campaigns.js)
+  const campaignsUI = window.createCampaignsController({ emit, toast, dialog, openPanel, token: () => state.token });
+  $('#btn-campaigns').addEventListener('click', () => campaignsUI.open());
 
   // Status updates (see status.js)
   const statusUpdates = window.createStatusController({

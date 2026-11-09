@@ -106,7 +106,24 @@
         !list.length && h('p', { class: 'muted' }, 'No payments yet.')));
   }
 
-  const pages = { overview, users, channels, payments, features, settings, audit, admins };
+  /** Every bulk-messaging campaign, newest first, with a way to stop one (spam, abuse). */
+  async function campaigns() {
+    const { campaigns: list } = await api('GET', '/campaigns');
+    const STATUS = { scheduled: 'Scheduled', sending: 'Sending', completed: 'Completed', cancelled: 'Cancelled', stopped: 'Stopped by admin' };
+    return h('div', {},
+      head('Campaigns', h('button', { class: 'btn small', onclick: route }, 'Refresh')),
+      h('p', { class: 'muted' }, 'Business accounts sending one message to many people. You see the sender, the message and the delivery figures. Stopping a campaign cancels everyone not yet sent to (messages already sent stay). Switch the whole feature off under Features, and change the limits under Settings.'),
+      h('div', { class: 'card tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Started', 'Sender', 'Name and message', 'Status', 'People', 'Sent', 'Delivered', 'Read', 'Failed', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, list.map((c) => h('tr', {},
+          h('td', {}, fmt.date(c.createdAt)), h('td', {}, `@${c.owner}`),
+          h('td', { class: 'wrap' }, h('strong', {}, c.name), h('br'), c.text.length > 140 ? `${c.text.slice(0, 140)}…` : c.text),
+          h('td', {}, h('span', { class: `tag${c.status === 'stopped' ? ' bad' : ''}` }, c.status === 'scheduled' ? `Scheduled ${fmt.date(c.scheduledAt)}` : STATUS[c.status])),
+          h('td', {}, fmt.n(c.counts.total)), h('td', {}, fmt.n(c.counts.cumulative.sent)), h('td', {}, fmt.n(c.counts.cumulative.delivered)), h('td', {}, fmt.n(c.counts.cumulative.read)), h('td', {}, fmt.n(c.counts.failed)),
+          h('td', {}, ['scheduled', 'sending'].includes(c.status) && h('button', { class: 'btn small danger', onclick: async () => { if (confirm(`Stop the campaign "${c.name}" from @${c.owner}?`) && await attempt(() => api('POST', `/campaigns/${c.id}/stop`)) !== null) { toast('Campaign stopped'); route(); } } }, 'Stop')))))),
+        !list.length && h('p', { class: 'muted' }, 'No campaigns yet.')));
+  }
+
+  const pages = { overview, users, channels, campaigns, payments, features, settings, audit, admins };
 
   async function route() {
     const page = state.admin?.limited ? 'admins' : (location.hash.replace('#', '') || 'overview').split('/')[0];
