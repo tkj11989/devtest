@@ -169,6 +169,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location', 'poll', 'event'], description: 'absent for text messages; `poll` / `event` = see `poll` / `event` (readable by the server, not end-to-end encrypted); `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
       expiresAt: { type: 'integer', description: 'disappearing messages: when it will be deleted (ms since epoch)' },
       auto: { type: 'string', enum: ['greeting', 'away'], description: "a business's automatic reply" },
+      campaign: { oneOf: [{ type: 'string' }, { type: 'boolean', const: true }], description: 'sent by a bulk-messaging campaign: the sender sees the campaign id, everybody else `true` (show it as a promotion, with a way to stop them: `PUT /me/promotions/{business}`)' },
       system: obj({ event: { const: 'disappearing' }, seconds: { type: ['integer', 'null'] } }),
       text: { type: 'string' },
       ts: { type: 'integer', description: 'ms since epoch' },
@@ -336,6 +337,40 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       devCode: { type: 'string', description: 'only when the server runs with OTP_DEV_CODES=1 (development)' },
     }, ['requestId', 'channel', 'sentTo', 'expiresIn', 'resendIn']),
     OtpProof: obj({ requestId: { type: 'string' }, code: { type: 'string', pattern: '^\\d{6}$' } }, ['requestId', 'code']),
+    CampaignCounts: obj({
+      total: { type: 'integer' },
+      queued: { type: 'integer', description: 'waiting to be sent (also while scheduled or paused)' },
+      sent: { type: 'integer', description: 'sent, not yet delivered to the person\'s device' },
+      delivered: { type: 'integer', description: 'reached the device, not yet opened' },
+      read: { type: 'integer', description: 'the person opened the chat' },
+      failed: { type: 'integer' },
+      cancelled: { type: 'integer' },
+      cumulative: obj({ sent: { type: 'integer' }, delivered: { type: 'integer' }, read: { type: 'integer' } }),
+      replied: { type: 'integer', description: 'people who wrote back after the message' },
+      failedReasons: obj({ opted_out: { type: 'integer' }, not_delivered: { type: 'integer', description: 'blocked, no such account, deleted, or a child: deliberately not told apart' } }),
+    }),
+    Campaign: obj({
+      id: { type: 'string' },
+      name: { type: 'string' },
+      text: { type: 'string' },
+      status: { type: 'string', enum: ['scheduled', 'sending', 'completed', 'cancelled', 'stopped'] },
+      audience: { type: 'string', enum: ['customers', 'list'] },
+      createdAt: { type: 'integer' },
+      scheduledAt: { type: ['integer', 'null'] },
+      startedAt: { type: ['integer', 'null'] },
+      finishedAt: { type: ['integer', 'null'] },
+      stoppedBy: { type: 'string', description: 'present when an administrator stopped it' },
+      counts: ref('CampaignCounts'),
+    }, ['id', 'name', 'status', 'counts']),
+    CampaignRecipient: obj({
+      to: { type: 'string', description: 'what the business typed (username or mobile number), or the username for customers' },
+      username: { type: 'string', description: 'only where the business already knows who it is (customers, or a username it typed)' },
+      displayName: { type: 'string' },
+      status: { type: 'string', enum: ['queued', 'sent', 'delivered', 'read', 'failed', 'cancelled'] },
+      reason: { type: 'string', enum: ['opted_out', 'not_delivered'] },
+      sentAt: { type: ['integer', 'null'] },
+      replied: { type: 'boolean' },
+    }, ['to', 'status']),
     Contact: obj({ phone: { type: ['string', 'null'], description: 'E.164, e.g. +919876543210' }, email: { type: ['string', 'null'] } }),
   };
 
@@ -356,7 +391,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     E502: errorResponse('The SMS/email gateway could not send the code (`otp_delivery_failed`)'),
   };
 
-  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', guardian: 'Parent or guardian', photo: 'Profile photos', i18n: 'Translation', chan: 'Channels', biz: 'Business', meta: 'Meta' };
+  const T = { auth: 'Auth', me: 'Account', keys: 'API keys', hooks: 'Webhooks', users: 'Users', conv: 'Conversations', msg: 'Messages', status: 'Status', lock: 'Chat lock', hide: 'Hide chat', e2ee: 'Encryption', push: 'Notifications', guardian: 'Parent or guardian', photo: 'Profile photos', i18n: 'Translation', chan: 'Channels', biz: 'Business', camp: 'Campaigns', meta: 'Meta' };
 
   const paths = {
     '/health': { get: op(T.meta, 'Health check', { auth: false, responses: { 200: ok(obj({ ok: { type: 'boolean' } })) } }) },
@@ -856,6 +891,58 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
       }),
     },
+    // ----- bulk messaging (campaigns) -----
+    '/campaigns/audience': {
+      get: op(T.camp, 'What a new campaign can reach', {
+        description: 'How many customers (people who have written to the business) there are, this account\'s limits (free business vs Premium) and how many campaigns it has started in the last 24 hours.',
+        responses: { 200: ok(obj({ business: { type: 'boolean' }, customers: { type: 'integer' }, limits: obj({ premium: { type: 'boolean' }, recipients: { type: 'integer' }, perDay: { type: 'integer' }, premiumRecipients: { type: 'integer' }, premiumPerDay: { type: 'integer' } }), usedToday: { type: 'integer' }, maxNameLength: { type: 'integer' }, maxTextLength: { type: 'integer' } })), ...errors(401, 403) },
+      }),
+    },
+    '/campaigns': {
+      get: op(T.camp, 'My campaigns', {
+        description: 'Newest first, each with its delivery figures.',
+        params: [{ name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } }, { name: 'before', in: 'query', schema: { type: 'integer' }, description: 'createdAt of the last one you have, for the next page' }],
+        responses: { 200: ok(obj({ campaigns: arrayOf(ref('Campaign')), hasMore: { type: 'boolean' } })), ...errors(401) },
+      }),
+      post: op(T.camp, 'Send a message to many people (campaign)', {
+        description: 'Business accounts only. Each person gets an ordinary message from the business in their own one-to-one chat (not a group); replies reach the business alone. `audience` is `customers` (everyone who has written to the business) or `list` (`to`: usernames, with or without @, and mobile numbers with country code). `confirmed: true` states that the people agreed to hear from the business. Leave out `scheduleAt` to send now, or give a time (ms since 1970, within 30 days). People under 18, people who blocked the business and people who stopped its messages are never sent to; they appear as `failed` in the report. **Limits** (administrator settings): free business accounts 50 people and 2 campaigns a day, Premium 1000 and 20 (`402 premium_required`, `429 campaign_limit`, `400 too_many_recipients`). Messages are readable by the server (not end-to-end encrypted). `403 feature_disabled` when bulk messaging is off.',
+        body: jsonBody(obj({ name: { type: 'string', maxLength: 80 }, text: { type: 'string', maxLength: 1000 }, audience: { type: 'string', enum: ['customers', 'list'] }, to: { type: 'array', items: { type: 'string' }, description: 'for `list`' }, scheduleAt: { type: 'integer' }, confirmed: { type: 'boolean' } }, ['name', 'text', 'audience', 'confirmed']), { name: 'Diwali offer', text: 'Flat 20% off this week', audience: 'list', to: ['ann', '+919876543210'], confirmed: true }),
+        responses: { 201: ok(obj({ campaign: ref('Campaign') })), ...errors(400, 401, 402, 403, 429) },
+      }),
+    },
+    '/campaigns/{id}': {
+      get: op(T.camp, 'Campaign report', {
+        description: 'The figures (`counts`: queued, sent, delivered, read, failed, replied) and a page of people with their status. Delivered and read come from the message itself, so they match the ticks in the chat; a person\'s state only moves forward.',
+        params: [idParam('id'), { name: 'status', in: 'query', schema: { type: 'string', enum: ['queued', 'sent', 'delivered', 'read', 'failed', 'cancelled'] } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 } }, { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0 } }],
+        responses: { 200: ok(obj({ campaign: ref('Campaign'), recipients: obj({ total: { type: 'integer' }, items: arrayOf(ref('CampaignRecipient')), hasMore: { type: 'boolean' } }) })), ...errors(400, 401, 404) },
+      }),
+      delete: op(T.camp, 'Delete a campaign record', { description: 'Only a finished or cancelled campaign. The messages already sent stay in the chats.', params: [idParam('id')], responses: { 204: noContent, ...errors(401, 404, 409) } }),
+    },
+    '/campaigns/{id}/report.csv': {
+      get: op(T.camp, 'Campaign report as a spreadsheet (CSV)', {
+        description: 'Recipient, name, status, reason, sent time and whether they replied. Values that start with = + - or @ are quoted as text so a spreadsheet cannot run them as a formula.',
+        params: [idParam('id')],
+        responses: { 200: { description: 'CSV file', content: { 'text/csv': { schema: { type: 'string' } } } }, ...errors(401, 404) },
+      }),
+    },
+    '/campaigns/{id}/cancel': { post: op(T.camp, 'Cancel a campaign', { description: 'People not reached yet are not sent to (status `cancelled`). Messages already sent stay.', params: [idParam('id')], responses: { 200: ok(obj({ campaign: ref('Campaign') })), ...errors(401, 404, 409) } }) },
+    '/campaigns/{id}/retry': {
+      post: op(T.camp, 'Send again to the people it failed for', {
+        description: 'Failed and cancelled people are queued again, except those who still have stopped the business\'s messages, and except a campaign an administrator stopped. Names and numbers that had no account are looked up again.',
+        params: [idParam('id')],
+        responses: { 200: ok(obj({ campaign: ref('Campaign'), requeued: { type: 'integer' } })), ...errors(401, 402, 403, 404, 409) },
+      }),
+    },
+    '/me/promotions': { get: op(T.me, 'Businesses whose campaigns I stopped', { responses: { 200: ok(obj({ optedOut: arrayOf({ type: 'string' }) })), ...errors(401) } }) },
+    '/me/promotions/{business}': {
+      put: op(T.me, 'Stop or start receiving a business\'s campaigns', {
+        description: '`receive: false` stops its promotional messages for good (it is told only that the person opted out). Always works, even when bulk messaging is switched off.',
+        params: [idParam('business', 'username of the business')],
+        body: jsonBody(obj({ receive: { type: 'boolean' } }, ['receive']), { receive: false }),
+        responses: { 200: ok(obj({ business: { type: 'string' }, receive: { type: 'boolean' } })), ...errors(400, 401, 404) },
+      }),
+    },
+
     '/conversations/{id}/polls': {
       post: op(T.msg, 'Ask the chat a question (poll)', {
         description: 'Free: one choice, up to 6 options (admin setting), votes visible by name. **Premium**: `multi` (several choices), `anonymous` (no names), `closesAt` (closes by itself; 1 minute to 30 days ahead, ms since 1970) and up to 12 options (`402 premium_required` otherwise). Polls are readable by the server (not end-to-end encrypted). Everyone in the chat gets a `poll:update` event when votes change.',
@@ -1397,6 +1484,16 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /conversations/{id}/hide': 'unhideChat',
     'put /hidden-contacts/{username}': 'hideContactChat',
     'post /conversations/{id}/location': 'shareLocation',
+    'get /campaigns/audience': 'getCampaignAudience',
+    'get /campaigns': 'listCampaigns',
+    'post /campaigns': 'createCampaign',
+    'get /campaigns/{id}': 'getCampaign',
+    'delete /campaigns/{id}': 'deleteCampaign',
+    'get /campaigns/{id}/report.csv': 'downloadCampaignReport',
+    'post /campaigns/{id}/cancel': 'cancelCampaign',
+    'post /campaigns/{id}/retry': 'retryCampaign',
+    'get /me/promotions': 'listStoppedPromotions',
+    'put /me/promotions/{business}': 'setPromotionPreference',
     'post /conversations/{id}/polls': 'createPoll',
     'put /polls/{id}/vote': 'votePoll',
     'post /polls/{id}/close': 'closePoll',

@@ -268,6 +268,17 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     reports: store.data.reports.filter((r) => r.type !== 'photo').map((r) => ({ ...r, channel: store.data.channels[r.channelId] ? { id: r.channelId, handle: store.data.channels[r.channelId].handle, name: store.data.channels[r.channelId].name, owner: store.data.channels[r.channelId].owner } : null })).sort((a, b) => b.ts - a.ts),
   })));
 
+  // ---------- bulk messaging: every campaign, and a way to stop one (abuse) ----------
+
+  router.get('/campaigns', auth, run(() => ({ campaigns: service.campaigns.adminList() })));
+
+  router.post('/campaigns/:id/stop', auth, run((req) => {
+    const before = store.data.campaigns[req.params.id];
+    const campaign = service.campaigns.adminStop(req.params.id, req.admin);
+    log(req, 'campaign-stop', req.params.id, `${before?.owner}: ${before?.name}`);
+    return { campaign: { ...campaign, owner: before?.owner } };
+  }));
+
   router.post('/reports/dismiss', auth, run((req) => {
     const { channelId, reporter } = req.body || {};
     const before = store.data.reports.length;

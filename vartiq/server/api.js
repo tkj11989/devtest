@@ -402,6 +402,34 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.patch('/push/settings', ...authed, json, run((req) => actions.pushSettings(req.user, req.body || {})));
   router.post('/push/test', ...authed, run((req) => actions.pushTest(req.user)));
 
+  // ---------- bulk messaging (campaigns) ----------
+
+  router.get('/campaigns/audience', ...authed, run((req) => actions.campaignAudience(req.user, {}, req.ctx)));
+  router.get('/campaigns', ...authed, run((req) => actions.campaigns(req.user, { limit: req.query.limit, before: req.query.before }, req.ctx)));
+  router.post('/campaigns', ...authed, json, run((req) => actions.campaignCreate(req.user, {
+    name: req.body?.name,
+    text: req.body?.text,
+    audience: req.body?.audience,
+    to: req.body?.to,
+    scheduleAt: req.body?.scheduleAt,
+    confirmed: req.body?.confirmed,
+  }, req.ctx), 201));
+  router.get('/campaigns/:id', ...authed, run((req) => actions.campaignGet(req.user, { id: p(req, 'id'), status: req.query.status, limit: req.query.limit, offset: req.query.offset }, req.ctx)));
+  router.get('/campaigns/:id/report.csv', ...authed, (req, res, next) => {
+    try {
+      const { filename, csv } = actions.campaignCsv(req.user, { id: p(req, 'id') }, req.ctx);
+      res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store' });
+      res.send(csv);
+    } catch (err) {
+      next(err);
+    }
+  });
+  router.post('/campaigns/:id/cancel', ...authed, run((req) => actions.campaignCancel(req.user, { id: p(req, 'id') }, req.ctx)));
+  router.post('/campaigns/:id/retry', ...authed, run((req) => actions.campaignRetry(req.user, { id: p(req, 'id') }, req.ctx)));
+  router.delete('/campaigns/:id', ...authed, run((req) => { actions.campaignDelete(req.user, { id: p(req, 'id') }, req.ctx); }));
+  router.get('/me/promotions', ...authed, run((req) => actions.promoOptOuts(req.user, {}, req.ctx)));
+  router.put('/me/promotions/:business', ...authed, json, run((req) => actions.promoPreference(req.user, { business: p(req, 'business'), receive: req.body?.receive }, req.ctx)));
+
   // ---------- polls and events ----------
 
   router.post('/conversations/:id/polls', ...authed, json, run((req) => actions.sendPoll(req.user, {

@@ -217,3 +217,35 @@ test('the CSV report defuses spreadsheet formulas; administrators can list and s
   assert.deepStrictEqual([row.u, row.n], [null, undefined]);
   assert.strictEqual((await call(shop.app, 'campaign:get', { id: second.campaign.id })).campaign.counts.total, 1);
 });
+
+test('REST: the same campaign calls over HTTP, the CSV download, other people cannot see a campaign, and the admin routes', async (t) => {
+  const { store, base, person, shop, run } = await setup(t);
+  await person('ann');
+  const other = store.register('rival', 'pass', 'Rival');
+  const api = async (token, method, path, body) => {
+    const res = await fetch(`${base}/api/v1${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* csv */ }
+    return { status: res.status, body: json, text, type: res.headers.get('content-type'), disposition: res.headers.get('content-disposition') };
+  };
+  const made = await api(shop.token, 'POST', '/campaigns', { name: 'Web', text: 'Hello over REST', audience: 'list', to: ['ann'], confirmed: true });
+  assert.strictEqual(made.status, 201, JSON.stringify(made.body));
+  const id = made.body.campaign.id;
+  run();
+  const got = await api(shop.token, 'GET', `/campaigns/${id}?status=delivered`);
+  assert.deepStrictEqual([got.status, got.body.recipients.total, got.body.recipients.items[0].to], [200, 1, 'ann']);
+  assert.strictEqual((await api(shop.token, 'GET', '/campaigns/audience')).body.limits.recipients, 50);
+  assert.strictEqual((await api(shop.token, 'GET', '/campaigns')).body.campaigns[0].counts.delivered, 1);
+  const csv = await api(shop.token, 'GET', `/campaigns/${id}/report.csv`);
+  assert.deepStrictEqual([csv.status, csv.type, /attachment; filename="campaign-/.test(csv.disposition)], [200, 'text/csv; charset=utf-8', true]);
+  assert.ok(csv.text.includes('"ann","Ann","delivered"'));
+  assert.strictEqual((await api(other.token, 'GET', `/campaigns/${id}`)).status, 404, 'not somebody else\'s');
+  assert.strictEqual((await api(other.token, 'POST', '/campaigns', { name: 'n', text: 't', audience: 'list', to: ['ann'], confirmed: true })).status, 403, 'not a business');
+  assert.strictEqual((await api(shop.token, 'POST', `/campaigns/${id}/cancel`)).status, 409, 'already finished');
+  assert.strictEqual((await api(shop.token, 'DELETE', `/campaigns/${id}`)).status, 204);
+
+  // People can stop a business over REST too.
+  assert.strictEqual((await api(shop.token, 'PUT', '/me/promotions/rival', { receive: false })).status, 200);
+  assert.deepStrictEqual((await api(shop.token, 'GET', '/me/promotions')).body.optedOut, ['rival']);
+});
