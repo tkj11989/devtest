@@ -228,6 +228,7 @@
       const { payload } = await state.e2ee.decrypt(m);
       if (m.type !== 'voice') m.text = payload.t ?? '';
       if (m.type === 'location') m.loc = window.Place.clean(payload.loc);
+      if (m.type === 'media' && m.media) Object.assign(m.media, payload.media || {}); // name, type, size of picture, preview: inside the envelope
     } catch (err) {
       console.warn('Could not decrypt a message:', err.message);
       m.undecryptable = true;
@@ -659,6 +660,7 @@
     stopRecording(false);
     state.voiceUrls.forEach((url) => URL.revokeObjectURL(url));
     state.voiceUrls.clear();
+    attachments?.reset();
     state.users = {};
     showAuth();
   }
@@ -689,6 +691,7 @@
     catalogue: ['#btn-catalogue-edit', '.catalogue-btn'],
     bulkMessaging: ['#btn-campaigns', '#btn-broadcast'],
     businessBot: ['#btn-bot'],
+    attachments: ['#btn-attach'],
     premium: ['#premium-row'],
     verification: ['#verify-row'],
     developerApi: ['#btn-developer'],
@@ -1687,6 +1690,7 @@
           // Masked text never shows in the chat list, not even to the sender.
           if (m.masked) preview.appendChild(icon('masked'));
           if (m.type === 'voice') text = `${prefix}🎤 Voice message (${fmtDuration(m.voice.duration)})`;
+          else if (m.type === 'media' && m.media) text = prefix + attachments.preview(m);
           else text = prefix + previewText(m);
         }
         preview.appendChild(document.createTextNode(text));
@@ -2086,6 +2090,9 @@
         const text = el('span', 'text');
         text.append(icon('deleted', 'inline-icon'), 'This message was deleted');
         bubble.appendChild(text);
+      } else if (m.type === 'media' && m.media && !m.undecryptable) {
+        bubble.appendChild(attachments.view(m));
+        if (m.text) bubble.appendChild(el('span', 'text caption', m.text));
       } else if (m.type === 'voice') {
         bubble.appendChild(voicePlayer(m));
       } else if (m.type === 'location') {
@@ -2370,6 +2377,7 @@
       refreshConversation(msg.convId);
     };
     if (!state.socket?.connected) return fail('You are offline');
+    if (msg.type === 'media') return deliverMedia(msg, fail);
     let payload;
     try {
       payload = await buildPayload(msg, voice);
@@ -2397,9 +2405,61 @@
     });
   }
 
+  /** A photo, video or document: upload the bytes (encrypted when the chat is), then send the message that points to them. */
+  async function deliverMedia(msg, fail) {
+    const conv = state.conversations.get(msg.convId);
+    const info = msg.media;
+    let bytes;
+    let envelope;
+    try {
+      bytes = new Uint8Array(await msg.upload.arrayBuffer());
+      if (conv && state.e2ee?.ready && await canSeal(conv.id).catch(() => false)) {
+        const sealed = await state.e2ee.encrypt(conv, { t: msg.text, media: { name: info.name, mime: info.mime, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb } }, bytes);
+        bytes = sealed.media;
+        envelope = sealed.envelope;
+      }
+    } catch (err) {
+      console.error(err);
+      return fail('Could not encrypt this file');
+    }
+    msg.encrypted = !!envelope;
+    let uploadId;
+    try {
+      const res = await fetch(`/api/v1/conversations/${encodeURIComponent(msg.convId)}/uploads?kind=${info.kind}${envelope ? '&e2ee=1' : ''}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${state.token}`, 'X-App-Session': APP_SESSION, 'Content-Type': info.mime },
+        body: bytes,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return fail(data.error?.message || 'Could not upload the file');
+      uploadId = data.uploadId;
+    } catch {
+      return fail('Could not upload the file');
+    }
+    const payload = { convId: msg.convId, clientId: msg.id, uploadId, ...(envelope ? { e2ee: envelope } : { caption: msg.text, name: info.name, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb }) };
+    state.socket.timeout(VOICE_TIMEOUT_MS).emit('message:media', payload, (err, res) => {
+      if (err) return fail('No response from the server');
+      if (!res?.ok) {
+        if (res?.code === 'keys_changed' && !msg.keyRetry) {
+          msg.keyRetry = true;
+          state.e2ee?.invalidate();
+          deliver(msg);
+          return;
+        }
+        return fail(res?.error || 'Could not send');
+      }
+      // The server only has the kind and size of an encrypted file: keep what I know about it, and the picture I already hold.
+      Object.assign(res.message.media, res.message.e2ee ? { name: info.name, mime: info.mime, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb } : {}, { localUrl: info.localUrl });
+      if (res.message.e2ee) Object.assign(res.message, { text: msg.text, encrypted: true });
+      upsertMessage(res.message);
+      refreshConversation(msg.convId);
+    });
+  }
+
   function discard(msg) {
     state.outbox.delete(msg.id);
     if (msg.localUrl) URL.revokeObjectURL(msg.localUrl);
+    if (msg.media?.localUrl) URL.revokeObjectURL(msg.media.localUrl);
     const list = state.messages.get(msg.convId);
     if (list) state.messages.set(msg.convId, list.filter((m) => m !== msg));
     const conv = state.conversations.get(msg.convId);
@@ -2512,6 +2572,68 @@
     $('#emoji-picker').classList.add('hidden');
     sendNew(state.activeId, text, state.maskNext);
     setMaskNext(false);
+  });
+
+  // ---------- photos, videos and documents ----------
+
+  const attachments = window.createAttachments({
+    token: () => state.token,
+    appSession: APP_SESSION,
+    decrypt: (m, bytes) => state.e2ee.decrypt(m, bytes),
+    limits: () => state.config?.limits?.media,
+    toast,
+  });
+  $('#attach-input').accept = attachments.ACCEPT;
+  $('#btn-attach').addEventListener('click', () => $('#attach-input').click());
+  $('#attach-input').addEventListener('change', (e) => { sendFiles([...e.target.files]); e.target.value = ''; });
+
+  /** Check each chosen file, show it with a caption box, and send it to the open chat. */
+  async function sendFiles(files) {
+    const convId = state.activeId;
+    if (!convId || !files.length) return;
+    for (const file of files.slice(0, 10)) {
+      let info;
+      try {
+        info = await attachments.prepare(file);
+      } catch (err) {
+        toast(`${file.name}: ${err.message}`);
+        continue;
+      }
+      const url = URL.createObjectURL(info.blob);
+      const asked = dialog({
+        title: info.kind === 'image' ? 'Send photo' : info.kind === 'video' ? 'Send video' : 'Send document',
+        text: `${info.name} · ${attachments.sizeLabel(info.size)}`,
+        submit: 'Send',
+        fields: [{ name: 'caption', label: 'Caption (optional)', type: 'text', required: false, maxLength: 1000 }],
+        onSubmit: (v) => v,
+      });
+      if (info.kind === 'image' || info.thumb) {
+        const pic = el('img', 'attach-preview');
+        pic.alt = '';
+        pic.src = info.kind === 'image' ? url : info.thumb;
+        $('#modal-fields').prepend(pic);
+      }
+      const v = await asked;
+      if (!v) { URL.revokeObjectURL(url); continue; }
+      const caption = String(v.caption || '').trim();
+      sendNew(convId, caption, false, {
+        type: 'media',
+        upload: info.blob,
+        media: { kind: info.kind, name: info.name, mime: info.mime, size: info.size, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb, localUrl: url },
+      });
+    }
+  }
+
+  // Pasting a picture into the message box, or dropping files on the chat, sends them the same way.
+  $('#message-input').addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) { e.preventDefault(); sendFiles(files); }
+  });
+  const chatArea = $('#chat-view');
+  chatArea.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
+  chatArea.addEventListener('drop', (e) => {
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) { e.preventDefault(); sendFiles(files); }
   });
 
   // ---------- voice messages: recording ----------

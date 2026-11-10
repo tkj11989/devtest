@@ -2224,7 +2224,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       maintenance: s.maintenance.on ? { on: true, message: s.maintenance.message } : { on: false },
       announcement: s.announcement || '',
       minClientVersion: s.minClientVersion || null,
-      limits: { free: { chatLocks: s.limits.freeChatLocks, hiddenChats: s.limits.freeHiddenChats }, minAge: s.limits.minAge, adultAge: guardianRules.ADULT_AGE },
+      limits: { free: { chatLocks: s.limits.freeChatLocks, hiddenChats: s.limits.freeHiddenChats }, minAge: s.limits.minAge, adultAge: guardianRules.ADULT_AGE, media: { imageMB: s.limits.maxImageMB, videoMB: s.limits.maxVideoMB, fileMB: s.limits.maxFileMB } },
     };
   };
   const broadcastConfig = () => io.emit('config:update', config());

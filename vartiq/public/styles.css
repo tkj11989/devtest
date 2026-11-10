@@ -1561,3 +1561,21 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .bot-try-form input { flex: 1; min-width: 0; }
 .bot-try-out { margin-top: 8px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bot-try-out.bubble-preview { background: var(--bubble-in); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; color: var(--text); }
+
+/* ---------- photos, videos and documents ---------- */
+.msg .media-visual { display: block; position: relative; padding: 0; border: 0; background: var(--border); border-radius: 10px; overflow: hidden; width: min(280px, 70vw); max-height: 360px; cursor: pointer; }
+.msg .media-visual img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.msg .media-visual img.blur { filter: blur(8px); transform: scale(1.05); }
+.media-badge { position: absolute; left: 8px; bottom: 8px; background: rgba(0, 0, 0, .6); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+.media-uploading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .35); color: #fff; font-size: 13px; }
+.msg .caption { display: block; margin-top: 4px; }
+.msg .media-file { display: flex; gap: 10px; align-items: center; width: min(280px, 70vw); padding: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; color: var(--text); text-align: left; cursor: pointer; }
+.media-file-icon { flex: none; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; }
+.media-file-info { display: flex; flex-direction: column; min-width: 0; }
+.media-file-info strong { overflow-wrap: anywhere; font-size: 14px; }
+.media-file-info small { color: var(--muted); }
+.media-viewer { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .9); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.media-viewer-body { max-width: 100%; max-height: 100%; color: #fff; display: flex; }
+.media-viewer-body img, .media-viewer-body video { max-width: 100%; max-height: calc(100vh - 32px); object-fit: contain; }
+.media-viewer-close { position: absolute; top: 8px; right: 12px; background: none; border: 0; color: #fff; font-size: 34px; line-height: 1; cursor: pointer; }
+.attach-preview { display: block; max-width: 100%; max-height: 220px; margin: 0 auto 10px; border-radius: 10px; object-fit: contain; }
