@@ -277,6 +277,12 @@
 
       <!-- Contact / group info -->
 
+      <!-- Business assistant (bot) -->
+      <div class="panel overlay hidden" id="panel-bot">
+        <header class="bar green"><button class="icon-btn back" data-close id="bot-back">&larr;</button><h2>Assistant</h2></header>
+        <div class="bot-body" id="bot-body"></div>
+      </div>
+
       <!-- Bulk messaging (campaigns) -->
       <div class="panel overlay hidden" id="panel-campaigns">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Campaigns</h2></header>
@@ -475,6 +481,10 @@
           <button class="link-row hidden" type="button" id="btn-catalogue-edit">
             <svg viewBox="0 0 24 24"><path d="M20 4H4v2h16V4Zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1Zm-9 4H6v-4h6v4Z"/></svg>
             <span><strong>Product catalogue</strong><small id="catalogue-edit-sub">List your products with prices</small></span>
+          </button>
+          <button class="link-row hidden" type="button" id="btn-bot">
+            <svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v1.1A6 6 0 0 1 18 10v1h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h1v-1a6 6 0 0 1 5-5.9V3a1 1 0 0 1 1-1Zm-3 9a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
+            <span><strong>Assistant (bot)</strong><small id="bot-row-sub">Answer common questions automatically</small></span>
           </button>
           <button class="link-row hidden" type="button" id="btn-campaigns">
             <svg viewBox="0 0 24 24"><path d="M3 10v4h3l5 4V6L6 10H3Zm13.5 2A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4ZM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6Z"/></svg>
@@ -989,6 +999,7 @@
   <script src="chatcache.js"></script>
   <script src="channels.js"></script>
   <script src="campaigns.js"></script>
+  <script src="bot.js"></script>
   <script src="business-hours.js"></script>
   <script src="place.js"></script>
   <script src="app.js"></script>

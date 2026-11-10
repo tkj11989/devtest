@@ -13,6 +13,7 @@ const guardianRules = require('./guardian');
 const photoRules = require('./photos');
 const BusinessHours = require('../public/business-hours.js');
 const { createCampaigns } = require('./campaigns');
+const botRules = require('./bot');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
 class ApiError extends Error {
@@ -607,6 +608,36 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
 
   // ---------- business automatic replies ----------
 
+  const BOT_QUIET_AFTER_HUMAN_MS = 60 * 60 * 1000; // a person answered lately: the assistant keeps out of it
+  const BOT_MAX_PER_HOUR = 20; // in one chat
+  const BOT_FALLBACK_GAP_MS = 6 * 60 * 60 * 1000;
+  const BOT_MENU_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+  /** What the business's assistant says to this customer message (see bot.js), or null. */
+  function botFor(conv, msg, business, biz) {
+    const bot = business.bot;
+    if (!bot?.enabled || !store.featureOn('businessBot')) return null;
+    if ((msg.type && msg.type !== 'text') || msg.e2ee || !msg.text) return null; // it only reads plain text a customer typed
+    if (conv.botPausedUntil && conv.botPausedUntil > msg.ts) return null; // handed over to a person
+    if (bot.onlyWhenClosed && BusinessHours.isOpenNow(business, new Date(msg.ts))) return null;
+    const msgs = store.data.messages[conv.id] || [];
+    let lastBot = null; let botRecent = 0; let fallbackOk = true;
+    for (let i = msgs.length - 1, seen = 0; i >= 0 && seen < 80; i--, seen++) {
+      const m = msgs[i];
+      if (m.id === msg.id || m.from !== biz || m.type === 'system') continue;
+      const age = msg.ts - m.ts;
+      if (!m.auto && age < BOT_QUIET_AFTER_HUMAN_MS) return null;
+      if (String(m.auto || '').startsWith('bot')) {
+        lastBot ||= m;
+        if (age < 3600 * 1000) botRecent++;
+        if (m.text === bot.fallback.text && age < BOT_FALLBACK_GAP_MS) fallbackOk = false;
+      }
+    }
+    if (botRecent >= BOT_MAX_PER_HOUR) return null;
+    const afterMenu = lastBot?.auto === 'bot-menu' && msg.ts - lastBot.ts < BOT_MENU_WINDOW_MS;
+    return botRules.answer(bot, msg.text, { afterMenu, fallbackOk });
+  }
+
   const GREETING_GAP_MS = 14 * 24 * 60 * 60 * 1000; // greet again after two quiet weeks
   const AWAY_GAP_MS = 6 * 60 * 60 * 1000; // at most one away message per chat every 6 hours
 
@@ -628,6 +659,11 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     if (business.away?.enabled && !BusinessHours.isOpenNow(business, new Date(msg.ts))
       && !msgs.some((m) => m.auto === 'away' && msg.ts - m.ts < AWAY_GAP_MS)) {
       replies.push(['away', business.away.text]);
+    }
+    const bot = botFor(conv, msg, business, biz);
+    if (bot) {
+      replies.push([bot.auto, bot.text]);
+      if (bot.kind === 'handoff') { conv.botPausedUntil = msg.ts + bot.pauseHours * 3600 * 1000; store._save(); } // quiet in this chat for a while
     }
     for (const [auto, text] of replies) {
       try {
@@ -1095,6 +1131,49 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       }
       const business = store.setBusiness(me, input || {});
       return { business, user: announceProfile(me) };
+    },
+
+    // ----- the business assistant (bot) -----
+
+    /** The assistant's setup, the limits that apply, and whether the switch is on. */
+    botGet(me) {
+      if (!store.getBusiness(me)) throw new ApiError(403, 'business_required', 'Turn on your business profile first');
+      const lim = store.getSettings().limits;
+      const premium = store.isPremium(me);
+      return {
+        bot: store.getBusiness(me).bot || botRules.DEFAULT_BOT(),
+        limits: { rules: premium ? lim.premiumBotRules : lim.freeBotRules, premiumRules: lim.premiumBotRules, premium, menuItems: botRules.MAX_MENU_ITEMS, maxReply: botRules.MAX_REPLY, pauseHours: botRules.PAUSE_HOURS },
+        available: store.featureOn('businessBot'),
+      };
+    },
+
+    /** Save the assistant's setup. Turning it on means customers' messages to this business are no longer end-to-end encrypted. */
+    setBot(me, input) {
+      if (!store.getBusiness(me)) throw new ApiError(403, 'business_required', 'Turn on your business profile first');
+      const lim = store.getSettings().limits;
+      const premium = store.isPremium(me);
+      let bot;
+      try {
+        bot = botRules.normalise(input, { maxRules: premium ? lim.premiumBotRules : lim.freeBotRules });
+      } catch (err) {
+        if (err.premiumLimit && !premium) throw new ApiError(402, 'premium_required', `Free business accounts can have ${lim.freeBotRules} rules. Premium allows ${lim.premiumBotRules}.`);
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      store.setBot(me, bot);
+      return { bot, user: announceProfile(me) };
+    },
+
+    /** "Try it": what the assistant would answer to a message, without sending anything. */
+    botTest(me, { text, afterMenu, config } = {}) {
+      if (!store.getBusiness(me)) throw new ApiError(403, 'business_required', 'Turn on your business profile first');
+      let bot = store.getBusiness(me).bot;
+      if (config) { // the setup as it is on screen, not saved yet
+        const lim = store.getSettings().limits;
+        try { bot = botRules.normalise({ ...config, enabled: true }, { maxRules: Math.max(lim.freeBotRules, lim.premiumBotRules) }); } catch (err) { throw new ApiError(400, 'invalid_request', err.message); }
+      }
+      if (!bot) throw new ApiError(400, 'invalid_request', 'Set the assistant up first');
+      const reply = botRules.answer({ ...bot, enabled: true }, String(text ?? '').slice(0, 500), { afterMenu: !!afterMenu });
+      return { reply: reply ? { kind: reply.kind, text: reply.text } : null };
     },
 
     /** Back to a personal account. */
@@ -2011,6 +2090,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     setAppearance: 'appearance',
     hideChat: 'hideChat',
     setBusiness: 'business',
+    setBot: 'businessBot',
     catalogue: 'catalogue', saveProduct: 'catalogue', deleteProduct: 'catalogue', setProductImage: 'catalogue', removeProductImage: 'catalogue', setCatalogueCurrency: 'catalogue',
     subscriptionCheckout: 'premium',
     kycStart: 'verification',

@@ -688,6 +688,7 @@
     business: ['#btn-business'],
     catalogue: ['#btn-catalogue-edit', '.catalogue-btn'],
     bulkMessaging: ['#btn-campaigns', '#btn-broadcast'],
+    businessBot: ['#btn-bot'],
     premium: ['#premium-row'],
     verification: ['#verify-row'],
     developerApi: ['#btn-developer'],
@@ -1976,18 +1977,35 @@
     $('#menu-translate').classList.toggle('hidden', lockedView);
   }
 
+  /**
+   * A direct chat with a business that answers with an assistant (or my own chat, when I am that business): the assistant has to
+   * read what customers write, so messages are sent as plain text and the chat says so.
+   */
+  function assistantChat(convId) {
+    if (state.config?.features?.businessBot === false) return false;
+    const conv = state.conversations.get(convId);
+    if (!conv || conv.type !== 'direct') return false;
+    const peer = convPeer(conv);
+    return !!((peer && state.users[peer]?.business?.assistant) || state.myBusiness?.bot?.enabled);
+  }
+  /** Can this chat be end-to-end encrypted (and is it allowed to be)? */
+  const canSeal = async (convId) => !assistantChat(convId) && !!(await state.e2ee?.canEncrypt(convId));
+
   /** "Messages in this chat are end-to-end encrypted", or why they are not. */
   async function paintE2eeBanner(conv, lockedView) {
     const banner = $('#e2ee-banner');
     if (lockedView) return banner.classList.add('hidden');
     let ok = false;
     try {
-      ok = !!(await state.e2ee?.canEncrypt(conv.id));
+      ok = await canSeal(conv.id);
     } catch { /* keys unavailable */ }
     if (state.activeId !== conv.id) return;
+    const assistant = assistantChat(conv.id);
     banner.classList.toggle('hidden', false);
     banner.classList.toggle('warn', !ok);
-    $('#e2ee-banner-text').textContent = ok
+    $('#e2ee-banner-text').textContent = assistant
+      ? 'This business answers with an automatic assistant, so messages in this chat are not end-to-end encrypted: the assistant has to read them.'
+      : ok
       ? 'Messages in this chat are end-to-end encrypted. Only people in this chat can read them.'
       : state.e2ee?.ready
         ? "Messages are not end-to-end encrypted yet: someone in this chat hasn't set up encryption."
@@ -2330,7 +2348,7 @@
     const base = voice
       ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime }
       : { convId: msg.convId, masked: !!msg.masked, clientId: msg.id };
-    if (conv && state.e2ee?.ready && await state.e2ee.canEncrypt(conv.id).catch(() => false)) {
+    if (conv && state.e2ee?.ready && await canSeal(conv.id).catch(() => false)) {
       const sealed = await state.e2ee.encrypt(conv, voice ? { kind: 'voice' } : { t: msg.text }, voice ? new Uint8Array(msg.audio) : undefined);
       msg.encrypted = true;
       return voice ? { ...base, e2ee: sealed.envelope, data: sealed.media } : { ...base, e2ee: sealed.envelope };
@@ -2804,7 +2822,7 @@
 
   /** The position as the server should get it: inside an encryption envelope when the chat can be encrypted. */
   async function sealPlace(conv, loc) {
-    if (conv && state.e2ee?.ready && await state.e2ee.canEncrypt(conv.id).catch(() => false)) {
+    if (conv && state.e2ee?.ready && await canSeal(conv.id).catch(() => false)) {
       const sealed = await state.e2ee.encrypt(conv, { t: 'Location', loc });
       return { e2ee: sealed.envelope };
     }
@@ -4755,6 +4773,8 @@
     const n = state.me?.business?.productCount || 0;
     $('#btn-catalogue-edit').classList.toggle('hidden', !state.myBusiness);
     $('#btn-campaigns').classList.toggle('hidden', !state.myBusiness);
+    $('#btn-bot').classList.toggle('hidden', !state.myBusiness);
+    $('#bot-row-sub').textContent = state.myBusiness?.bot?.enabled ? 'On: answering customers automatically' : 'Answer common questions automatically';
     $('#btn-broadcast').classList.toggle('hidden', !!state.myBusiness); // a business opens it from its business profile
     $('#catalogue-edit-sub').textContent = n ? `${n} product${n === 1 ? '' : 's'} with prices` : 'List your products with prices';
   }
@@ -5423,6 +5443,13 @@
     },
   });
 
+  // The business assistant's setup screen (see bot.js)
+  const botUI = window.createBotController({
+    emit, toast, dialog, openPanel,
+    onSaved(bot) { if (state.myBusiness) { state.myBusiness.bot = bot; updateCatalogueRow(); } },
+  });
+  $('#btn-bot').addEventListener('click', () => botUI.open());
+
   // Bulk messaging: campaigns and their delivery reports (see campaigns.js)
   const campaignsUI = window.createCampaignsController({ emit, toast, dialog, openPanel, token: () => state.token });
   $('#btn-campaigns').addEventListener('click', () => campaignsUI.open());
@@ -5435,7 +5462,7 @@
     sealReply: async (owner, text) => {
       try {
         const conv = { id: dmId(owner) };
-        if (!state.e2ee?.ready || !(await state.e2ee.canEncrypt(conv.id))) return null;
+        if (!state.e2ee?.ready || !(await canSeal(conv.id))) return null;
         return (await state.e2ee.encrypt(conv, { t: text })).envelope;
       } catch {
         return null;

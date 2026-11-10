@@ -11,6 +11,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Polls and events** in any chat: a poll (one question, 2 to 6 options, one choice, names visible) and an event (title, date and time, place, details, Going / Maybe / Can't go, a reminder before it starts). Premium adds multiple-choice, anonymous and self-closing polls (up to 12 options), and any reminder time and weekly or monthly repeating events. See "Polls and events" below.
+- **Business assistant (bot)**: a business answers customers automatically from rules it types in (keywords to replies, a numbered menu, hand-over to a person), with a "try it" box. No AI: the business decides every word. See "Business assistant" below.
 - **Bulk messaging (campaigns and broadcasts)**: send one message to many people, now or at a set time, and watch a delivery report: **Sent, Delivered, Read, Failed** (and who replied). Business accounts reach their customers or a list; personal accounts reach only people they already chat with. See "Bulk messaging" below.
 - **Profile photos**: up to **2** for a free account and **5** with Premium; the first is your picture, shown in chat lists, headers, groups and calls (initials when there is none); you choose who sees them (everyone, my contacts, nobody); anyone can report a photo and administrators review reports
 - **Parental control for under-18s**: date of birth at sign-up; 8 to 17 needs a parent or guardian (name, relationship, mobile number or email), who agrees through a private link before the account opens and can then switch calls, location sharing, being found by new people and public channels on or off, or disable or delete the account
@@ -194,7 +195,7 @@ A separate dashboard at **`/admin`** (for example `http://localhost:3000/admin`)
 **The developer API is restricted by default.** Out of the box the *Developer API* switch is **off**: the Developer screen (API keys and webhooks) is hidden in the web app and the mobile apps, creating keys and webhooks is refused (`403 feature_disabled`), API keys stop authenticating (REST and Socket.IO) and webhooks are not delivered. People still use the apps normally. A super admin enables it under **Admin → Features → Developer API** when needed; this also applies to existing installs that never set it.
 
 **Feature switches** (each one is enforced **on the server for every client** and hidden in the apps; nothing is ever deleted):
-New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Call recording · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Product catalogue · Bulk messaging (campaigns) · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
+New sign-ups · Group chats · Voice messages · Disappearing messages · Voice & video calls · Call recording · Status updates · Public channels · Who viewed my profile · Message translation · Chat lock · Hide chat · Business profiles · Business assistant (bot) · Product catalogue · Bulk messaging (campaigns) · Premium subscriptions · Identity verification · Developer API (API keys and webhooks; **off by default**).
 A switch never traps people: with Chat lock off you can still unlock and remove locks; with Hide chat off you can still unhide; turning translation or timers *off* still works; Premium already bought keeps working; a payment already made can still be confirmed. A disabled feature answers `403 feature_disabled`.
 
 **Maintenance mode** blocks every user call with `503 maintenance` and shows the message in every app (administrators and `/api/v1/config` keep working); apps come back by themselves when it is turned off.
@@ -264,6 +265,7 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 | Badge | none | gold ★ next to the name |
 | Profile photos | up to **2** | up to **5** |
 | Polls | one choice, up to 6 options, names visible | several choices, anonymous, closes by itself, up to 12 options |
+| Assistant rules (business accounts) | up to 5 | up to 30 |
 | Campaigns (business accounts) | up to 50 people, 2 a day | up to 1000 people, 20 a day |
 | Broadcasts (personal accounts, only people you chat with) | up to 20 people, 2 a day | up to 200 people, 10 a day |
 | Events | answers + a reminder 1 hour before | any reminder time, weekly/monthly repeat |
@@ -441,6 +443,19 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Admin switch**: *Profile photos* in Features. Off: photos are hidden everywhere and cannot be added; removing always works.
 - **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
 - **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
+
+## Business assistant (bot)
+
+**Profile → Business account → Assistant (bot)** (business accounts). The business sets up what the assistant says; it answers a customer only when their message matches. **No AI and no code**: every word is the business's own, and when nothing matches the assistant stays silent.
+
+- **Rules:** keywords to a reply ("price", "cost", "how much" → the price list). A word matches as a whole word, several words in a row must appear together, capitals and punctuation do not matter, and other scripts work (Hindi, Tamil, ...). The first matching rule answers.
+- **Menu:** customers who write "menu" get a numbered list (the business's own introduction and items, up to 9) and answer with a number.
+- **Hand over to a person:** words like "agent" make the assistant send the business's message and stay quiet in that chat for 1 hour to 3 days. It also stays out for an hour after a person of the business writes in the chat, never answers its own or another business's automatic messages (so two assistants cannot loop), and answers at most 20 times an hour per chat.
+- **Fallback** (off by default): a message when nothing matches, at most once every 6 hours per chat. **Only when we are closed** uses the business hours.
+- **Try it:** type a customer message and see the reply before anything is saved or sent.
+- **Limits** (Admin → Settings): free business accounts **5 rules**, Premium **30** (`402 premium_required`). The administrator can switch the **Business assistant** off (Features): no replies, no changes, and the apps go back to encrypting those chats.
+- **Privacy, honestly:** the assistant has to read what customers write, so **while it is on, chats with that business are not end-to-end encrypted**. The business is warned on the setup screen, customers see a notice at the top of the chat, the profile says `assistant: true`, and the Privacy Notice says so. Replies are marked "Automated". Only plain text a customer typed is read; voice notes, locations, polls and anything the apps encrypted are not.
+- **API:** `GET/PUT /me/business/bot`, `POST /me/business/bot/test`; Socket.IO `bot:get`, `bot:set`, `bot:test`.
 
 ## Bulk messaging (campaigns)
 

@@ -402,6 +402,12 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.patch('/push/settings', ...authed, json, run((req) => actions.pushSettings(req.user, req.body || {})));
   router.post('/push/test', ...authed, run((req) => actions.pushTest(req.user)));
 
+  // ---------- business assistant (bot) ----------
+
+  router.get('/me/business/bot', ...authed, run((req) => actions.botGet(req.user, {}, req.ctx)));
+  router.put('/me/business/bot', ...authed, json, run((req) => actions.setBot(req.user, req.body || {}, req.ctx)));
+  router.post('/me/business/bot/test', ...authed, json, run((req) => actions.botTest(req.user, { text: req.body?.text, afterMenu: req.body?.afterMenu, config: req.body?.config }, req.ctx)));
+
   // ---------- bulk messaging (campaigns) ----------
 
   router.get('/campaigns/audience', ...authed, run((req) => actions.campaignAudience(req.user, {}, req.ctx)));

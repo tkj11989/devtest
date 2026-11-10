@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-11-09';
+const VERSION = '2026-11-10';
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -151,6 +151,7 @@ function privacyNotice() {
       ],
       ul: [
         'Messages sent through the {brand} developer API (for example by a bot or another platform), and automatic business replies, are stored as readable text.',
+        'Chats with a business that answers with an automatic assistant are not end-to-end encrypted: the assistant reads the messages customers send so it can answer them, and its replies are stored as readable text.',
         'Public channel posts, status updates, profile and business details, group names, and the names of people in a chat are visible to our servers (and to the people allowed to see them).',
         'Locations you share in the web app are end-to-end encrypted like messages. A location shared through the developer API is stored as readable coordinates.',
         'Profile photos are not end-to-end encrypted: the people you allow can see them, and our moderators can see a photo that has been reported.',

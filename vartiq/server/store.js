@@ -1908,7 +1908,7 @@ class Store {
     if (!u) return this.data.archivedUsers[username] ? { username, displayName: 'Deleted account', about: '', lastSeen: null, deleted: true } : null;
     if (u.deletion || u.deletedAt) return { username: u.username, displayName: 'Deleted account', about: '', lastSeen: null, deleted: true };
     const out = { username: u.username, displayName: u.displayName, about: u.about, lastSeen: u.lastSeen };
-    if (u.business) out.business = { ...Store._publicBusiness(u.business), productCount: (u.catalogue?.products || []).length };
+    if (u.business) out.business = { ...Store._publicBusiness(u.business, this.featureOn('businessBot')), productCount: (u.catalogue?.products || []).length };
     if (u.verifiedAt) out.verified = true;
     if (this.isPremium(username)) out.premium = true; // the only KYC fact kept: yes, verified
     return out;
@@ -2035,9 +2035,20 @@ class Store {
   // ---------- business profile ----------
 
   /** What everyone sees (greeting/away texts stay private to the owner). */
-  static _publicBusiness(b) {
-    const { greeting, away, ...pub } = b;
+  static _publicBusiness(b, assistantAllowed = true) {
+    const { greeting, away, bot, ...pub } = b;
+    // Everyone is told whether the business answers with an assistant (chats with it are then not end-to-end encrypted); not how.
+    if (bot?.enabled && assistantAllowed) pub.assistant = true;
     return pub;
+  }
+
+  /** Save the business assistant's configuration (already checked by bot.normalise). */
+  setBot(username, bot) {
+    const u = this.data.users[username];
+    if (!u?.business) throw new Error('Turn on your business profile first');
+    u.business.bot = bot;
+    this._save();
+    return bot;
   }
 
   getBusiness(username) {
@@ -2088,6 +2099,7 @@ class Store {
       greeting: auto(input.greeting, 'Greeting'),
       away: auto(input.away, 'Away'),
       since: u.business?.since || Date.now(),
+      ...(u.business?.bot ? { bot: u.business.bot } : {}), // the assistant is set up on its own screen: saving the profile keeps it
     };
     this._save();
     return u.business;

@@ -1543,3 +1543,21 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .promo-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent-text); margin-right: 2px; }
 .promo-stop { display: block; margin: 4px 0 0; padding: 0; background: none; border: 0; font-size: 12px; color: var(--primary-text); text-align: left; }
 .promo-stop:hover { text-decoration: underline; }
+
+/* ---------- business assistant (bot) ---------- */
+.bot-body { padding: 12px 16px 28px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.bot-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.bot-card h3 { margin: 0; font-size: 15px; }
+.bot-card label { display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.bot-card label.checkline { flex-direction: row; align-items: flex-start; gap: 10px; font-size: 14px; }
+.bot-card input[type=text], .bot-card textarea, .bot-card select { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }
+.bot-hint { display: block; font-size: 12px; }
+.bot-warn { margin: 0; padding: 8px 12px; border: 1px solid var(--accent-text); color: var(--accent-text); border-radius: 8px; font-size: 13px; }
+.bot-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bot-item { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+.bot-item-text { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; font-size: 13.5px; }
+.bot-item-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.bot-try-form { display: flex; gap: 8px; }
+.bot-try-form input { flex: 1; min-width: 0; }
+.bot-try-out { margin-top: 8px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bot-try-out.bubble-preview { background: var(--bubble-in); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; color: var(--text); }

@@ -51,6 +51,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       ],
       description: 'A close time at or before the open time means open past midnight.',
     },
+    BotConfig: obj({
+      enabled: { type: 'boolean' },
+      onlyWhenClosed: { type: 'boolean', description: 'answer only outside business hours' },
+      rules: arrayOf(obj({ id: { type: 'string' }, keywords: arrayOf({ type: 'string', maxLength: 40 }), reply: { type: 'string', maxLength: 1000 } }, ['keywords', 'reply'])),
+      menu: obj({ enabled: { type: 'boolean' }, keywords: arrayOf({ type: 'string' }), intro: { type: 'string', maxLength: 200 }, items: arrayOf(obj({ label: { type: 'string', maxLength: 60 }, reply: { type: 'string', maxLength: 1000 } }, ['label', 'reply'])) }),
+      handoff: obj({ enabled: { type: 'boolean' }, keywords: arrayOf({ type: 'string' }), reply: { type: 'string' }, pauseHours: { type: 'integer', enum: [1, 4, 8, 24, 72] } }),
+      fallback: obj({ enabled: { type: 'boolean' }, text: { type: 'string', maxLength: 1000 } }),
+    }),
     BusinessHours: obj(Object.fromEntries(BusinessHours.DAYS.map((d) => [d, ref('DayHours')]))),
     BusinessPublic: obj({
       category: { type: 'string', enum: BusinessHours.CATEGORIES },
@@ -62,6 +70,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       hours: { oneOf: [ref('BusinessHours'), { type: 'null' }] },
       since: { type: 'integer' },
       productCount: { type: 'integer', description: 'products in the catalogue (see `GET /users/{username}/catalogue`)' },
+      assistant: { type: 'boolean', description: 'present (true) when the business answers with an assistant: chats with it are then not end-to-end encrypted, so apps send it plain text and say so' },
     }, ['category', 'timezone']),
     AutoReply: obj({ enabled: { type: 'boolean' }, text: { type: 'string', maxLength: 1000 } }),
     Business: {
@@ -168,7 +177,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       from: { type: 'string', description: 'username of the sender' },
       type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location', 'poll', 'event'], description: 'absent for text messages; `poll` / `event` = see `poll` / `event` (readable by the server, not end-to-end encrypted); `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
       expiresAt: { type: 'integer', description: 'disappearing messages: when it will be deleted (ms since epoch)' },
-      auto: { type: 'string', enum: ['greeting', 'away'], description: "a business's automatic reply" },
+      auto: { type: 'string', enum: ['greeting', 'away', 'bot', 'bot-menu'], description: "a business's automatic reply (`bot`, `bot-menu`: its assistant)" },
       campaign: { oneOf: [{ type: 'string' }, { type: 'boolean', const: true }], description: 'sent by a bulk-messaging campaign: the sender sees the campaign id, everybody else `true` (show it as a promotion, with a way to stop them: `PUT /me/promotions/{business}`)' },
       system: obj({ event: { const: 'disappearing' }, seconds: { type: ['integer', 'null'] } }),
       text: { type: 'string' },
@@ -891,6 +900,24 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
       }),
     },
+    '/me/business/bot': {
+      get: op(T.biz, 'The business assistant (bot): setup and limits', {
+        description: 'Business accounts only. The assistant answers customers automatically from rules the business typed in: keywords to replies, a numbered menu, a hand-over to a person, and an optional fallback. No AI: the business decides every word.',
+        responses: { 200: ok(obj({ bot: ref('BotConfig'), limits: obj({ rules: { type: 'integer' }, premiumRules: { type: 'integer' }, premium: { type: 'boolean' }, menuItems: { type: 'integer' }, maxReply: { type: 'integer' }, pauseHours: arrayOf({ type: 'integer' }) }), available: { type: 'boolean', description: 'false when the administrator switched the assistant off' } })), ...errors(401, 403) },
+      }),
+      put: op(T.biz, 'Save the business assistant\'s setup', {
+        description: 'Replaces the whole setup. A keyword matches when its words appear next to each other in the customer\'s message (capitals and punctuation do not matter). Order of answering: hand-over words, a menu number (right after the menu), menu words, the rules in order, then the fallback (at most once every 6 hours per chat). The assistant answers only plain text a customer typed, never when a person of the business answered in the last hour, and never after a hand-over for the chosen number of hours. **Turning it on makes customers\' messages to this business not end-to-end encrypted** (the apps tell the customer in the chat; `assistant: true` on the business profile). Free: 5 rules, Premium: 30 (`402 premium_required`). `403 feature_disabled` when switched off.',
+        body: jsonBody(ref('BotConfig'), { enabled: true, rules: [{ keywords: ['price', 'cost'], reply: 'Our price list: https://example.com/prices' }], menu: { enabled: true, keywords: ['menu'], intro: 'How can we help?', items: [{ label: 'Opening hours', reply: 'Mon-Sat 9am to 6pm' }] }, handoff: { enabled: true, keywords: ['agent'], reply: 'A person will reply soon.', pauseHours: 8 }, fallback: { enabled: false, text: '' } }),
+        responses: { 200: ok(obj({ bot: ref('BotConfig'), user: ref('User') })), ...errors(400, 401, 402, 403) },
+      }),
+    },
+    '/me/business/bot/test': {
+      post: op(T.biz, 'Try the assistant: what it would answer', {
+        description: 'Sends nothing. `config` is a setup that is not saved yet (otherwise the saved one is used); `afterMenu: true` pretends the menu was just shown, so a number picks an item.',
+        body: jsonBody(obj({ text: { type: 'string' }, afterMenu: { type: 'boolean' }, config: ref('BotConfig') }, ['text']), { text: 'what is the price?' }),
+        responses: { 200: ok(obj({ reply: { oneOf: [obj({ kind: { type: 'string', enum: ['rule', 'menu', 'item', 'handoff', 'fallback'] }, text: { type: 'string' } }), { type: 'null' }] } })), ...errors(400, 401, 403) },
+      }),
+    },
     // ----- bulk messaging (campaigns) -----
     '/campaigns/audience': {
       get: op(T.camp, 'What a new campaign can reach', {
@@ -1484,6 +1511,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /conversations/{id}/hide': 'unhideChat',
     'put /hidden-contacts/{username}': 'hideContactChat',
     'post /conversations/{id}/location': 'shareLocation',
+    'get /me/business/bot': 'getBusinessBot',
+    'put /me/business/bot': 'setBusinessBot',
+    'post /me/business/bot/test': 'testBusinessBot',
     'get /campaigns/audience': 'getCampaignAudience',
     'get /campaigns': 'listCampaigns',
     'post /campaigns': 'createCampaign',
