@@ -66,6 +66,7 @@ const SOCKET_ACTIONS = {
   'chat:direct': 'openDirect',
   'group:create': 'createGroup',
   'messages:get': 'messages',
+  'messages:search': 'searchMessages',
   'message:send': 'sendText',
   'campaign:audience': 'campaignAudience',
   'campaign:create': 'campaignCreate',

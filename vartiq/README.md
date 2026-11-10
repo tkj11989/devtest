@@ -11,6 +11,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Polls and events** in any chat: a poll (one question, 2 to 6 options, one choice, names visible) and an event (title, date and time, place, details, Going / Maybe / Can't go, a reminder before it starts). Premium adds multiple-choice, anonymous and self-closing polls (up to 12 options), and any reminder time and weekly or monthly repeating events. See "Polls and events" below.
+- **Photos, videos and documents** in chats (attach button, paste or drop), **replies**, **reactions**, **forwarding** and **search**: see "Sharing files and everyday message features" below.
 - **Business assistant (bot)**: a business answers customers automatically from rules it types in (keywords to replies, a numbered menu, hand-over to a person), with a "try it" box. No AI: the business decides every word. See "Business assistant" below.
 - **Bulk messaging (campaigns and broadcasts)**: send one message to many people, now or at a set time, and watch a delivery report: **Sent, Delivered, Read, Failed** (and who replied). Business accounts reach their customers or a list; personal accounts reach only people they already chat with. See "Bulk messaging" below.
 - **Profile photos**: up to **2** for a free account and **5** with Premium; the first is your picture, shown in chat lists, headers, groups and calls (initials when there is none); you choose who sees them (everyone, my contacts, nobody); anyone can report a photo and administrators review reports
@@ -265,6 +266,7 @@ API: `POST /users/{username}/view` (call when your app opens a profile), `GET /m
 | Badge | none | gold ★ next to the name |
 | Profile photos | up to **2** | up to **5** |
 | Polls | one choice, up to 6 options, names visible | several choices, anonymous, closes by itself, up to 12 options |
+| Photos, videos, documents | up to 8, 25 and 20 MB | the same |
 | Assistant rules (business accounts) | up to 5 | up to 30 |
 | Campaigns (business accounts) | up to 50 people, 2 a day | up to 1000 people, 20 a day |
 | Broadcasts (personal accounts, only people you chat with) | up to 20 people, 2 a day | up to 200 people, 10 a day |
@@ -443,6 +445,21 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Admin switch**: *Profile photos* in Features. Off: photos are hidden everywhere and cannot be added; removing always works.
 - **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
 - **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
+
+## Sharing files and everyday message features
+
+**Photos, videos and documents.** The paperclip in the chat (or paste a picture, or drop files on the chat) sends up to 10 files at once, each with an optional caption.
+- **Photos** are resized on the device (largest side 1600 px, saved as JPEG; GIFs and small pictures are sent as they are) and get a small preview that shows while the real picture loads. **Videos** are sent as they are (mp4, webm, mov, 3gp) with a preview taken from the first frame and play in a full-screen viewer. **Documents** (PDF, Word, Excel, PowerPoint, OpenDocument, text, CSV, JSON, RTF, ZIP) show as a card and are saved to the device under their own name when tapped.
+- **Limits** (Admin → Settings): photo **8 MB**, video **25 MB**, document **20 MB**. Programs and web pages (exe, js, html, svg, apk and the like) are refused; a plain file is checked by its first bytes, so a program cannot pass as a picture; at most 10 uploads can wait to be sent, and unsent uploads are thrown away after an hour.
+- **Sending is two steps** (also in the API): `POST /conversations/{id}/uploads?kind=image|video|file` with the file as the body, then `POST /conversations/{id}/media` with the returned `uploadId` (and `name`, `w`, `h`, `duration`, `thumb`, `caption`).
+- **Encryption:** in an encrypted chat the file is encrypted on the device before upload, with its name, type, size of picture, preview and caption inside the encrypted message; the server keeps only that a file of some kind and size was sent. Downloads are always served as a harmless download (`nosniff`, a locked-down policy, saved rather than opened for anything that is not a picture or a video). Deleting the message, its expiry (disappearing messages) or erasing the account deletes the file. Administrators can switch **Photos, videos and documents** off (Features).
+
+**Replies, reactions, forwarding.** The **⋯** next to a message (or a right-click or long press) opens a menu:
+- **Reply** quotes the message above yours; tapping the quote jumps to it. In an encrypted chat the quoted text is inside the encrypted message and the server knows only which message was answered.
+- **Reactions** (👍 ❤️ 😂 😮 😢 🙏): one each, change or take back; chips show under the message with a count, and everybody in the chat sees them live. Reactions are readable by the server. API: `PUT /messages/{id}/reaction`.
+- **Forward** sends a copy to up to 5 other chats, marked "Forwarded" (text, photos, videos, documents and voice notes; the app re-encrypts for each chat). **Copy text** is there too.
+
+**Search.** The box above the chat list also searches messages. The server finds messages **it can read** (plain chats, captions, document names, poll questions; API `GET /search/messages`); **encrypted chats are searched on the device** (the chats opened and the copies saved on the device, decrypted as they are searched). Tapping a result opens the chat at that message, loading older messages as needed. Hidden and locked chats are not searched.
 
 ## Business assistant (bot)
 

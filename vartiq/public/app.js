@@ -1712,7 +1712,125 @@
   $('#chat-filter').addEventListener('input', (e) => {
     state.filter = e.target.value;
     renderChatList();
+    scheduleMessageSearch(e.target.value);
   });
+
+  // ---------- searching messages ----------
+  //
+  // The server finds messages it can read. Messages in end-to-end encrypted chats can only be read here, so those are searched on
+  // this device: the chats opened in this session, and the copies saved on the device (decrypted one by one as they are searched).
+
+  const searchWords = (q) => String(q).normalize('NFC').toLocaleLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+  const searchText = (m) => [m.text, m.media?.name, m.poll?.question, m.event?.title].filter(Boolean).join(' · ');
+  let searchTimer = null;
+  let searchRun = 0;
+
+  function scheduleMessageSearch(q) {
+    clearTimeout(searchTimer);
+    const words = searchWords(q);
+    if (words.join('').length < 2) {
+      searchRun++;
+      $('#search-results').classList.add('hidden');
+      return;
+    }
+    searchTimer = setTimeout(() => runMessageSearch(q), 300);
+  }
+
+  function snippetOf(text, words) {
+    const hay = text.toLocaleLowerCase();
+    const at = Math.max(0, hay.indexOf(words[0]) - 40);
+    return `${at ? '…' : ''}${text.slice(at, at + 120)}${text.length > at + 120 ? '…' : ''}`;
+  }
+
+  async function runMessageSearch(q) {
+    const run = ++searchRun;
+    const words = searchWords(q).map((w) => w.toLocaleLowerCase());
+    const box = $('#search-results');
+    box.classList.remove('hidden');
+    const results = new Map(); // message id -> result
+    let status = 'Searching…';
+    const paint = () => { if (run === searchRun) paintSearchResults(box, [...results.values()].sort((a, b) => b.ts - a.ts).slice(0, 50), words, status); };
+    paint();
+    try {
+      const res = await emit('messages:search', { q, limit: 30 });
+      for (const r of res.results) results.set(r.id, r);
+    } catch (err) {
+      status = err.message;
+    }
+    if (run !== searchRun) return;
+    status = 'Searching encrypted chats on this device…';
+    paint();
+    // Encrypted chats: what is in memory first, then the copies saved on the device (older messages).
+    let decrypts = 0;
+    for (const conv of state.conversations.values()) {
+      if (run !== searchRun) return;
+      if (conv.hidden || (conv.locked && !conv.unlocked)) continue;
+      const inMemory = state.messages.get(conv.id) || [];
+      const saved = cacheable(conv) ? await state.cache.load(conv.id, 1000) : [];
+      const seen = new Set();
+      for (const m of [...inMemory, ...saved]) {
+        if (seen.has(m.id)) continue;
+        seen.add(m.id);
+        if (!m.e2ee || m.deleted || m.masked || m.localStatus) continue;
+        if (!m.text && decrypts < 3000) { decrypts++; await readMessage(m); if (run !== searchRun) return; }
+        const text = searchText(m);
+        if (!text) continue;
+        const hay = text.toLocaleLowerCase();
+        if (words.every((w) => hay.includes(w))) results.set(m.id, { convId: conv.id, id: m.id, ts: m.ts, from: m.from, snippet: snippetOf(text, words) });
+      }
+      paint();
+    }
+    status = results.size ? '' : 'No messages found.';
+    paint();
+  }
+
+  function paintSearchResults(box, results, words, status) {
+    box.textContent = '';
+    box.appendChild(el('h4', 'search-title', 'Messages'));
+    const ul = el('ul', 'list search-list');
+    for (const r of results) {
+      const conv = state.conversations.get(r.convId);
+      if (!conv) continue;
+      const li = el('li', 'search-hit');
+      li.tabIndex = 0;
+      const top = el('div', 'row');
+      top.append(el('span', 'name', convTitle(conv)), el('span', 'time', listTime(r.ts)));
+      const text = el('div', 'search-snippet');
+      text.appendChild(el('strong', '', r.from === state.me.username ? 'You: ' : conv.type === 'group' ? `${displayName(r.from)}: ` : ''));
+      // The matching words stand out.
+      const lower = r.snippet.toLocaleLowerCase();
+      let i = 0;
+      while (i < r.snippet.length) {
+        const hits = words.map((w) => [lower.indexOf(w, i), w]).filter(([at]) => at >= 0).sort((a, b) => a[0] - b[0]);
+        if (!hits.length) { text.append(r.snippet.slice(i)); break; }
+        const [at, w] = hits[0];
+        text.append(r.snippet.slice(i, at), el('mark', '', r.snippet.slice(at, at + w.length)));
+        i = at + w.length;
+      }
+      li.append(top, text);
+      const go = () => jumpToMessage(r.convId, r.id);
+      li.addEventListener('click', go);
+      li.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+    if (status) box.appendChild(el('p', 'muted small-note pad', status));
+  }
+
+  /** Open a chat and scroll to one message, loading older messages until it is found. */
+  async function jumpToMessage(convId, id) {
+    await openChat(convId);
+    let had = -1;
+    for (let i = 0; i < 40; i++) {
+      if (state.activeId !== convId) return;
+      if (document.querySelector(`#messages .msg[data-id="${CSS.escape(id)}"]`)) return flashMessage(id);
+      const count = (state.messages.get(convId) || []).length;
+      if (count === had) break; // loading older messages added nothing: that is all there is
+      had = count;
+      await loadEarlier();
+    }
+    toast('That message could not be found any more');
+  }
 
   // ---------- chat view ----------
 

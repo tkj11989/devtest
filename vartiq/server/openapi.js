@@ -899,6 +899,17 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423, 429) },
       }),
     },
+    '/search/messages': {
+      get: op(T.msg, 'Search messages', {
+        description: 'Finds messages **the server can read**: every word of `q` must appear (capitals do not matter). It cannot search end-to-end encrypted messages (the web app searches those on the device), masked or deleted ones, or chats that are hidden, locked or hidden by a number change. Newest first. Reads at most 30,000 recent messages per search (`partial: true` when it stopped early). Captions, document names, poll questions and event titles are searched too.',
+        params: [
+          { name: 'q', in: 'query', required: true, schema: { type: 'string' }, description: 'at least 2 letters, up to 8 words' },
+          { name: 'conversation', in: 'query', schema: { type: 'string' }, description: 'search one chat only' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 50 } },
+        ],
+        responses: { 200: ok(obj({ results: arrayOf(obj({ convId: { type: 'string' }, id: { type: 'string' }, ts: { type: 'integer' }, from: { type: 'string' }, snippet: { type: 'string' }, kind: { type: 'string', enum: ['image', 'video', 'file'] } }, ['convId', 'id', 'ts', 'from', 'snippet'])), words: arrayOf({ type: 'string' }), partial: { type: 'boolean' } })), ...errors(400, 401, 403, 404) },
+      }),
+    },
     '/conversations/{id}/uploads': {
       post: op(T.msg, 'Send a photo, video or document, step 1: upload the file', {
         description: 'Body: the file itself (or its end-to-end encrypted ciphertext with `e2ee=1`), with its Content-Type. `kind` is `image` (jpeg, png, webp, gif), `video` (mp4, webm, mov, 3gp) or `file` (pdf, txt, csv, json, rtf, zip, Word, Excel, PowerPoint and OpenDocument). Limits are an administrator setting (default photo 8 MB, video 25 MB, document 20 MB): `413 too_large`. A plain file is checked by its first bytes (`415`). Returns an `uploadId` that waits one hour for step 2 (`POST /conversations/{id}/media`); at most 10 files can wait (`429 too_many_uploads`). `403 feature_disabled` when switched off.',
@@ -1562,6 +1573,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /campaigns/{id}/retry': 'retryCampaign',
     'get /me/promotions': 'listStoppedPromotions',
     'put /me/promotions/{business}': 'setPromotionPreference',
+    'get /search/messages': 'searchMessages',
     'post /conversations/{id}/uploads': 'uploadMedia',
     'post /conversations/{id}/media': 'sendMedia',
     'post /conversations/{id}/polls': 'createPoll',

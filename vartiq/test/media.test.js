@@ -105,8 +105,7 @@ test('checks: wrong type, wrong bytes, empty, too large, web pages and pictures 
   store.updateSettings({ limits: { maxImageMB: 1 } });
   assert.strictEqual((await upload(ann.token, 'image', Buffer.concat([PNG, Buffer.alloc(1024 * 1024)]), 'image/png')).status, 413);
 
-  store.data.media = Object.fromEntries(Object.entries(store.data.media).filter(([, m]) => !m.pending));
-  store._pending = null;
+  for (const id of Object.keys(store.data.media)) if (store.data.media[id].pending) store.deleteMedia(id); // start from none waiting
   for (let i = 0; i < 10; i++) assert.strictEqual((await upload(ann.token, 'image', PNG, 'image/png')).status, 201);
   const over = await upload(ann.token, 'image', PNG, 'image/png');
   assert.deepStrictEqual([over.status, over.body.error.code], [429, 'too_many_uploads']);

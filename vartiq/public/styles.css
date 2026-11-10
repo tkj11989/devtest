@@ -1602,3 +1602,12 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .msg-react:hover, .msg-react.on { background: var(--primary-soft); }
 .msg-menu-item { border: 0; background: none; color: var(--text); text-align: left; padding: 8px 10px; border-radius: 8px; font-size: 14px; cursor: pointer; }
 .msg-menu-item:hover { background: var(--active); }
+
+/* ---------- message search ---------- */
+.search-results { overflow-y: auto; border-top: 1px solid var(--border); }
+.search-title { margin: 0; padding: 10px 16px 4px; font-size: 13px; color: var(--primary-text); text-transform: uppercase; letter-spacing: .04em; }
+.search-hit { padding: 8px 16px; cursor: pointer; border-bottom: 1px solid var(--border); list-style: none; }
+.search-hit:hover, .search-hit:focus-visible { background: var(--active); outline: none; }
+.search-snippet { font-size: 13.5px; color: var(--muted); overflow-wrap: anywhere; }
+.search-snippet strong { color: var(--text); font-weight: 600; }
+.search-snippet mark { background: var(--accent-soft); color: var(--accent-text); padding: 0 1px; border-radius: 2px; }

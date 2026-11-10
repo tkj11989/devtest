@@ -18,8 +18,8 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 | Several devices | Partial (link a browser by code) | Yes (history syncs) | Yes (cloud) | Yes | Yes |
 | Chat backup and restore | **No** | Yes | Cloud | Partial | Partial |
 | Find people from the phone's contacts | **No** (search by username or full number) | Yes | Yes | Yes | Yes |
-| Reply to a message, reactions, forward, edit, pin | **None of these** | Yes | Yes | Yes | Yes |
-| Search inside chats | **No** | Yes | Yes | Yes | Yes |
+| Reply to a message, reactions, forward, edit, pin | Reply, reactions and forward added; **no edit or pin yet** | Yes | Yes | Yes | Yes |
+| Search inside chats | **Yes** (server-readable messages, plus encrypted chats on the device) | Yes | Yes | Yes | Yes |
 | Stickers, GIFs, link previews | **No** | Yes | Yes | Partial | Yes |
 | Disappearing messages | Yes | Yes | Yes | Yes | Partial |
 | Status / stories | Yes | Yes | Yes (stories) | Yes | Yes |
@@ -43,10 +43,10 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 ## 2. The gaps, most serious first
 
 ### A. People will not switch without these
-1. **Photos, videos and documents cannot be sent in a chat.** The chat sends text, voice notes, location, polls and events. Pictures exist only as profile photos, status photos and product pictures. For most people this alone rules out daily use. Work needed: upload and storage for large files (object storage, not the database), thumbnails, compression, end-to-end encryption of files, size limits, a virus and abuse check, and a gallery. *Large piece of work.*
+1. **~~Photos, videos and documents cannot be sent in a chat.~~ Done on 10 Nov 2026** (kept here for the record). Still to do: sending from a camera, a gallery and image editing, and a media store with a content delivery network for scale. Original note: **Photos, videos and documents cannot be sent in a chat.** The chat sends text, voice notes, location, polls and events. Pictures exist only as profile photos, status photos and product pictures. For most people this alone rules out daily use. Work needed: upload and storage for large files (object storage, not the database), thumbnails, compression, end-to-end encryption of files, size limits, a virus and abuse check, and a gallery. *Large piece of work.*
 2. **No Android or iPhone app.** The installable web app cannot ring for a call when the app is closed, is limited on iPhone, and is not in the Play Store or App Store (which is where business customers look). Wrapping the web app with Capacitor is the quickest route. *Medium.*
 3. **No finding people from the phone's contacts.** Without it a new user sees an empty app. Needs the contacts permission and a privacy-safe way to match numbers (hashed matching), plus the Digital Personal Data Protection rules for this. *Medium.*
-4. **The everyday message features are missing:** reply to a message (quote), reactions, forward, edit and delete for everyone with a time limit, pin, mentions in groups, search, link previews, stickers and GIFs. Each is small, together they decide how the app feels. *Medium in total.*
+4. **Everyday message features still missing:** edit with a time limit, pin, mentions in groups, link previews, stickers and GIFs (reply, reactions, forward and search were added on 10 Nov 2026). Each is small, together they decide how the app feels. *Medium in total.*
 5. **No backup, and a new phone starts with no history.** Chats are encrypted per device, so changing phones loses the history. Needs an encrypted backup (a key the user keeps) and history sync to linked devices. *Large.*
 6. **App screens are in English only.** Only the legal text and per-contact translation are multilingual. Most of the target market expects Hindi and other Indian languages in the menus. *Medium: collect all screen text into one file, then translate.*
 

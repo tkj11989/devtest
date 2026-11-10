@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-11-10';
+const VERSION = '2026-11-11';
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -119,6 +119,7 @@ function privacyNotice() {
           ['Email address (business accounts)', 'To verify a business account and contact it about its account', 'At business sign-up'],
           ['Business details you add: category, opening hours, address, website, greeting and away messages, product catalogue with prices', 'To show your business profile to people who view it (these are visible to them)', 'When you set up a business profile'],
           ['Bulk messages (campaigns) sent from an account: the campaign name and message, who it was sent to, and for each person whether it was sent, delivered, read, replied to or failed. For people who receive them: which senders they asked to stop', 'To send an account\'s bulk messages and show its owner a delivery report, and to stop them when a person asks. Campaign messages are readable by our servers (not end-to-end encrypted) and are never sent to people under 18', 'When an account sends a campaign, or you stop one'],
+          ['Photos, videos and documents you send (the file, its type, size and name, and a small preview picture), replies (which message you answered), reactions (the emoji you chose) and the mark "Forwarded"', 'To deliver your files and show replies, reactions and forwards in the chat. In an encrypted chat the file, its name, type and preview, and the quoted text of a reply are encrypted, so we keep only that a file of some kind and size was sent; reactions are readable by us. Searching encrypted chats happens on your device', 'When you send a file, reply, react or forward; files are removed when the message is deleted or expires'],
           ['Messages: the text, the sender, the chat, the time, delivery and read status. Voice notes (audio)', 'To deliver your messages and show your chats on all your devices', 'When you send a message'],
           ['Chats you belong to and the members of your groups', 'To deliver messages to the right people', 'When you start or join a chat'],
           ['Status updates (text or photo)', 'To show them to your contacts for 24 hours, then they are removed', 'When you post one'],

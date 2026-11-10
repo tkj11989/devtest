@@ -1274,6 +1274,39 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { conversation: conversationView(me, conv, ctx) };
     },
 
+    /**
+     * Find messages the server can read: every word of `q` must appear (any capitals). Not end-to-end encrypted messages' text
+     * (the app searches those on the device), masked ones, deleted ones, or chats that are hidden, locked or hidden by a number change.
+     * Newest first. Reads at most 30,000 recent messages per search.
+     */
+    searchMessages(me, { q, convId, limit }, ctx) {
+      const words = botRules.tokens(q);
+      if (!words.length || words.join('').length < 2) throw new ApiError(400, 'invalid_request', 'Type at least 2 letters to search');
+      if (words.length > 8) throw new ApiError(400, 'invalid_request', 'Search for up to 8 words');
+      const n = Math.max(1, Math.min(50, Number(limit) || 30));
+      const lowered = words.map((w) => w.toLowerCase());
+      const convs = convId ? [member(me, convId)] : store._convsOf(me);
+      const hits = [];
+      let budget = 30000;
+      for (const c of convs) {
+        if (store.isChatHidden(me, c.id) || !isUnlocked(me, c.id, ctx) || sealedBefore(me, c.id)) continue;
+        const msgs = store.data.messages[c.id] || [];
+        let found = 0;
+        for (let i = msgs.length - 1; i >= 0 && budget-- > 0 && found < n; i--) {
+          const m = msgs[i];
+          if (m.deleted || m.e2ee || m.masked || m.type === 'system' || m.type === 'call' || !Store.visibleTo(m, me)) continue;
+          const text = [m.text, m.media?.name, m.poll?.question, m.event?.title].filter(Boolean).join(' · ');
+          const hay = text.toLocaleLowerCase();
+          if (!lowered.every((w) => hay.includes(w))) continue;
+          const at = Math.max(0, hay.indexOf(lowered[0]) - 40);
+          hits.push({ convId: c.id, id: m.id, ts: m.ts, from: m.from, snippet: `${at ? '…' : ''}${text.slice(at, at + 120)}${text.length > at + 120 ? '…' : ''}`, ...(m.media ? { kind: m.media.kind } : {}) });
+          found++;
+        }
+      }
+      hits.sort((a, b) => b.ts - a.ts);
+      return { results: hits.slice(0, n), words, partial: budget <= 0 };
+    },
+
     /** Newest `limit` messages (before `before`, a timestamp, for older pages). */
     messages(me, { convId, before, limit }, ctx) {
       member(me, convId);
