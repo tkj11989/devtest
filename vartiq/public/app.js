@@ -229,6 +229,7 @@
       if (m.type !== 'voice') m.text = payload.t ?? '';
       if (m.type === 'location') m.loc = window.Place.clean(payload.loc);
       if (m.type === 'media' && m.media) Object.assign(m.media, payload.media || {}); // name, type, size of picture, preview: inside the envelope
+      if (m.replyTo && payload.q !== undefined) m.replyTo.text = payload.q;
     } catch (err) {
       console.warn('Could not decrypt a message:', err.message);
       m.undecryptable = true;
@@ -1459,6 +1460,7 @@
     onOrdered('event:update', ({ message }) => onPlanUpdate(message));
     socket.on('event:reminder', ({ message }) => { toast(`Reminder: ${message.event.title} starts ${new Date(message.event.startsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); onPlanUpdate(message); });
     socket.on('call:incoming', (call) => localNotifyCall(call));
+    onOrdered('message:reaction', (e) => state.onReaction?.(e));
     onOrdered('message:starred', ({ convId, id, starred }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
       if (m) m.starred = starred;
@@ -1812,6 +1814,7 @@
     // Switching chats mid-recording sends the recording to the chat it was made in.
     if (state.recorder && state.recorder.convId !== id) stopRecording(true);
     state.activeId = id;
+    paintReplyBar?.();
     channelsUI?.hide();
     $('#empty-state').classList.add('hidden');
     $('#chat-view').classList.remove('hidden');
@@ -2085,7 +2088,9 @@
         author.style.color = colorFor(m.from);
         bubble.appendChild(author);
       }
+      if (m.forwarded && !m.deleted) bubble.appendChild(el('div', 'forwarded', '↪ Forwarded'));
       if (m.statusReply && !m.deleted) bubble.appendChild(statusQuote(m.statusReply));
+      if (m.replyTo && !m.deleted) bubble.appendChild(replyQuote(m, conv));
       if (m.deleted) {
         const text = el('span', 'text');
         text.append(icon('deleted', 'inline-icon'), 'This message was deleted');
@@ -2152,6 +2157,16 @@
         retry.title = m.error || 'Not sent';
         retry.addEventListener('click', () => deliver(m));
         bubble.appendChild(retry);
+      }
+      if (m.reactions && !m.deleted) bubble.appendChild(reactionRow(m));
+      if (!m.deleted && !m.localStatus && !m.sealed && !m.locked) {
+        const more = el('button', 'msg-more', '⋯');
+        more.type = 'button';
+        more.title = 'Reply, react, forward';
+        more.setAttribute('aria-label', 'Message options');
+        more.addEventListener('click', (e) => { e.stopPropagation(); const r = more.getBoundingClientRect(); openMessageMenu(m, r.left - 150, r.bottom + 4); });
+        bubble.appendChild(more);
+        bubble.addEventListener('contextmenu', (e) => { e.preventDefault(); openMessageMenu(m, e.clientX, e.clientY); });
       }
       if (!m.deleted && !m.localStatus) {
         const star = el('button', `star${m.starred ? ' on' : ''}`);
@@ -2352,11 +2367,16 @@
   /** The payload for the server: encrypted for everyone in the chat when possible, else plain (and marked so). */
   async function buildPayload(msg, voice) {
     const conv = state.conversations.get(msg.convId);
-    const base = voice
-      ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime }
-      : { convId: msg.convId, masked: !!msg.masked, clientId: msg.id };
+    const base = {
+      ...(voice
+        ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime }
+        : { convId: msg.convId, masked: !!msg.masked, clientId: msg.id }),
+      ...(msg.replyTo ? { replyTo: msg.replyTo.id } : {}),
+      ...(msg.forwarded ? { forwarded: true } : {}),
+    };
+    const quote = msg.replyTo?.text ? { q: msg.replyTo.text } : {}; // the quote travels inside the encrypted message
     if (conv && state.e2ee?.ready && await canSeal(conv.id).catch(() => false)) {
-      const sealed = await state.e2ee.encrypt(conv, voice ? { kind: 'voice' } : { t: msg.text }, voice ? new Uint8Array(msg.audio) : undefined);
+      const sealed = await state.e2ee.encrypt(conv, voice ? { kind: 'voice', ...quote } : { t: msg.text, ...quote }, voice ? new Uint8Array(msg.audio) : undefined);
       msg.encrypted = true;
       return voice ? { ...base, e2ee: sealed.envelope, data: sealed.media } : { ...base, e2ee: sealed.envelope };
     }
@@ -2399,6 +2419,7 @@
       } else {
         // The server only has ciphertext: keep the text I typed.
         if (res.message.e2ee) Object.assign(res.message, { text: msg.text, encrypted: true });
+        if (res.message.replyTo && msg.replyTo?.text) res.message.replyTo.text ??= msg.replyTo.text;
         upsertMessage(res.message);
         refreshConversation(msg.convId);
       }
@@ -2414,7 +2435,7 @@
     try {
       bytes = new Uint8Array(await msg.upload.arrayBuffer());
       if (conv && state.e2ee?.ready && await canSeal(conv.id).catch(() => false)) {
-        const sealed = await state.e2ee.encrypt(conv, { t: msg.text, media: { name: info.name, mime: info.mime, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb } }, bytes);
+        const sealed = await state.e2ee.encrypt(conv, { t: msg.text, media: { name: info.name, mime: info.mime, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb }, ...(msg.replyTo?.text ? { q: msg.replyTo.text } : {}) }, bytes);
         bytes = sealed.media;
         envelope = sealed.envelope;
       }
@@ -2436,7 +2457,7 @@
     } catch {
       return fail('Could not upload the file');
     }
-    const payload = { convId: msg.convId, clientId: msg.id, uploadId, ...(envelope ? { e2ee: envelope } : { caption: msg.text, name: info.name, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb }) };
+    const payload = { convId: msg.convId, clientId: msg.id, uploadId, ...(msg.replyTo ? { replyTo: msg.replyTo.id } : {}), ...(msg.forwarded ? { forwarded: true } : {}), ...(envelope ? { e2ee: envelope } : { caption: msg.text, name: info.name, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb }) };
     state.socket.timeout(VOICE_TIMEOUT_MS).emit('message:media', payload, (err, res) => {
       if (err) return fail('No response from the server');
       if (!res?.ok) {
@@ -2451,6 +2472,7 @@
       // The server only has the kind and size of an encrypted file: keep what I know about it, and the picture I already hold.
       Object.assign(res.message.media, res.message.e2ee ? { name: info.name, mime: info.mime, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb } : {}, { localUrl: info.localUrl });
       if (res.message.e2ee) Object.assign(res.message, { text: msg.text, encrypted: true });
+      if (res.message.replyTo && msg.replyTo?.text) res.message.replyTo.text ??= msg.replyTo.text;
       upsertMessage(res.message);
       refreshConversation(msg.convId);
     });
@@ -2570,9 +2592,170 @@
     autosize();
     updateComposerButtons();
     $('#emoji-picker').classList.add('hidden');
-    sendNew(state.activeId, text, state.maskNext);
+    sendNew(state.activeId, text, state.maskNext, takeReply());
     setMaskNext(false);
   });
+
+  // ---------- replies, reactions and forwarding ----------
+
+  const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+  const KIND_LABEL = { voice: '🎤 Voice message', image: '📷 Photo', video: '🎥 Video', file: '📄 Document', location: '📍 Location', poll: '📊 Poll', event: '📅 Event' };
+  state.replyTo = null; // { convId, id, from, kind, text }
+
+  /** What a reply to this message points at (a short quote, never of a masked message). */
+  function quoteOf(m) {
+    const kind = m.voice ? 'voice' : m.media ? m.media.kind : ['location', 'poll', 'event'].includes(m.type) ? m.type : 'text';
+    const text = m.masked ? '' : String((m.type === 'poll' && m.poll?.question) || (m.type === 'event' && m.event?.title) || m.text || '').slice(0, 120);
+    return { convId: m.convId, id: m.id, from: m.from, kind, text };
+  }
+
+  function paintReplyBar() {
+    const r = state.replyTo && state.replyTo.convId === state.activeId ? state.replyTo : null;
+    $('#reply-bar').classList.toggle('hidden', !r);
+    if (!r) return;
+    $('#reply-bar-who').textContent = r.from === state.me.username ? 'You' : displayName(r.from);
+    $('#reply-bar-text').textContent = r.text || KIND_LABEL[r.kind] || 'Message';
+  }
+
+  function setReplyTo(m) {
+    state.replyTo = quoteOf(m);
+    paintReplyBar();
+    $('#message-input').focus();
+  }
+
+  const clearReply = () => { state.replyTo = null; paintReplyBar(); };
+  $('#reply-bar-close').addEventListener('click', clearReply);
+
+  /** The reply to attach to the message being sent in `convId` (once), as extra fields for sendNew. */
+  function takeReply(convId = state.activeId) {
+    const r = state.replyTo;
+    if (!r || r.convId !== convId) return {};
+    state.replyTo = null;
+    paintReplyBar();
+    return { replyTo: { id: r.id, from: r.from, kind: r.kind, text: r.text } };
+  }
+
+  /** The quoted message above a reply: its text if we know it, else what kind of message it was. */
+  function replyQuote(m, conv) {
+    const r = m.replyTo;
+    const original = state.messages.get(conv.id)?.find((x) => x.id === r.id);
+    const text = r.text || (original && !original.deleted ? quoteOf(original).text : '') || KIND_LABEL[r.kind] || 'Message';
+    const q = el('button', 'reply-quote');
+    q.type = 'button';
+    q.append(el('strong', '', r.from === state.me.username ? 'You' : displayName(r.from)), el('span', '', text));
+    q.addEventListener('click', () => {
+      if (document.querySelector(`#messages [data-id="${CSS.escape(r.id)}"]`)) flashMessage(r.id);
+      else toast('That message is further up: scroll up to load older messages.');
+    });
+    return q;
+  }
+
+  async function react(m, emoji) {
+    try {
+      const res = await emit('message:react', { id: m.id, emoji });
+      m.reactions = res.message.reactions;
+      if (m.convId === state.activeId) renderMessages();
+    } catch (err) { toast(err.message); }
+  }
+
+  /** The row of reactions under a message: one chip per emoji with its count; tapping a chip adds or takes back my own. */
+  function reactionRow(m) {
+    const row = el('div', 'reactions');
+    const mine = m.reactions[state.me.username];
+    const by = {};
+    for (const [u, e] of Object.entries(m.reactions)) (by[e] ||= []).push(u);
+    for (const [emoji, users] of Object.entries(by)) {
+      const chip = el('button', `reaction-chip${emoji === mine ? ' mine' : ''}`, users.length > 1 ? `${emoji} ${users.length}` : emoji);
+      chip.type = 'button';
+      chip.title = users.map((u) => (u === state.me.username ? 'You' : displayName(u))).join(', ');
+      chip.addEventListener('click', () => react(m, emoji === mine ? null : emoji));
+      row.appendChild(chip);
+    }
+    return row;
+  }
+
+  const closeMessageMenu = () => document.querySelector('.msg-menu')?.remove();
+  document.addEventListener('click', (e) => { if (!e.target.closest?.('.msg-menu, .msg-more')) closeMessageMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMessageMenu(); });
+
+  /** The menu of a message: reactions, Reply, Forward, Copy. */
+  function openMessageMenu(m, x, y) {
+    closeMessageMenu();
+    const menu = el('div', 'msg-menu');
+    menu.setAttribute('role', 'menu');
+    const mine = m.reactions?.[state.me.username];
+    const bar = el('div', 'msg-react-bar');
+    for (const e of REACTIONS) {
+      const b = el('button', `msg-react${e === mine ? ' on' : ''}`, e);
+      b.type = 'button';
+      b.setAttribute('aria-label', `React ${e}`);
+      b.addEventListener('click', () => { closeMessageMenu(); react(m, e === mine ? null : e); });
+      bar.appendChild(b);
+    }
+    menu.appendChild(bar);
+    const item = (label, fn) => {
+      const b = el('button', 'msg-menu-item', label);
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      b.addEventListener('click', () => { closeMessageMenu(); fn(); });
+      menu.appendChild(b);
+    };
+    item('Reply', () => setReplyTo(m));
+    const forwardable = (m.media || m.voice || (m.text && !m.type && !m.masked)) && !m.sealed && !m.undecryptable;
+    if (forwardable) item('Forward', () => forwardDialog(m));
+    if (m.text && !m.masked) item('Copy text', () => navigator.clipboard?.writeText(m.text).then(() => toast('Copied'), () => toast('Could not copy')));
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - r.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - r.height - 8))}px`;
+  }
+
+  /** Choose up to five chats and send a copy of the message to each, marked "Forwarded". */
+  function forwardDialog(m) {
+    const chats = [...state.conversations.values()]
+      .filter((c) => !c.hidden && !(c.locked && !c.unlocked) && !(c.type === 'direct' && state.blocked.has(convPeer(c))))
+      .sort((a, b) => (b.lastMessage?.ts || b.createdAt || 0) - (a.lastMessage?.ts || a.createdAt || 0))
+      .slice(0, 40);
+    if (!chats.length) return toast('There are no chats to forward to');
+    dialog({
+      title: 'Forward to',
+      text: 'Choose up to 5 chats. The message is sent as a new message marked "Forwarded".',
+      submit: 'Forward',
+      fields: chats.map((c, i) => ({ type: 'checkbox', name: `c${i}`, label: convTitle(c), required: false })),
+      async onSubmit(v) {
+        const picked = chats.filter((c, i) => v[`c${i}`] === 'on');
+        if (!picked.length) throw new Error('Choose at least one chat');
+        if (picked.length > 5) throw new Error('You can forward to at most 5 chats at once');
+        await forwardMessage(m, picked.map((c) => c.id));
+        toast(`Forwarded to ${picked.length} chat${picked.length === 1 ? '' : 's'}`);
+      },
+    });
+  }
+
+  async function forwardMessage(m, convIds) {
+    for (const id of convIds) {
+      if (m.media) {
+        const blob = await attachments.blobOf(m);
+        sendNew(id, m.text || '', false, { type: 'media', forwarded: true, upload: blob, media: { kind: m.media.kind, name: m.media.name, mime: m.media.mime, size: m.media.size, w: m.media.w, h: m.media.h, duration: m.media.duration, thumb: m.media.thumb, localUrl: URL.createObjectURL(blob) } });
+      } else if (m.voice) {
+        const blob = await (await fetch(await voiceUrl(m))).blob();
+        sendNew(id, '', false, { type: 'voice', forwarded: true, voice: { duration: m.voice.duration, mime: m.voice.mime }, audio: await blob.arrayBuffer(), localUrl: URL.createObjectURL(blob) });
+      } else {
+        sendNew(id, m.text, false, { forwarded: true });
+      }
+    }
+  }
+
+  onReactionEvents();
+  function onReactionEvents() {
+    // Registered once the socket exists (see the connect handler below).
+    state.onReaction = ({ convId, id, reactions }) => {
+      const m = state.messages.get(convId)?.find((x) => x.id === id);
+      if (!m) return;
+      if (Object.keys(reactions).length) m.reactions = reactions; else delete m.reactions;
+      if (convId === state.activeId) renderMessages();
+    };
+  }
 
   // ---------- photos, videos and documents ----------
 
@@ -2617,6 +2800,7 @@
       if (!v) { URL.revokeObjectURL(url); continue; }
       const caption = String(v.caption || '').trim();
       sendNew(convId, caption, false, {
+        ...takeReply(convId),
         type: 'media',
         upload: info.blob,
         media: { kind: info.kind, name: info.name, mime: info.mime, size: info.size, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb, localUrl: url },
@@ -2698,6 +2882,7 @@
       if (!send || !rec.chunks.length) return;
       const blob = new Blob(rec.chunks, { type: rec.media.mimeType || 'audio/webm' });
       sendNew(rec.convId, '', false, {
+        ...takeReply(rec.convId),
         type: 'voice',
         voice: { duration, mime: blob.type },
         audio: await blob.arrayBuffer(),

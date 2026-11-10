@@ -303,7 +303,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   }, req.ctx)));
   router.post('/conversations/:id/messages', ...authed, json, run((req) => {
     const { text, masked } = req.body || {};
-    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req), e2ee: req.body?.e2ee }, req.ctx);
+    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req), e2ee: req.body?.e2ee, replyTo: req.body?.replyTo, forwarded: req.body?.forwarded }, req.ctx);
   }, 201));
   router.post('/conversations/:id/voice', ...authed,
     express.raw({ type: () => true, limit: '3mb' }),
@@ -313,6 +313,8 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
       mime: req.get('content-type'),
       duration: req.query.duration,
       clientId: req.query.clientId ?? req.get('idempotency-key'),
+      replyTo: req.query.replyTo,
+      forwarded: req.query.forwarded === '1',
     }, req.ctx), 201));
   // Photos, videos and documents: step 1 uploads the bytes, step 2 sends them as a message.
   router.post('/conversations/:id/uploads', ...authed, (req, res, next) => {
@@ -339,6 +341,8 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     duration: req.body?.duration,
     thumb: req.body?.thumb,
     e2ee: req.body?.e2ee,
+    replyTo: req.body?.replyTo,
+    forwarded: req.body?.forwarded,
     clientId: idempotency(req),
   }, req.ctx), 201));
   router.post('/conversations/:id/read', ...authed, run((req) => actions.markRead(req.user, { convId: p(req, 'id') }, req.ctx)));
@@ -357,6 +361,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     actions.deleteMessage(req.user, { id: p(req, 'id') }, req.ctx);
     return undefined;
   }));
+  router.put('/messages/:id/reaction', ...authed, json, run((req) => actions.react(req.user, { id: p(req, 'id'), emoji: req.body?.emoji ?? null }, req.ctx)));
   router.put('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: true }, req.ctx)));
   router.delete('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: false }, req.ctx)));
   router.get('/starred', ...authed, run((req) => actions.starred(req.user, {}, req.ctx)));

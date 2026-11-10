@@ -607,6 +607,20 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     return view;
   };
 
+  /**
+   * What a reply points at: `{ id, from, kind, text? }`. `text` (a short quote) is included only when both the original and the new
+   * message are readable by the server; in an encrypted chat the app puts the quote inside the encrypted message.
+   */
+  const resolveReply = (convId, replyTo, { plain }) => {
+    if (replyTo === undefined || replyTo === null || replyTo === '') return undefined;
+    const id = String(replyTo);
+    const orig = (store.data.messages[convId] || []).findLast((m) => m.id === id);
+    if (!orig || orig.deleted || orig.type === 'system' || orig.type === 'call') throw new ApiError(400, 'invalid_request', 'The message you are replying to is not in this chat any more');
+    const kind = orig.voice ? 'voice' : orig.media ? orig.media.kind : orig.type || 'text';
+    const quote = plain && !orig.e2ee && !orig.masked && orig.text ? { text: orig.text.slice(0, 120) } : {};
+    return { id, from: orig.from, kind, ...quote };
+  };
+
   // ---------- business automatic replies ----------
 
   const BOT_QUIET_AFTER_HUMAN_MS = 60 * 60 * 1000; // a person answered lately: the assistant keeps out of it
@@ -1279,12 +1293,12 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { ok: true };
     },
 
-    sendText(me, { convId, text, masked, clientId, e2ee }, ctx) {
+    sendText(me, { convId, text, masked, clientId, e2ee, replyTo, forwarded }, ctx) {
       const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
       // With `e2ee` the text is inside the encrypted envelope and the server never sees it.
       const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
-      return { message: sendMessage(me, convId, env ? '' : text, { masked: !!masked, clientId, e2ee: env }) };
+      return { message: sendMessage(me, convId, env ? '' : text, { masked: !!masked, clientId, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded }) };
     },
 
     // ----- photos, videos and documents -----
@@ -1320,7 +1334,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
      * `caption` are stored readable. With `e2ee` all of those are inside the encrypted envelope and the server keeps only the kind
      * and size. A retried clientId returns the message already sent.
      */
-    sendMedia(me, { convId, uploadId, caption, name, w, h, duration, thumb, clientId, e2ee }, ctx) {
+    sendMedia(me, { convId, uploadId, caption, name, w, h, duration, thumb, clientId, e2ee, replyTo, forwarded }, ctx) {
       const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
       const dup = store.findByClientId(convId, me, clientId);
@@ -1347,7 +1361,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       if (media.name) store.data.media[uploadId].name = media.name;
       store.claimUpload(uploadId);
       try {
-        return { message: sendMessage(me, convId, text, { clientId, media, e2ee: env }) };
+        return { message: sendMessage(me, convId, text, { clientId, media, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded }) };
       } catch (err) {
         store.data.media[uploadId].pending = { by: me, at: Date.now() }; // not sent: it can be tried again
         store._pendingIndex().set(uploadId, { by: me, at: Date.now() });
@@ -1380,7 +1394,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { keys: Object.fromEntries(conv.members.map((m) => [m, store.publicDevices(m)])) };
     },
 
-    sendVoice(me, { convId, clientId, duration, mime, data, e2ee }, ctx) {
+    sendVoice(me, { convId, clientId, duration, mime, data, e2ee, replyTo, forwarded }, ctx) {
       const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
       const env = e2ee ? checkEnvelope(me, conv, e2ee, { media: true }) : undefined;
@@ -1393,7 +1407,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       duration = Math.min(Number(duration) || 0, VOICE_MAX_SECONDS);
       const mediaId = store.saveMedia(convId, data, mime);
       try {
-        return { message: sendMessage(me, convId, '', { clientId, voice: { mediaId, duration, mime }, e2ee: env }) };
+        return { message: sendMessage(me, convId, '', { clientId, voice: { mediaId, duration, mime }, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded }) };
       } catch (err) {
         store.deleteMedia(mediaId);
         throw err;
@@ -1810,6 +1824,23 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       const { convId, message } = store.deleteMessage(id, me);
       notifyMembers(store.getConversation(convId), 'message:deleted', { convId, id: message.id });
       return {};
+    },
+
+    /** React to a message with one emoji (`emoji: null` takes it back). Everyone who can see the message hears about it. */
+    react(me, { id, emoji }, ctx) {
+      const found = store.findMessage(id);
+      if (found && store.isMember(found.convId, me)) requireUnlocked(me, found.convId, ctx);
+      let done;
+      try {
+        done = store.reactTo(me, id, emoji === undefined ? null : emoji);
+      } catch (err) {
+        throw err.status ? new ApiError(err.status, err.code, err.message) : err;
+      }
+      const conv = store.getConversation(done.convId);
+      for (const m of conv.members) {
+        if (Store.visibleTo(done.message, m)) notify(m, 'message:reaction', { convId: done.convId, id, reactions: done.message.reactions || {} });
+      }
+      return { message: store.viewFor(done.message, me) };
     },
 
     star(me, { id, starred }, ctx) {

@@ -205,6 +205,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
       location: obj({ lat: { type: 'number' }, lon: { type: 'number' }, acc: { type: 'integer', description: 'accuracy in metres' } }, ['lat', 'lon']),
       live: obj({ startedAt: { type: 'integer' }, until: { type: 'integer', description: 'when the share stops by itself' }, updatedAt: { type: 'integer' }, endedAt: { type: 'integer', description: 'set when the share has ended; the position is then erased' } }, ['startedAt', 'until']),
+      replyTo: obj({ id: { type: 'string' }, from: { type: 'string' }, kind: { type: 'string', description: 'text, voice, image, video, file, location, poll or event' }, text: { type: 'string', description: 'a short quote; only when neither message is end-to-end encrypted (otherwise it is inside the envelope)' } }, ['id', 'from', 'kind']),
+      forwarded: { type: 'boolean', description: 'sent on from another chat' },
+      reactions: { type: 'object', additionalProperties: { type: 'string' }, description: 'username -> the emoji they chose (one each)' },
       media: obj({
         mediaId: { type: 'string', description: 'download with `GET /media/{id}`' },
         kind: { type: 'string', enum: ['image', 'video', 'file'] },
@@ -892,7 +895,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.msg, 'Send a text message', {
         description: 'Send `Idempotency-Key` (or `clientId` in the body) to make retries safe: the same key returns the original message instead of sending twice.\n\nPlain `text` sent through the API is **not** end-to-end encrypted (the server sees it, and it is shown to recipients as unencrypted). To send an end-to-end encrypted message, encrypt on your own device and send an `e2ee` envelope instead of `text` (see **Encryption**). A stale device list answers `409 keys_changed`: fetch `GET /conversations/{id}/keys` and encrypt again.',
         params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
-        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' }, e2ee: ref('Envelope') }), { text: 'Hello from the API 👋' }),
+        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' }, e2ee: ref('Envelope'), replyTo: { type: 'string', description: 'id of a message in this chat that this one answers (`400` if it is not there)' }, forwarded: { type: 'boolean', description: 'mark as sent on from another chat' } }), { text: 'Hello from the API 👋' }),
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423, 429) },
       }),
     },
@@ -908,7 +911,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.msg, 'Send a photo, video or document, step 2: send the message', {
         description: 'Sends the uploaded file. `name` (a document\'s file name, never a program or web page), `w`, `h`, `duration`, `thumb` (a small JPEG data URL up to 24 KB) and `caption` (up to 1000 characters) are stored readable; in an encrypted chat they go inside `e2ee` instead and the server keeps only the kind and size. Retrying with the same `Idempotency-Key` returns the message already sent.',
         params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
-        body: jsonBody(obj({ uploadId: { type: 'string' }, caption: { type: 'string', maxLength: 1000 }, name: { type: 'string' }, w: { type: 'integer' }, h: { type: 'integer' }, duration: { type: 'integer' }, thumb: { type: 'string' }, e2ee: { $ref: '#/components/schemas/Envelope' } }, ['uploadId']), { uploadId: 'abc123', caption: 'Our new shop', name: 'shop.jpg', w: 1200, h: 800 }),
+        body: jsonBody(obj({ uploadId: { type: 'string' }, caption: { type: 'string', maxLength: 1000 }, name: { type: 'string' }, w: { type: 'integer' }, h: { type: 'integer' }, duration: { type: 'integer' }, thumb: { type: 'string' }, e2ee: { $ref: '#/components/schemas/Envelope' }, replyTo: { type: 'string' }, forwarded: { type: 'boolean' } }, ['uploadId']), { uploadId: 'abc123', caption: 'Our new shop', name: 'shop.jpg', w: 1200, h: 800 }),
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 415, 423) },
       }),
     },
@@ -918,6 +921,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         params: [
           CONV_ID,
           { name: 'duration', in: 'query', schema: { type: 'number' }, description: 'seconds' },
+          { name: 'replyTo', in: 'query', schema: { type: 'string' }, description: 'id of the message this one answers' },
+          { name: 'forwarded', in: 'query', schema: { type: 'string', enum: ['1'] }, description: 'mark as sent on from another chat' },
           { name: 'Idempotency-Key', in: 'header', schema: { type: 'string' } },
         ],
         body: { required: true, content: { 'audio/*': { schema: { type: 'string', format: 'binary' } } } },
@@ -1230,6 +1235,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
     '/messages/{id}': { delete: op(T.msg, 'Delete my message for everyone', { params: [idParam('id')], responses: { 204: noContent, ...errors(401, 403, 404) } }) },
+    '/messages/{id}/reaction': {
+      put: op(T.msg, 'React to a message with an emoji', {
+        description: 'One reaction per person: send a new `emoji` to change it, or `null` to take it back. Allowed: 👍 ❤️ 😂 😮 😢 🙏 (`400` otherwise). Everyone who can see the message gets a `message:reaction` event with the full `reactions` map. Reactions are readable by the server (not end-to-end encrypted). Not on deleted, system or call messages (`409`).',
+        params: [idParam('id')],
+        body: jsonBody(obj({ emoji: { type: ['string', 'null'], enum: ['👍', '❤️', '😂', '😮', '😢', '🙏', null] } }, ['emoji']), { emoji: '👍' }),
+        responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 409, 423) },
+      }),
+    },
     '/messages/{id}/star': {
       put: op(T.msg, 'Star a message (private to you)', { params: [idParam('id')], responses: { 200: ok(obj({ message: ref('Message') })), ...errors(401, 403, 404) } }),
       delete: op(T.msg, 'Unstar a message', { params: [idParam('id')], responses: { 200: ok(obj({ message: ref('Message') })), ...errors(401, 404) } }),
@@ -1521,6 +1534,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /conversations/{id}/typing': 'sendTyping',
     'get /conversations/{id}/call': 'getActiveCall',
     'delete /messages/{id}': 'deleteMessage',
+    'put /messages/{id}/reaction': 'reactToMessage',
     'put /messages/{id}/star': 'starMessage',
     'delete /messages/{id}/star': 'unstarMessage',
     'get /starred': 'listStarredMessages',

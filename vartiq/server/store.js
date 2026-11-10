@@ -336,6 +336,9 @@ class Store {
           m.deleted = true;
           delete m.voice;
           delete m.media;
+          delete m.reactions;
+          delete m.replyTo;
+          delete m.forwarded;
           delete m.e2ee;
           delete m.masked;
           delete m.starredBy;
@@ -2950,6 +2953,23 @@ class Store {
     return null;
   }
 
+  static REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+  /** One reaction per person per message: choose one, change it, or pass `null` to take it back. Returns { convId, message }. */
+  reactTo(username, msgId, emoji) {
+    const found = this.findMessage(msgId);
+    if (!found || !this.isMember(found.convId, username) || !Store.visibleTo(found.message, username)) throw Object.assign(new Error('Message not found'), { status: 404, code: 'not_found' });
+    const m = found.message;
+    if (m.deleted || m.type === 'system' || m.type === 'call') throw Object.assign(new Error('You cannot react to this message'), { status: 409, code: 'conflict' });
+    if (emoji !== null && !Store.REACTIONS.includes(emoji)) throw Object.assign(new Error(`Choose one of ${Store.REACTIONS.join(' ')}`), { status: 400, code: 'invalid_request' });
+    m.reactions ||= {};
+    if (emoji === null) delete m.reactions[username]; else m.reactions[username] = emoji;
+    if (!Object.keys(m.reactions).length) delete m.reactions;
+    this._touchMsg(found.convId, m);
+    this._save();
+    return found;
+  }
+
   findByClientId(convId, from, clientId) {
     if (!clientId) return null;
     clientId = String(clientId).slice(0, 64);
@@ -3074,7 +3094,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -3113,6 +3133,8 @@ class Store {
       if (place.location) msg.location = place.location;
       if (place.live) msg.live = { startedAt: msg.ts, until: msg.ts + place.live * 1000 };
     }
+    if (replyTo) msg.replyTo = replyTo; // { id, from, kind, text? }: the message this one answers
+    if (forwarded) msg.forwarded = true;
     if (media) { msg.type = 'media'; msg.media = media; } // a photo, video or document; the caption is `text`
     if (poll) { msg.type = 'poll'; msg.poll = poll; }
     if (event) { msg.type = 'event'; msg.event = event; }
@@ -3351,6 +3373,9 @@ class Store {
       m.deleted = true;
       delete m.voice;
       delete m.media;
+      delete m.reactions;
+      delete m.replyTo;
+      delete m.forwarded;
       delete m.e2ee;
       delete m.masked;
       delete m.starredBy;

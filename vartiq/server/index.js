@@ -78,6 +78,7 @@ const SOCKET_ACTIONS = {
   'promo:list': 'promoOptOuts',
   'voice:send': 'sendVoice',
   'message:media': 'sendMedia',
+  'message:react': 'react',
   'pin:set': 'setLoginPin',
   'sessions:list': 'sessionsList',
   'sessions:end-others': 'endOtherSessions',

@@ -263,10 +263,16 @@ window.createAttachments = function createAttachments(options) {
     return m.text ? `${label} ${m.text}` : label;
   }
 
+  /** The file of a message as a Blob (downloaded and decrypted if needed), to send it on to another chat. */
+  async function blobOf(m) {
+    const url = await localOrFetch(m);
+    return (await fetch(url)).blob();
+  }
+
   function reset() {
     urls.forEach((u) => URL.revokeObjectURL(u));
     urls.clear();
   }
 
-  return { ACCEPT, prepare, view, preview, reset, sizeLabel };
+  return { ACCEPT, prepare, view, preview, blobOf, reset, sizeLabel };
 };
