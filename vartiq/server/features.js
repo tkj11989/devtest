@@ -9,6 +9,7 @@
 const FEATURES = [
   { id: 'registration', group: 'Accounts', label: 'New sign-ups', description: 'People can create new accounts. Off: only existing users can log in.' },
   { id: 'groups', group: 'Messaging', label: 'Group chats', description: 'Creating new group chats.' },
+  { id: 'attachments', group: 'Messaging', label: 'Photos, videos and documents', description: 'Sending photos, videos and documents in chats. Off: the attach button is hidden and no new files can be sent (files already in chats stay).' },
   { id: 'voiceMessages', group: 'Messaging', label: 'Voice messages', description: 'Recording and sending voice messages.' },
   { id: 'disappearing', group: 'Messaging', label: 'Disappearing messages', description: 'Setting auto-delete timers on chats.' },
   { id: 'push', group: 'Messaging', label: 'Push notifications', description: 'Notifications on people\'s devices for new messages and calls when the app is closed. Off: no notifications are sent and nobody can turn them on (turning them off always works).' },
@@ -45,7 +46,7 @@ const DEFAULT_SETTINGS = {
   // Everything is on, except the developer tools: API keys and webhooks are restricted
   // (web app and mobile) until an administrator switches them on.
   features: Object.fromEntries(IDS.map((id) => [id, !OFF_BY_DEFAULT.includes(id)])),
-  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12, maxGroupMembers: 256, freeCampaignRecipients: 50, premiumCampaignRecipients: 1000, freeCampaignsPerDay: 2, premiumCampaignsPerDay: 20, freeIndividualCampaignRecipients: 20, premiumIndividualCampaignRecipients: 200, freeIndividualCampaignsPerDay: 2, premiumIndividualCampaignsPerDay: 10, freeBotRules: 5, premiumBotRules: 30 },
+  limits: { freeChatLocks: 3, freeHiddenChats: 1, channelsPerOwner: 10, catalogueMax: 100, minAge: 8, freeProfilePhotos: 2, premiumProfilePhotos: 5, freePollOptions: 6, premiumPollOptions: 12, maxGroupMembers: 256, freeCampaignRecipients: 50, premiumCampaignRecipients: 1000, freeCampaignsPerDay: 2, premiumCampaignsPerDay: 20, freeIndividualCampaignRecipients: 20, premiumIndividualCampaignRecipients: 200, freeIndividualCampaignsPerDay: 2, premiumIndividualCampaignsPerDay: 10, freeBotRules: 5, premiumBotRules: 30, maxImageMB: 8, maxVideoMB: 25, maxFileMB: 20 },
   prices: {}, // plan id -> price override
   disabledPlans: [], // plans nobody can buy right now
   announcement: '',
@@ -54,7 +55,7 @@ const DEFAULT_SETTINGS = {
   legal: { ...DEFAULT_LEGAL }, // company details printed in the Terms and Privacy Notice (Admin → Settings → Legal)
 };
 
-const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20], maxGroupMembers: [3, 1000], freeCampaignRecipients: [1, 5000], premiumCampaignRecipients: [1, 5000], freeCampaignsPerDay: [1, 1000], premiumCampaignsPerDay: [1, 1000], freeIndividualCampaignRecipients: [1, 1000], premiumIndividualCampaignRecipients: [1, 1000], freeIndividualCampaignsPerDay: [1, 100], premiumIndividualCampaignsPerDay: [1, 100], freeBotRules: [1, 100], premiumBotRules: [1, 100] };
+const LIMIT_RANGES = { freeChatLocks: [0, 1000], freeHiddenChats: [0, 1000], channelsPerOwner: [1, 1000], catalogueMax: [1, 10000], minAge: [5, 17], freeProfilePhotos: [1, 10], premiumProfilePhotos: [1, 10], freePollOptions: [2, 20], premiumPollOptions: [2, 20], maxGroupMembers: [3, 1000], freeCampaignRecipients: [1, 5000], premiumCampaignRecipients: [1, 5000], freeCampaignsPerDay: [1, 1000], premiumCampaignsPerDay: [1, 1000], freeIndividualCampaignRecipients: [1, 1000], premiumIndividualCampaignRecipients: [1, 1000], freeIndividualCampaignsPerDay: [1, 100], premiumIndividualCampaignsPerDay: [1, 100], freeBotRules: [1, 100], premiumBotRules: [1, 100], maxImageMB: [1, 25], maxVideoMB: [1, 100], maxFileMB: [1, 100] };
 
 /** Merge a settings patch into `current`, validating everything. Returns the new settings and what changed. */
 function applySettings(current, patch) {

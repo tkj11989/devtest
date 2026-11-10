@@ -1,5 +1,7 @@
 'use strict';
 
+const mediaRules = require('./media');
+
 const fs = require('fs');
 const crypto = require('crypto');
 const compression = require('compression');
@@ -75,6 +77,7 @@ const SOCKET_ACTIONS = {
   'promo:set': 'promoPreference',
   'promo:list': 'promoOptOuts',
   'voice:send': 'sendVoice',
+  'message:media': 'sendMedia',
   'pin:set': 'setLoginPin',
   'sessions:list': 'sessionsList',
   'sessions:end-others': 'endOtherSessions',
@@ -441,7 +444,7 @@ function createApp({
     // Voice notes from a locked chat need it unlocked in this app session.
     const ctx = { lockKey: service.lockKeyFor(username, bearer(req), req.get('x-app-session')) };
     if (!service.mediaAllowed(username, req.params.id, ctx)) return res.status(423).end();
-    res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable', 'Content-Security-Policy': "default-src 'none'; sandbox" });
+    res.set(media.kind ? mediaRules.downloadHeaders({ mime: media.mime, encrypted: media.encrypted }, media.name) : { 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable', 'Content-Security-Policy': "default-src 'none'; sandbox" });
     res.send(media.buffer);
   });
 

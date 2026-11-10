@@ -14,6 +14,7 @@ const photoRules = require('./photos');
 const BusinessHours = require('../public/business-hours.js');
 const { createCampaigns } = require('./campaigns');
 const botRules = require('./bot');
+const mediaRules = require('./media');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
 class ApiError extends Error {
@@ -1286,6 +1287,74 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { message: sendMessage(me, convId, env ? '' : text, { masked: !!masked, clientId, e2ee: env }) };
     },
 
+    // ----- photos, videos and documents -----
+
+    /**
+     * Step 1: upload the file (its bytes, or its ciphertext when the app encrypted it). It waits up to an hour for step 2.
+     * `kind` is image, video or file; `encrypted` says the bytes are an end-to-end encrypted copy.
+     */
+    uploadMedia(me, { convId, kind, mime, data, encrypted }, ctx) {
+      const conv = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      if (!['image', 'video', 'file'].includes(kind)) throw new ApiError(400, 'invalid_request', 'kind must be image, video or file');
+      if (!Buffer.isBuffer(data) || data.length === 0) throw new ApiError(400, 'invalid_request', 'The file is empty');
+      mime = String(mime || '').split(';')[0].trim().toLowerCase();
+      if (mediaRules.kindOf(mime) !== kind) throw new ApiError(415, 'unsupported_media_type', `That file type is not allowed as a ${kind === 'file' ? 'document' : kind}`);
+      const limit = store.getSettings().limits[{ image: 'maxImageMB', video: 'maxVideoMB', file: 'maxFileMB' }[kind]] * 1024 * 1024;
+      if (data.length > limit + (encrypted ? 64 : 0)) throw new ApiError(413, 'too_large', `That ${kind === 'file' ? 'document' : kind} is too large (the limit is ${Math.round(limit / 1024 / 1024)} MB)`);
+      if (!encrypted && !mediaRules.sniff(mime, data)) throw new ApiError(415, 'unsupported_media_type', 'The file does not look like what it says it is');
+      void conv;
+      let uploadId;
+      try {
+        uploadId = store.saveUpload(convId, me, data, mime);
+      } catch (err) {
+        throw err.status ? new ApiError(err.status, err.code, err.message) : err;
+      }
+      store.data.media[uploadId].kind = kind;
+      store.data.media[uploadId].encrypted = !!encrypted;
+      return { uploadId, size: data.length };
+    },
+
+    /**
+     * Step 2: send the uploaded file as a message. Plain: `name`, `w`, `h`, `duration`, `thumb` (a small JPEG data URL) and the
+     * `caption` are stored readable. With `e2ee` all of those are inside the encrypted envelope and the server keeps only the kind
+     * and size. A retried clientId returns the message already sent.
+     */
+    sendMedia(me, { convId, uploadId, caption, name, w, h, duration, thumb, clientId, e2ee }, ctx) {
+      const conv = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const dup = store.findByClientId(convId, me, clientId);
+      if (dup) return { message: store.viewFor(dup, me) };
+      const up = store.pendingUpload(String(uploadId || ''), me, convId);
+      if (!up) throw new ApiError(404, 'not_found', 'That upload is not waiting to be sent (it may have expired). Upload the file again.');
+      if (!!e2ee !== !!up.encrypted) throw new ApiError(400, 'invalid_request', up.encrypted ? 'An encrypted upload needs its encryption envelope' : 'A plain upload cannot have an envelope');
+      const env = e2ee ? checkEnvelope(me, conv, e2ee, { media: true }) : undefined;
+      let media = { mediaId: uploadId, kind: up.kind, size: up.size };
+      let text = '';
+      if (!env) {
+        const num = (v, max) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(Math.round(Number(v)), max) : undefined);
+        text = String(caption ?? '').trim();
+        if (text.length > 1000) throw new ApiError(400, 'invalid_request', 'The caption is too long (at most 1000 characters)');
+        const fileName = mediaRules.cleanName(name, up.kind === 'file' ? 'document' : up.kind);
+        if (up.kind === 'file' && mediaRules.BLOCKED_NAME.test(fileName)) throw new ApiError(415, 'unsupported_media_type', 'Programs and web pages cannot be sent as documents');
+        media = {
+          ...media, mime: up.mime, name: fileName,
+          ...(num(w, 20000) ? { w: num(w, 20000) } : {}), ...(num(h, 20000) ? { h: num(h, 20000) } : {}),
+          ...(up.kind === 'video' && num(duration, 3600) ? { duration: num(duration, 3600) } : {}),
+          ...(mediaRules.cleanThumb(thumb) ? { thumb: mediaRules.cleanThumb(thumb) } : {}),
+        };
+      }
+      if (media.name) store.data.media[uploadId].name = media.name;
+      store.claimUpload(uploadId);
+      try {
+        return { message: sendMessage(me, convId, text, { clientId, media, e2ee: env }) };
+      } catch (err) {
+        store.data.media[uploadId].pending = { by: me, at: Date.now() }; // not sent: it can be tried again
+        store._pendingIndex().set(uploadId, { by: me, at: Date.now() });
+        throw err;
+      }
+    },
+
     // ----- end-to-end encryption: device keys -----
 
     e2eeDevices(me) {
@@ -2039,6 +2108,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   const pruneExpired = () => {
     endDueLocations();
     runPlans();
+    store.pruneUploads();
     for (const { convId, ids } of store.pruneMessages()) {
       const conv = store.getConversation(convId);
       if (conv) notifyMembers(conv, 'message:expired', { convId, ids });
@@ -2078,6 +2148,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
   const GATES = {
     createGroup: 'groups',
     sendVoice: 'voiceMessages',
+    uploadMedia: 'attachments', sendMedia: 'attachments',
     setDisappearing: (p) => (p?.seconds ? 'disappearing' : null),
     setDefaultDisappear: (p) => (p?.seconds ? 'disappearing' : null),
     statuses: 'status', postStatus: 'status', viewStatus: 'status', deleteStatus: 'status', replyStatus: 'status',

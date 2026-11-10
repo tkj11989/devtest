@@ -331,9 +331,11 @@ class Store {
       for (const m of list) {
         if (m.from === username && m.type !== 'call' && m.type !== 'system') {
           if (m.voice) this.deleteMedia(m.voice.mediaId);
+          if (m.media) this.deleteMedia(m.media.mediaId);
           m.text = '';
           m.deleted = true;
           delete m.voice;
+          delete m.media;
           delete m.e2ee;
           delete m.masked;
           delete m.starredBy;
@@ -353,7 +355,7 @@ class Store {
         conv.members = conv.members.filter((m) => m !== username);
         conv.admins = (conv.admins || []).filter((a) => a !== username);
         if (conv.members.length < 2) {
-          for (const m of list) if (m.voice) this.deleteMedia(m.voice.mediaId);
+          for (const m of list) { if (m.voice) this.deleteMedia(m.voice.mediaId); if (m.media) this.deleteMedia(m.media.mediaId); }
           delete this.data.conversations[conv.id];
           delete this.data.messages[conv.id];
         } else if (conv.owner === username) {
@@ -2501,7 +2503,7 @@ class Store {
     for (const [convId, msgs] of Object.entries(this.data.messages)) {
       const expired = msgs.filter((m) => m.expiresAt && m.expiresAt <= now);
       if (!expired.length) continue;
-      for (const m of expired) if (m.voice) this.deleteMedia(m.voice.mediaId);
+      for (const m of expired) { if (m.voice) this.deleteMedia(m.voice.mediaId); if (m.media) this.deleteMedia(m.media.mediaId); }
       this.data.messages[convId] = msgs.filter((m) => !(m.expiresAt && m.expiresAt <= now));
       removed.push({ convId, ids: expired.map((m) => m.id) });
     }
@@ -2972,6 +2974,56 @@ class Store {
     return id;
   }
 
+  static UPLOAD_TTL_MS = 60 * 60 * 1000;
+  static MAX_PENDING_UPLOADS = 10;
+
+  /** Pending uploads: id -> { by, at } (rebuilt from the saved records after a restart). */
+  _pendingIndex() {
+    if (!this._pending) {
+      this._pending = new Map();
+      for (const [id, m] of Object.entries(this.data.media)) if (m.pending) this._pending.set(id, { by: m.pending.by, at: m.pending.at });
+    }
+    return this._pending;
+  }
+
+  /** Save a file a person is about to send in a chat. It belongs to nobody else until a message claims it. */
+  saveUpload(convId, owner, buffer, mime) {
+    const mine = [...this._pendingIndex().values()].filter((p) => p.by === owner).length;
+    if (mine >= Store.MAX_PENDING_UPLOADS) throw Object.assign(new Error('Too many files waiting to be sent. Send or wait a little.'), { status: 429, code: 'too_many_uploads' });
+    const id = this.saveMedia(convId, buffer, mime);
+    this.data.media[id].pending = { by: owner, at: Date.now() };
+    this._pendingIndex().set(id, { by: owner, at: Date.now() });
+    this._save();
+    return id;
+  }
+
+  /** The record of an upload that `owner` made for `convId` and has not yet sent, or null. */
+  pendingUpload(id, owner, convId) {
+    const m = this.data.media[id];
+    return m?.pending?.by === owner && m.convId === convId ? m : null;
+  }
+
+  /** A message took the upload: it now belongs to the chat. */
+  claimUpload(id) {
+    const m = this.data.media[id];
+    if (!m?.pending) return;
+    delete m.pending;
+    this._pendingIndex().delete(id);
+    this._save();
+  }
+
+  /** Throw away uploads nobody sent within an hour. */
+  pruneUploads(now = Date.now()) {
+    let n = 0;
+    for (const [id, p] of [...this._pendingIndex()]) {
+      if (now - p.at < Store.UPLOAD_TTL_MS) continue;
+      this._pending.delete(id);
+      this.deleteMedia(id);
+      n++;
+    }
+    return n;
+  }
+
   /** `{ mime, buffer }` if `username` may access the media, else null. */
   /** The conversation a media file belongs to (voice messages), or null (status photos). */
   mediaConversation(id) {
@@ -2982,7 +3034,9 @@ class Store {
     const meta = this.data.media[id];
     if (!meta) return null;
     const photo = meta.photoOf ? this.photoOfMedia(meta) : null;
-    const allowed = meta.photoOf
+    const allowed = meta.pending
+      ? meta.pending.by === username // not sent yet: only the person who is sending it
+      : meta.photoOf
       ? !!photo && this.canSeePhotos(username, meta.photoOf) && (username === meta.photoOf || !photo.hidden)
       : meta.publicBy
         ? true
@@ -2998,12 +3052,13 @@ class Store {
     } else {
       buffer = this.memoryMedia.get(id);
     }
-    return buffer ? { mime: meta.mime, buffer } : null;
+    return buffer ? { mime: meta.mime, buffer, encrypted: !!meta.encrypted, kind: meta.kind || null, name: meta.name || null } : null;
   }
 
   deleteMedia(id) {
     if (!this.data.media[id]) return;
     delete this.data.media[id];
+    this._pending?.delete(id);
     this.memoryMedia.delete(id);
     if (this.mediaDir) fs.rmSync(path.join(this.mediaDir, path.basename(id)), { force: true });
     this._save();
@@ -3019,7 +3074,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -3037,7 +3092,7 @@ class Store {
     }
 
     text = voice || e2ee ? '' : String(text || '').trim();
-    if (!voice && !e2ee && !text && !place && !poll && !event) throw new Error('Message is empty');
+    if (!voice && !e2ee && !text && !place && !poll && !event && !media) throw new Error('Message is empty');
     if (text.length > 4000) throw new Error('Message is too long');
     const msg = {
       id: crypto.randomBytes(8).toString('hex'),
@@ -3058,9 +3113,10 @@ class Store {
       if (place.location) msg.location = place.location;
       if (place.live) msg.live = { startedAt: msg.ts, until: msg.ts + place.live * 1000 };
     }
+    if (media) { msg.type = 'media'; msg.media = media; } // a photo, video or document; the caption is `text`
     if (poll) { msg.type = 'poll'; msg.poll = poll; }
     if (event) { msg.type = 'event'; msg.event = event; }
-    if (masked && !voice && !place && !poll && !event) msg.masked = true;
+    if (masked && !voice && !place && !poll && !event && !media) msg.masked = true;
     if (statusReply) msg.statusReply = statusReply;
     if (auto) msg.auto = auto; // 'greeting' | 'away' (business automatic replies)
     if (campaign) msg.campaign = String(campaign); // sent by a bulk-messaging campaign (id)
@@ -3290,9 +3346,11 @@ class Store {
       if (m.from !== username) throw new Error('You can only delete your own messages');
       if (m.type === 'call') throw new Error('Call history entries cannot be deleted');
       if (m.voice) this.deleteMedia(m.voice.mediaId);
+      if (m.media) this.deleteMedia(m.media.mediaId);
       m.text = '';
       m.deleted = true;
       delete m.voice;
+      delete m.media;
       delete m.e2ee;
       delete m.masked;
       delete m.starredBy;

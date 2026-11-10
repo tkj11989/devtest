@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const mediaRules = require('./media');
 const { ApiError } = require('./service');
 const { buildOpenApiSpec } = require('./openapi');
 
@@ -313,6 +314,33 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
       duration: req.query.duration,
       clientId: req.query.clientId ?? req.get('idempotency-key'),
     }, req.ctx), 201));
+  // Photos, videos and documents: step 1 uploads the bytes, step 2 sends them as a message.
+  router.post('/conversations/:id/uploads', ...authed, (req, res, next) => {
+    const lim = store.getSettings().limits;
+    const biggest = Math.max(lim.maxImageMB, lim.maxVideoMB, lim.maxFileMB) * 1024 * 1024 + 64;
+    const length = Number(req.get('content-length') || 0);
+    if (length > biggest) return next(new ApiError(413, 'too_large', 'That file is too large'));
+    next();
+  }, express.raw({ type: () => true, limit: '101mb' }),
+  run((req) => actions.uploadMedia(req.user, {
+    convId: p(req, 'id'),
+    kind: req.query.kind,
+    mime: req.get('content-type'),
+    data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+    encrypted: req.query.e2ee === '1',
+  }, req.ctx), 201));
+  router.post('/conversations/:id/media', ...authed, json, run((req) => actions.sendMedia(req.user, {
+    convId: p(req, 'id'),
+    uploadId: req.body?.uploadId,
+    caption: req.body?.caption,
+    name: req.body?.name,
+    w: req.body?.w,
+    h: req.body?.h,
+    duration: req.body?.duration,
+    thumb: req.body?.thumb,
+    e2ee: req.body?.e2ee,
+    clientId: idempotency(req),
+  }, req.ctx), 201));
   router.post('/conversations/:id/read', ...authed, run((req) => actions.markRead(req.user, { convId: p(req, 'id') }, req.ctx)));
   router.post('/conversations/:id/typing', ...authed, json, run((req) => {
     const { isTyping = true, activity } = req.body || {};
@@ -339,7 +367,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     if (!service.mediaAllowed(req.user, p(req, 'id'), req.ctx)) {
       return next(new ApiError(423, 'chat_locked', 'This voice message is in a locked chat. Unlock the chat first.'));
     }
-    res.set({ 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
+    res.set(media.kind ? mediaRules.downloadHeaders({ mime: media.mime, encrypted: media.encrypted }, media.name) : { 'Content-Type': media.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
     res.send(media.buffer);
   });
 

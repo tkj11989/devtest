@@ -175,7 +175,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       e2ee: { oneOf: [{ $ref: '#/components/schemas/Envelope' }], description: 'end-to-end encrypted message: `text` is absent and the content is in this envelope. Messages without it (REST API, business auto replies, older messages) are not end-to-end encrypted.' },
       convId: { type: 'string' },
       from: { type: 'string', description: 'username of the sender' },
-      type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location', 'poll', 'event'], description: 'absent for text messages; `poll` / `event` = see `poll` / `event` (readable by the server, not end-to-end encrypted); `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
+      type: { type: 'string', enum: ['text', 'voice', 'call', 'system', 'location', 'poll', 'event', 'media'], description: '`media` = a photo, video or document (see `media`; the caption is `text`). absent for text messages; `poll` / `event` = see `poll` / `event` (readable by the server, not end-to-end encrypted); `system` = a notice such as a timer change; `location` = a shared position (in an encrypted chat the coordinates are inside `e2ee` as `{"t":"Location","loc":{"lat":…,"lon":…,"acc":…}}`)' },
       expiresAt: { type: 'integer', description: 'disappearing messages: when it will be deleted (ms since epoch)' },
       auto: { type: 'string', enum: ['greeting', 'away', 'bot', 'bot-menu'], description: "a business's automatic reply (`bot`, `bot-menu`: its assistant)" },
       campaign: { oneOf: [{ type: 'string' }, { type: 'boolean', const: true }], description: 'sent by a bulk-messaging campaign: the sender sees the campaign id, everybody else `true` (show it as a promotion, with a way to stop them: `PUT /me/promotions/{business}`)' },
@@ -205,6 +205,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
       location: obj({ lat: { type: 'number' }, lon: { type: 'number' }, acc: { type: 'integer', description: 'accuracy in metres' } }, ['lat', 'lon']),
       live: obj({ startedAt: { type: 'integer' }, until: { type: 'integer', description: 'when the share stops by itself' }, updatedAt: { type: 'integer' }, endedAt: { type: 'integer', description: 'set when the share has ended; the position is then erased' } }, ['startedAt', 'until']),
+      media: obj({
+        mediaId: { type: 'string', description: 'download with `GET /media/{id}`' },
+        kind: { type: 'string', enum: ['image', 'video', 'file'] },
+        size: { type: 'integer', description: 'bytes' },
+        mime: { type: 'string', description: 'only when the message is not end-to-end encrypted (otherwise this and the fields below are inside the envelope)' },
+        name: { type: 'string' }, w: { type: 'integer' }, h: { type: 'integer' }, duration: { type: 'integer', description: 'seconds (video)' },
+        thumb: { type: 'string', description: 'small preview picture as a `data:image/jpeg;base64,...` URL' },
+      }, ['mediaId', 'kind', 'size']),
       voice: obj({ mediaId: { type: 'string' }, duration: { type: 'integer', description: 'seconds' }, mime: { type: 'string' } }),
       call: obj({
         kind: { type: 'string', enum: ['audio', 'video'] },
@@ -888,6 +896,22 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423, 429) },
       }),
     },
+    '/conversations/{id}/uploads': {
+      post: op(T.msg, 'Send a photo, video or document, step 1: upload the file', {
+        description: 'Body: the file itself (or its end-to-end encrypted ciphertext with `e2ee=1`), with its Content-Type. `kind` is `image` (jpeg, png, webp, gif), `video` (mp4, webm, mov, 3gp) or `file` (pdf, txt, csv, json, rtf, zip, Word, Excel, PowerPoint and OpenDocument). Limits are an administrator setting (default photo 8 MB, video 25 MB, document 20 MB): `413 too_large`. A plain file is checked by its first bytes (`415`). Returns an `uploadId` that waits one hour for step 2 (`POST /conversations/{id}/media`); at most 10 files can wait (`429 too_many_uploads`). `403 feature_disabled` when switched off.',
+        params: [CONV_ID, { name: 'kind', in: 'query', required: true, schema: { type: 'string', enum: ['image', 'video', 'file'] } }, { name: 'e2ee', in: 'query', schema: { type: 'string', enum: ['1'] }, description: 'the bytes are encrypted by the app' }],
+        body: { required: true, content: { '*/*': { schema: { type: 'string', format: 'binary' } } } },
+        responses: { 201: ok(obj({ uploadId: { type: 'string' }, size: { type: 'integer' } })), ...errors(400, 401, 403, 404, 413, 415, 423, 429) },
+      }),
+    },
+    '/conversations/{id}/media': {
+      post: op(T.msg, 'Send a photo, video or document, step 2: send the message', {
+        description: 'Sends the uploaded file. `name` (a document\'s file name, never a program or web page), `w`, `h`, `duration`, `thumb` (a small JPEG data URL up to 24 KB) and `caption` (up to 1000 characters) are stored readable; in an encrypted chat they go inside `e2ee` instead and the server keeps only the kind and size. Retrying with the same `Idempotency-Key` returns the message already sent.',
+        params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
+        body: jsonBody(obj({ uploadId: { type: 'string' }, caption: { type: 'string', maxLength: 1000 }, name: { type: 'string' }, w: { type: 'integer' }, h: { type: 'integer' }, duration: { type: 'integer' }, thumb: { type: 'string' }, e2ee: { $ref: '#/components/schemas/Envelope' } }, ['uploadId']), { uploadId: 'abc123', caption: 'Our new shop', name: 'shop.jpg', w: 1200, h: 800 }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 415, 423) },
+      }),
+    },
     '/conversations/{id}/voice': {
       post: op(T.msg, 'Send a voice message', {
         description: 'Body: the audio file itself (max 3 MB), with its Content-Type (e.g. `audio/ogg`, `audio/webm`, `audio/mp4`, `audio/mpeg`).',
@@ -1524,6 +1548,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /campaigns/{id}/retry': 'retryCampaign',
     'get /me/promotions': 'listStoppedPromotions',
     'put /me/promotions/{business}': 'setPromotionPreference',
+    'post /conversations/{id}/uploads': 'uploadMedia',
+    'post /conversations/{id}/media': 'sendMedia',
     'post /conversations/{id}/polls': 'createPoll',
     'put /polls/{id}/vote': 'votePoll',
     'post /polls/{id}/close': 'closePoll',

@@ -168,7 +168,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
         convId = conv.id;
         tag = `c-${conv.id}`;
         if (prefs.preview) {
-          const what = LABEL[msg.type] || 'New message';
+          const what = msg.type === 'media' ? ({ image: 'Photo', video: 'Video', file: 'Document' }[msg.media?.kind] || 'File') : (LABEL[msg.type] || 'New message');
           if (who.group) {
             title = who.group;
             body = msg.type === 'call' ? `${who.sender}: ${body}` : `${who.sender}: ${what}`;
