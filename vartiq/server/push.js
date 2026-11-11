@@ -12,6 +12,10 @@ const path = require('path');
  * never the message itself. People choose what they get (messages, calls, whether the sender's name is shown), and
  * chats that are locked or hidden only ever show "New message".
  *
+ * Native apps (the Android app) cannot use Web Push, so they register a Firebase Cloud Messaging (FCM) token instead; it is kept in
+ * the same list (as `fcm:<token>`) and the same small wake-ups are sent through Google's FCM HTTP v1 API, signed with a service
+ * account (FCM_SERVICE_ACCOUNT, a path to the JSON file from the Firebase console).
+ *
  * The push service address comes from the person's browser, so the server only sends to the known push services
  * (otherwise a person could make the server call any address they like).
  */
@@ -72,7 +76,7 @@ function loadVapid({ publicKey, privateKey, file } = {}, webpush) {
  *   sender            async (subscription, payload, options) => void, replaces the real sending (tests)
  *   extraHosts        more allowed push-service host names
  */
-function createPush({ store, isOnline, featureOn = () => true, subject = () => undefined, vapid = {}, sender, extraHosts = (process.env.PUSH_ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean), minGapMs = 10 * 1000 }) {
+function createPush({ store, isOnline, featureOn = () => true, subject = () => undefined, vapid = {}, sender, fcm = {}, extraHosts = (process.env.PUSH_ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean), minGapMs = 10 * 1000 }) {
   let webpush;
   let keys;
   const web = () => {
@@ -94,6 +98,78 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
     );
   });
 
+  // ---------- native apps: Firebase Cloud Messaging (HTTP v1) ----------
+
+  let account = null; // the service account: { project_id, client_email, private_key }
+  const loadAccount = () => {
+    if (account !== null) return account || null;
+    account = false;
+    try {
+      const raw = fcm.serviceAccount ?? (process.env.FCM_SERVICE_ACCOUNT_JSON || (process.env.FCM_SERVICE_ACCOUNT ? fs.readFileSync(process.env.FCM_SERVICE_ACCOUNT, 'utf8') : null));
+      const sa = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (sa?.project_id && sa?.client_email && sa?.private_key) account = sa;
+    } catch (err) {
+      console.error('Could not read the FCM service account (native notifications are off):', err.message);
+    }
+    return account || null;
+  };
+  /** Can this server send to native apps? (A fake sender counts, for tests.) */
+  const fcmAvailable = () => !!(fcm.sender || loadAccount());
+
+  let accessToken = null; // { value, until }
+  const googleToken = async () => {
+    if (accessToken && accessToken.until > Date.now() + 60 * 1000) return accessToken.value;
+    const sa = loadAccount();
+    const now = Math.floor(Date.now() / 1000);
+    const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const head = b64({ alg: 'RS256', typ: 'JWT' });
+    const claims = b64({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/firebase.messaging', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 });
+    const signature = require('crypto').createSign('RSA-SHA256').update(`${head}.${claims}`).sign(sa.private_key, 'base64url');
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${head}.${claims}.${signature}` }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token) throw Object.assign(new Error(`FCM sign-in failed: ${body.error_description || body.error || res.status}`), { statusCode: 500 });
+    accessToken = { value: body.access_token, until: Date.now() + (Number(body.expires_in) || 3600) * 1000 };
+    return accessToken.value;
+  };
+
+  /** The FCM message for one wake-up: a notification the system shows by itself, plus the data the app uses when it is tapped. */
+  const fcmMessage = (token, data, { ttl, urgency }) => ({
+    token,
+    notification: { title: String(data.title || 'VartiQ'), body: String(data.body || '') },
+    data: Object.fromEntries(Object.entries(data).filter(([k, v]) => v !== undefined && !['title', 'body'].includes(k)).map(([k, v]) => [k, String(v)])),
+    android: {
+      priority: urgency === 'high' ? 'HIGH' : 'NORMAL',
+      ttl: `${Math.max(1, Math.round(ttl))}s`,
+      notification: { channel_id: data.kind === 'call' ? 'calls' : 'messages', ...(data.tag ? { tag: String(data.tag) } : {}) },
+    },
+  });
+
+  const sendFcm = async (sub, data, options) => {
+    const token = String(sub.endpoint).slice(4);
+    const message = fcmMessage(token, data, options);
+    if (fcm.sender) return fcm.sender(sub, message);
+    const sa = loadAccount();
+    if (!sa) throw Object.assign(new Error('FCM is not set up on this server'), { statusCode: 503 });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(sa.project_id)}/messages:send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await googleToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      if (res.ok) return undefined;
+      if (res.status === 401 && attempt === 0) { accessToken = null; continue; }
+      const body = await res.json().catch(() => ({}));
+      const code = body?.error?.details?.find?.((d) => d.errorCode)?.errorCode || body?.error?.status;
+      // A token the app no longer has: forget it (like a gone Web Push subscription).
+      throw Object.assign(new Error(`FCM ${res.status} ${code || ''}`.trim()), { statusCode: res.status === 404 || code === 'UNREGISTERED' ? 410 : res.status });
+    }
+    return undefined;
+  };
+
   const lastSent = new Map(); // user|key -> time, so a burst of messages is one notification
   const sweep = setInterval(() => {
     const cutoff = Date.now() - 5 * 60 * 1000;
@@ -109,7 +185,8 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
     let ok = 0;
     await Promise.all(subs.map(async (sub) => {
       try {
-        await send(sub, payload, { ttl, urgency, topic });
+        if (sub.fcm) await sendFcm(sub, data, { ttl, urgency });
+        else await send(sub, payload, { ttl, urgency, topic });
         ok += 1;
       } catch (err) {
         if (err?.statusCode === 404 || err?.statusCode === 410) store.removePushSub(username, sub.endpoint);
@@ -145,6 +222,18 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
       const { p256dh, auth } = subscription.keys || {};
       if (!b64bytes(p256dh, 65) || !b64bytes(auth, 16)) throw bad('The subscription keys are not valid');
       store.addPushSub(username, { endpoint, p256dh, auth }, userAgent);
+      return store.pushSubs(username).length;
+    },
+
+    /** Is native-app notification sending set up on this server? */
+    fcmAvailable,
+
+    /** Save the FCM token of the Android (or iPhone) app for `username`. */
+    subscribeNative(username, { token, platform } = {}, userAgent) {
+      const bad = (m) => Object.assign(new Error(m), { status: 400, code: 'invalid_request' });
+      if (!fcmAvailable()) throw Object.assign(new Error('Notifications for the app are not set up on this server'), { status: 503, code: 'unavailable' });
+      if (typeof token !== 'string' || !/^[A-Za-z0-9_:.\-]{50,4096}$/.test(token)) throw bad('That is not a valid device token');
+      store.addPushSub(username, { endpoint: `fcm:${token}`, fcm: true, platform: ['android', 'ios'].includes(platform) ? platform : 'android' }, userAgent);
       return store.pushSubs(username).length;
     },
 

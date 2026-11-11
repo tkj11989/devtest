@@ -431,7 +431,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   // ---------- push notifications ----------
 
   router.get('/push', ...authed, run((req) => actions.pushConfig(req.user)));
-  router.put('/push/subscription', ...authed, json, run((req) => actions.pushSubscribe(req.user, { subscription: req.body?.subscription, userAgent: req.body?.userAgent || req.get('user-agent') })));
+  router.put('/push/subscription', ...authed, json, run((req) => actions.pushSubscribe(req.user, { subscription: req.body?.subscription, fcmToken: req.body?.fcmToken, platform: req.body?.platform, userAgent: req.body?.userAgent || req.get('user-agent') })));
   router.post('/push/unsubscribe', ...authed, json, run((req) => actions.pushUnsubscribe(req.user, { endpoint: req.body?.endpoint })));
   router.patch('/push/settings', ...authed, json, run((req) => actions.pushSettings(req.user, req.body || {})));
   router.post('/push/test', ...authed, run((req) => actions.pushTest(req.user)));

@@ -6,7 +6,7 @@
 window.createAttachments = function createAttachments(options) {
   'use strict';
 
-  const { token, appSession, decrypt, limits, toast } = options;
+  const { token, appSession, decrypt, limits, toast, nativeSave } = options;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -36,6 +36,7 @@ window.createAttachments = function createAttachments(options) {
   const durationLabel = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
   const urls = new Map(); // mediaId -> object URL of the downloaded (and decrypted) file
+  const blobs = new Map(); // mediaId -> the same file as a Blob (the page's security policy does not allow fetching blob: addresses)
   const loading = new Map(); // mediaId -> promise
 
   function mimeOf(file) {
@@ -161,6 +162,7 @@ window.createAttachments = function createAttachments(options) {
         }
         const url = URL.createObjectURL(blob);
         urls.set(id, url);
+        blobs.set(id, blob);
         return url;
       })().finally(() => loading.delete(id)));
     }
@@ -198,6 +200,8 @@ window.createAttachments = function createAttachments(options) {
   /** Save a file to the device under its own name (never opened by the page). */
   async function save(m) {
     try {
+      // Inside the Android app a blob cannot be downloaded: it is written to the cache and handed to the share sheet.
+      if (nativeSave && await nativeSave(await blobOf(m), m.media.name)) return;
       const url = await localOrFetch(m);
       const a = el('a');
       a.href = url;
@@ -265,13 +269,15 @@ window.createAttachments = function createAttachments(options) {
 
   /** The file of a message as a Blob (downloaded and decrypted if needed), to send it on to another chat. */
   async function blobOf(m) {
-    const url = await localOrFetch(m);
-    return (await fetch(url)).blob();
+    if (m.media.localBlob) return m.media.localBlob; // a file I sent from this device
+    await fetchFile(m);
+    return blobs.get(m.media.mediaId);
   }
 
   function reset() {
     urls.forEach((u) => URL.revokeObjectURL(u));
     urls.clear();
+    blobs.clear();
   }
 
   return { ACCEPT, prepare, view, preview, blobOf, reset, sizeLabel };

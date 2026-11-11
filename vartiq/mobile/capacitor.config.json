@@ -1,0 +1,35 @@
+{
+  "appId": "com.prayuktech.vartiq",
+  "appName": "VartiQ",
+  "webDir": "www",
+  "server": {
+    "url": "https://vartiq.prayuktech.com",
+    "cleartext": false,
+    "allowNavigation": [
+      "vartiq.prayuktech.com"
+    ],
+    "errorPath": "index.html"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "backgroundColor": "#061639",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#061639"
+    },
+    "PushNotifications": {
+      "presentationOptions": [
+        "badge",
+        "sound",
+        "alert"
+      ]
+    }
+  }
+}

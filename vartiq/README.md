@@ -446,6 +446,10 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
 - **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
 
+## Android app
+
+`mobile/` holds the Android app: the web app in a Capacitor shell that opens the live server, with **notifications through Firebase**, the Back button, saving files through the share sheet and Play Store packaging. Setup, Firebase and Play Store steps are in [mobile/README.md](mobile/README.md). On the server, native notifications need `FCM_SERVICE_ACCOUNT` (the path to a Firebase service-account JSON file; without it the app works but gets no notifications, and Settings says so). Devices appear in the same list as browsers (`fcm:` tokens); a token Google no longer knows is forgotten. API: `PUT /push/subscription` with `{ "fcmToken": "...", "platform": "android" }`; `GET /push` says `native: true` when the server can send to the app. **The app has not been built in the environment where it was written (no Android SDK): build it with Android Studio and test it on a phone before release.**
+
 ## Sharing files and everyday message features
 
 **Photos, videos and documents.** The paperclip in the chat (or paste a picture, or drop files on the chat) sends up to 10 files at once, each with an optional caption.

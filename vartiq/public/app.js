@@ -2589,6 +2589,7 @@
       }
       // The server only has the kind and size of an encrypted file: keep what I know about it, and the picture I already hold.
       Object.assign(res.message.media, res.message.e2ee ? { name: info.name, mime: info.mime, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb } : {}, { localUrl: info.localUrl });
+      if (info.localBlob) Object.defineProperty(res.message.media, 'localBlob', { value: info.localBlob, enumerable: false });
       if (res.message.e2ee) Object.assign(res.message, { text: msg.text, encrypted: true });
       if (res.message.replyTo && msg.replyTo?.text) res.message.replyTo.text ??= msg.replyTo.text;
       upsertMessage(res.message);
@@ -2850,13 +2851,27 @@
     });
   }
 
+  /** A voice note as a Blob (downloaded and decrypted if it is encrypted), to send it on. */
+  async function voiceBlob(m) {
+    if (m.audio) return new Blob([m.audio], { type: m.voice.mime });
+    const res = await fetch(`/media/${encodeURIComponent(m.voice.mediaId)}`, { headers: { Authorization: `Bearer ${state.token}`, 'X-App-Session': APP_SESSION } });
+    if (!res.ok) throw new Error('Could not load the voice message');
+    if (m.e2ee) {
+      const { media } = await state.e2ee.decrypt(m, new Uint8Array(await res.arrayBuffer()));
+      return new Blob([media], { type: m.voice.mime });
+    }
+    return res.blob();
+  }
+
   async function forwardMessage(m, convIds) {
     for (const id of convIds) {
       if (m.media) {
         const blob = await attachments.blobOf(m);
-        sendNew(id, m.text || '', false, { type: 'media', forwarded: true, upload: blob, media: { kind: m.media.kind, name: m.media.name, mime: m.media.mime, size: m.media.size, w: m.media.w, h: m.media.h, duration: m.media.duration, thumb: m.media.thumb, localUrl: URL.createObjectURL(blob) } });
+        const media = { kind: m.media.kind, name: m.media.name, mime: m.media.mime, size: m.media.size, w: m.media.w, h: m.media.h, duration: m.media.duration, thumb: m.media.thumb, localUrl: URL.createObjectURL(blob) };
+        Object.defineProperty(media, 'localBlob', { value: blob, enumerable: false });
+        sendNew(id, m.text || '', false, { type: 'media', forwarded: true, upload: blob, media });
       } else if (m.voice) {
-        const blob = await (await fetch(await voiceUrl(m))).blob();
+        const blob = await voiceBlob(m);
         sendNew(id, '', false, { type: 'voice', forwarded: true, voice: { duration: m.voice.duration, mime: m.voice.mime }, audio: await blob.arrayBuffer(), localUrl: URL.createObjectURL(blob) });
       } else {
         sendNew(id, m.text, false, { forwarded: true });
@@ -2883,6 +2898,7 @@
     decrypt: (m, bytes) => state.e2ee.decrypt(m, bytes),
     limits: () => state.config?.limits?.media,
     toast,
+    nativeSave: (blob, name) => native.saveFile(blob, name),
   });
   $('#attach-input').accept = attachments.ACCEPT;
   $('#btn-attach').addEventListener('click', () => $('#attach-input').click());
@@ -2917,12 +2933,9 @@
       const v = await asked;
       if (!v) { URL.revokeObjectURL(url); continue; }
       const caption = String(v.caption || '').trim();
-      sendNew(convId, caption, false, {
-        ...takeReply(convId),
-        type: 'media',
-        upload: info.blob,
-        media: { kind: info.kind, name: info.name, mime: info.mime, size: info.size, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb, localUrl: url },
-      });
+      const media = { kind: info.kind, name: info.name, mime: info.mime, size: info.size, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb, localUrl: url };
+      Object.defineProperty(media, 'localBlob', { value: info.blob, enumerable: false }); // not saved or sent
+      sendNew(convId, caption, false, { ...takeReply(convId), type: 'media', upload: info.blob, media });
     }
   }
 
@@ -3053,11 +3066,29 @@
   // person to sign in here would otherwise get the previous person's notifications) and only restored when this
   // account turned notifications on in this browser.
 
-  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+  const webPushOk = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
   const pushFlag = () => `chat.push.${state.me?.username}`;
+
+  /** The Android app (a native shell around this app): notifications through Firebase, the Back button, saving files. */
+  function handleBack() {
+    if (!$('#modal').classList.contains('hidden')) { $('#modal-cancel').click(); return true; }
+    const viewer = document.querySelector('.media-viewer');
+    if (viewer) { viewer.remove(); return true; }
+    const panel = [...document.querySelectorAll('.panel.overlay')].filter((p) => !p.classList.contains('hidden')).pop();
+    if (panel) { panel.classList.add('hidden'); return true; }
+    if (state.activeId && $('#app').classList.contains('chat-open')) { closeChat(); return true; }
+    return false; // nothing to close: the app goes to the background
+  }
+  const native = window.createNative({
+    emit, toast, storage, flagKey: pushFlag, onBack: handleBack,
+    openChat: (id) => openChat(id),
+    hasChat: (id) => state.conversations.has(id),
+  });
+  const pushSupported = () => native.isNative || webPushOk();
+  native.start();
   let swReady = null;
   function serviceWorkerReady() {
-    if (!pushSupported()) return Promise.resolve(null);
+    if (!webPushOk()) return Promise.resolve(null);
     swReady ||= navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).catch(() => null);
     return swReady;
   }
@@ -3069,6 +3100,7 @@
   async function pushStatus() {
     const cfg = await emit('push:config');
     state.notif = cfg;
+    if (native.isNative) return { cfg, reg: null, sub: null, on: !!cfg.native && native.isOn() };
     const reg = await serviceWorkerReady();
     const sub = reg ? await reg.pushManager.getSubscription() : null;
     return { cfg, reg, sub, on: !!sub && Notification.permission === 'granted' && storage.get(pushFlag()) === sub.endpoint };
@@ -3096,10 +3128,11 @@
       toast(err.message);
       return;
     }
-    const blocked = Notification.permission === 'denied';
+    const blocked = !native.isNative && Notification.permission === 'denied';
     btn.dataset.state = st.on ? 'on' : 'off';
     btn.textContent = st.on ? 'Turn off' : 'Turn on';
-    btn.disabled = !st.cfg.enabled || (blocked && !st.on);
+    btn.disabled = !st.cfg.enabled || (blocked && !st.on) || (native.isNative && !st.cfg.native);
+    if (native.isNative && st.cfg.enabled && !st.cfg.native) help.textContent = 'Notifications for the app are not set up on this server yet (the administrator has to add the Firebase key).';
     test.classList.toggle('hidden', !st.on);
     prefs.classList.toggle('hidden', !st.on);
     if (!st.cfg.enabled) status.textContent = 'Notifications are turned off by the administrator.';
@@ -3122,7 +3155,10 @@
     const btn = $('#btn-notif-toggle');
     btn.disabled = true;
     try {
-      if (btn.dataset.state === 'on') {
+      if (native.isNative) {
+        if (btn.dataset.state === 'on') { await native.disable(); toast('Notifications are off on this device'); }
+        else { await native.enable(); toast('Notifications are on for this device'); }
+      } else if (btn.dataset.state === 'on') {
         const st = await pushStatus();
         if (st.sub) {
           await emit('push:unsubscribe', { endpoint: st.sub.endpoint });
@@ -3175,7 +3211,7 @@
 
   /** A message arrived while this tab is hidden: the server sends no push to someone who is connected, so show it here. */
   function localNotify(msg, conv) {
-    if (document.visibilityState !== 'hidden' || !pushSupported() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
+    if (document.visibilityState !== 'hidden' || !webPushOk() || native.isNative || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
     const prefs = state.notif?.preferences || { messages: true, preview: true };
     if (!prefs.messages || msg.type === 'call' || msg.type === 'system') return;
     const generic = conv.locked || conv.hidden || !prefs.preview;
@@ -3188,7 +3224,7 @@
   }
 
   function localNotifyCall(call) {
-    if (document.visibilityState !== 'hidden' || !pushSupported() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
+    if (document.visibilityState !== 'hidden' || !webPushOk() || native.isNative || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
     if (state.notif?.preferences && !state.notif.preferences.calls) return;
     const conv = state.conversations.get(call.convId);
     const generic = conv?.locked || conv?.hidden || state.notif?.preferences?.preview === false;
@@ -3208,7 +3244,8 @@
   async function resyncPush() {
     const cfg = await emit('push:config');
     state.notif = cfg;
-    if (!cfg.enabled || !pushSupported() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
+    if (native.isNative) { if (cfg.enabled && cfg.native) await native.resync(); return; }
+    if (!cfg.enabled || !webPushOk() || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
     const reg = await serviceWorkerReady();
     const sub = reg && await reg.pushManager.getSubscription();
     if (sub && sub.endpoint === storage.get(pushFlag())) {
@@ -3601,7 +3638,7 @@
 
   /** After sign-in: pick up where the person left off. */
   function resumeNotificationsAndLocation() {
-    if (pushSupported()) serviceWorkerReady();
+    if (webPushOk()) serviceWorkerReady();
     resyncPush().catch(() => {});
     // Opened from a notification: go to that chat.
     const wanted = new URLSearchParams(location.search).get('open');
@@ -3625,7 +3662,9 @@
   async function detachNotificationsAndLocation() {
     try {
       if (liveShare.id) await stopLive();
-      if (state.me && storage.get(pushFlag()) != null && pushSupported()) {
+      if (native.isNative) {
+        await native.disable();
+      } else if (state.me && storage.get(pushFlag()) != null && webPushOk()) {
         const reg = await serviceWorkerReady();
         const sub = reg && await reg.pushManager.getSubscription();
         if (sub && state.socket?.connected) await emit('push:unsubscribe', { endpoint: sub.endpoint }).catch(() => {});

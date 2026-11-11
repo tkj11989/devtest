@@ -1,0 +1,27 @@
+{
+  "name": "vartiq-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VartiQ for Android (and iPhone): the web app in a native shell, with native notifications.",
+  "scripts": {
+    "sync": "cap sync",
+    "android": "cap open android",
+    "run:android": "cap run android",
+    "icons": "node scripts/make-icons.js",
+    "doctor": "cap doctor"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/push-notifications": "^8.0.0",
+    "@capacitor/share": "^8.0.3",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.0.0"
+  }
+}

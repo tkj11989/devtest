@@ -1195,13 +1195,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     '/push': {
       get: op(T.push, 'Notification settings and the key to subscribe with', {
         description: 'Browsers: ask permission (from a button tap), subscribe with `applicationServerKey` = `publicKey`, then `PUT /push/subscription`. `enabled` is false when the administrator turned notifications off.',
-        responses: { 200: ok(obj({ enabled: { type: 'boolean' }, publicKey: { type: ['string', 'null'] }, devices: { type: 'integer' }, preferences: ref('PushPreferences') })), ...errors(401) },
+        responses: { 200: ok(obj({ enabled: { type: 'boolean' }, publicKey: { type: ['string', 'null'] }, native: { type: 'boolean', description: 'this server can send notifications to the Android app' }, devices: { type: 'integer' }, preferences: ref('PushPreferences') })), ...errors(401) },
       }),
     },
     '/push/subscription': {
       put: op(T.push, 'Save this device\'s push subscription', {
-        description: 'Send the object from `PushManager.subscribe()` (`toJSON()`). Only addresses of the browser makers\' push services (Google, Mozilla, Apple, Microsoft) are accepted. Up to 8 devices per account.',
-        body: jsonBody(obj({ subscription: obj({ endpoint: { type: 'string' }, keys: obj({ p256dh: { type: 'string' }, auth: { type: 'string' } }, ['p256dh', 'auth']) }, ['endpoint', 'keys']), userAgent: { type: 'string' } }, ['subscription'])),
+        description: 'A browser sends the object from `PushManager.subscribe()` (`toJSON()`) as `subscription`; the Android app sends its `fcmToken` (needs `native: true` in `GET /push`). Only addresses of the browser makers\' push services (Google, Mozilla, Apple, Microsoft) are accepted. Up to 8 devices per account.',
+        body: jsonBody(obj({ subscription: obj({ endpoint: { type: 'string' }, keys: obj({ p256dh: { type: 'string' }, auth: { type: 'string' } }, ['p256dh', 'auth']) }, ['endpoint', 'keys']), userAgent: { type: 'string' }, fcmToken: { type: 'string', description: 'for the Android app instead of `subscription`: its Firebase Cloud Messaging token' }, platform: { type: 'string', enum: ['android', 'ios'] } })),
         responses: { 200: ok(obj({ devices: { type: 'integer' }, preferences: ref('PushPreferences') })), ...errors(400, 401, 403) },
       }),
     },

@@ -295,6 +295,9 @@ PLAN_CURRENCY=INR
 TRANSLATE_WEBHOOK_URL=https://...
 TRANSLATE_WEBHOOK_TOKEN=...
 
+# ---- notifications for the Android app (see mobile/README.md): the Firebase service-account key, mode 640 owner root group vartiq
+# FCM_SERVICE_ACCOUNT=/etc/vartiq/fcm.json
+
 # ---- account deletion: how long after the request the data is erased (never more than 24 hours)
 ACCOUNT_ERASE_DELAY_MS=3600000
 ```

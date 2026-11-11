@@ -905,11 +905,12 @@ class Store {
   }
 
   /** Save (or refresh) a device's subscription. The same endpoint is one device; the oldest are dropped past the limit. */
-  addPushSub(username, { endpoint, p256dh, auth }, userAgent = '') {
+  addPushSub(username, { endpoint, p256dh, auth, fcm, platform }, userAgent = '') {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
     const subs = (u.pushSubs || []).filter((s) => s.endpoint !== endpoint);
-    const sub = { id: crypto.randomBytes(6).toString('hex'), endpoint, keys: { p256dh, auth }, createdAt: Date.now(), ua: String(userAgent || '').slice(0, 120) };
+    // A browser (Web Push: keys) or a native app (FCM token in the endpoint, no keys).
+    const sub = { id: crypto.randomBytes(6).toString('hex'), endpoint, ...(fcm ? { fcm: true, platform } : { keys: { p256dh, auth } }), createdAt: Date.now(), ua: String(userAgent || '').slice(0, 120) };
     subs.push(sub);
     while (subs.length > Store.PUSH_MAX_DEVICES) subs.shift();
     u.pushSubs = subs;

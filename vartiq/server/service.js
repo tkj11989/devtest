@@ -1632,16 +1632,17 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return {
         enabled: !!push && push.enabled(),
         publicKey: push && push.enabled() ? push.publicKey() : null,
+        native: !!push && push.fcmAvailable(), // can the Android app get notifications from this server?
         devices: store.pushSubs(me).length,
         preferences: store.pushPrefs(me),
       };
     },
 
     /** Save this browser's push subscription (the person allowed notifications). */
-    pushSubscribe(me, { subscription, userAgent }) {
+    pushSubscribe(me, { subscription, fcmToken, platform, userAgent }) {
       if (!push) throw new ApiError(503, 'unavailable', 'Notifications are not available on this server');
       try {
-        const devices = push.subscribe(me, subscription, userAgent);
+        const devices = fcmToken ? push.subscribeNative(me, { token: fcmToken, platform }, userAgent) : push.subscribe(me, subscription, userAgent);
         return { devices, preferences: store.pushPrefs(me) };
       } catch (err) {
         throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
