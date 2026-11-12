@@ -474,6 +474,16 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Reactions** (👍 ❤️ 😂 😮 😢 🙏): one each, change or take back; chips show under the message with a count, and everybody in the chat sees them live. Reactions are readable by the server. API: `PUT /messages/{id}/reaction`.
 - **Forward** sends a copy to up to 5 other chats, marked "Forwarded" (text, photos, videos, documents and voice notes; the app re-encrypts for each chat). **Copy text** is there too.
 
+**Chat settings.** Chat menu (⋮) or right-click / long press a chat in the list: **Mute** (1 hour, 8 hours, 1 week or always; the chat makes no push sound, the unread badge turns grey), **Archive** (moves it out of the list into "Archived"; a new message brings it back, unless it is muted) and **Mark as unread** (a blue dot). **Drafts**: what you typed and did not send is kept per chat on this device and shown as "Draft:" in the list (it is deleted when you send, and with "Chats on this device" off nothing is kept). Settings are saved per person (`PUT /conversations/{id}/preferences`), so they follow you to other devices.
+
+**Edit and pin.** **Edit** your own text message within **15 minutes** (up to 10 times); it shows *edited*. Encrypted messages are edited by sending a new encrypted version; the old words are not kept (`PUT /messages/{id}`, event `message:edited`). **Pin** up to 3 messages per chat (in a group only admins); a bar under the chat header shows the pinned message, the arrow cycles through them and tapping it jumps to the message (`PUT /messages/{id}/pin`, `GET /conversations/{id}/pins`, event `chat:pins`). A deleted message is unpinned.
+
+**@mentions (groups).** Typing `@` in a group offers the members; tagged people are highlighted, the chat shows an **@** badge for them, and they get a push notification **even if the chat is muted** ("Ann mentioned you"). The server stores who is tagged (`mentions` on the message, at most 10, members only); the words stay encrypted in encrypted chats.
+
+**Link previews.** Off by default and switched on per device (Profile → Link previews). When you send a link, the app asks the server (`POST /link-preview`) for the title, description and a small picture (up to 60 KB), and sends them with the message (inside the encrypted message in encrypted chats), so the recipient never contacts the website. The server fetches only public web addresses (http/https, ports 80/443/8080/8443; never private networks, checked at connect time against DNS tricks; 3 redirects; 5 seconds; 300 KB), 60 previews an hour per person; the server **does see the links you preview, even in encrypted chats**, which the Privacy Notice says. Admin: feature switch "Link previews".
+
+**Stickers.** The smiley button has a *Stickers* tab with 8 ready-made packs (96 large emoji stickers); one tap sends it on its own (`sticker: true`, `text` is one emoji). Searching GIFs needs an outside GIF service and key, so it is not included; GIF files can be sent as pictures.
+
 **Search.** The box above the chat list also searches messages. The server finds messages **it can read** (plain chats, captions, document names, poll questions; API `GET /search/messages`); **encrypted chats are searched on the device** (the chats opened and the copies saved on the device, decrypted as they are searched). Tapping a result opens the chat at that message, loading older messages as needed. Hidden and locked chats are not searched.
 
 ## Business assistant (bot)
@@ -849,6 +859,11 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `chatlock:relock`   | Lock every chat unlocked in this session again |
 | `messages:read`     | Mark a chat as read                      |
 | `message:delete`    | Delete my message                        |
+| `message:edit`      | Edit my message (`id`, `text` or `e2ee`) within 15 minutes |
+| `message:pin`       | Pin or unpin (`id`, `pinned`)            |
+| `pins:get`          | The pinned messages of a chat            |
+| `chat:pref`         | Mute, archive, mark unread (`convId`, ...) |
+| `link:preview`      | Title and picture of a link (`url`)      |
 | `typing`            | Typing or recording started/stopped (`activity`) |
 | `profile:update`    | Change display name / about              |
 | `me:contact-code` / `me:contact-verify` | Send a code to a new mobile number/email, then save it |
@@ -858,7 +873,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `call:hold`         | Put the call on hold / resume            |
 | `call:end`          | Leave / hang up                          |
 
-Server → client: `message:new`, `message:status`, `message:deleted`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended), `guardian:update` (a parent or guardian agreed or changed what is allowed), `photos:update` (my photos changed on another device, or one was hidden).
+Server → client: `message:new`, `message:status`, `message:deleted`, `message:edited`, `chat:pins`, `chat:prefs`, `conversation:new`, `hidden:update`, `presence`, `typing`, `user:updated`, `message:starred`, `blocked:update`, `call:incoming`, `call:joined`, `call:left`, `call:signal`, `call:hold`, `call:ended`, `call:state`, `status:new`, `status:viewed`, `status:deleted`, `location:update` (a live position moved or ended), `guardian:update` (a parent or guardian agreed or changed what is allowed), `photos:update` (my photos changed on another device, or one was hidden).
 
 Voice-message audio and status photos are downloaded from `GET /media/:id` with an `Authorization: Bearer <token>` header; only members of the chat can fetch it.
 

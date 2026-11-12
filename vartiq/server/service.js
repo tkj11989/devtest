@@ -14,6 +14,7 @@ const photoRules = require('./photos');
 const BusinessHours = require('../public/business-hours.js');
 const { createCampaigns } = require('./campaigns');
 const botRules = require('./bot');
+const { cleanPreview, allowedUrl } = require('./linkpreview');
 const mediaRules = require('./media');
 
 /** An error with an HTTP status and a stable machine-readable code (used by the REST API). */
@@ -38,7 +39,7 @@ const PAGE_MAX = 100;
  *
  * Each action is `(me, payload) => result` and throws on bad input.
  */
-function createService({ store, io, isOnline, linking, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl = process.env.PUBLIC_URL, accountEraseDelayMs = 60 * 60 * 1000 }) {
+function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl = process.env.PUBLIC_URL, accountEraseDelayMs = 60 * 60 * 1000 }) {
   const userRoom = (u) => `user:${u}`;
 
   /** A feature that sends data to an outside service only works once the person has agreed to that (code `consent_<id>`). */
@@ -626,6 +627,15 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     return { id, from: orig.from, kind, ...quote };
   };
 
+  const previewLog = new Map(); // username -> times of recent link previews
+
+  /** Who a message tags with @ (groups only): members other than the sender, at most 10, no repeats; anything else is dropped. */
+  const resolveMentions = (conv, me, mentions) => {
+    if (conv.type !== 'group' || !Array.isArray(mentions)) return undefined;
+    const out = [...new Set(mentions.map(String))].filter((u) => u !== me && conv.members.includes(u)).slice(0, 10);
+    return out.length ? out : undefined;
+  };
+
   // ---------- business automatic replies ----------
 
   const BOT_QUIET_AFTER_HUMAN_MS = 60 * 60 * 1000; // a person answered lately: the assistant keeps out of it
@@ -1145,6 +1155,17 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
      * and whom a guardian does not keep from new people are returned, with the same public view of them as anywhere else. At most 1000
      * numbers per call, 20 calls and 5000 numbers a day.
      */
+    async linkPreview(me, { url } = {}) {
+      const target = typeof url === 'string' ? (linkPreviewer?.allowed(url) || allowedUrl(url)) : null;
+      if (!target) throw new ApiError(400, 'invalid_request', 'Send a link that starts with http:// or https://');
+      const now = Date.now();
+      const log = (previewLog.get(me) || []).filter((t) => now - t < 60 * 60 * 1000);
+      if (log.length >= 60) throw new ApiError(429, 'rate_limited', 'Too many link previews. Try again later.');
+      log.push(now);
+      previewLog.set(me, log);
+      return { preview: (await linkPreviewer?.preview(target.href)) || null };
+    },
+
     contactsMatch(me, { hashes } = {}) {
       if (!Array.isArray(hashes) || !hashes.length) throw new ApiError(400, 'invalid_request', 'Send a list of fingerprints');
       if (hashes.length > 1000) throw new ApiError(400, 'too_many', 'Send at most 1000 numbers at a time');
@@ -1367,12 +1388,13 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { ok: true };
     },
 
-    sendText(me, { convId, text, masked, clientId, e2ee, replyTo, forwarded }, ctx) {
+    sendText(me, { convId, text, masked, clientId, e2ee, replyTo, forwarded, mentions, preview, sticker }, ctx) {
       const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
       // With `e2ee` the text is inside the encrypted envelope and the server never sees it.
       const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
-      return { message: sendMessage(me, convId, env ? '' : text, { masked: !!masked, clientId, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded }) };
+      if (sticker && !env && (typeof text !== 'string' || !text.trim() || [...text].length > 8)) throw new ApiError(400, 'invalid_request', 'A sticker is one emoji');
+      return { message: sendMessage(me, convId, env ? '' : text, { sticker: sticker === true, masked: !!masked, clientId, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded, mentions: resolveMentions(conv, me, mentions), preview: env || masked || !store.featureOn('linkPreviews') ? undefined : cleanPreview(preview, linkPreviewer?.anyPort) || undefined }) };
     },
 
     // ----- photos, videos and documents -----
@@ -2334,6 +2356,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     sendPoll: 'polls', votePoll: 'polls',
     sendEvent: 'events', rsvpEvent: 'events', updateEvent: 'events',
     contactsMatch: 'contactDiscovery',
+    linkPreview: 'linkPreviews',
     campaignCreate: 'bulkMessaging', campaignRetry: 'bulkMessaging', // reports, cancelling and stopping messages from a business always work
   };
   const assertFeature = (id) => {

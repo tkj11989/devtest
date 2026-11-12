@@ -111,6 +111,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       updatedAt: { type: 'integer' },
     }, ['id', 'name', 'price', 'available']),
     Catalogue: obj({ owner: { type: 'string' }, currency: { type: 'string', example: 'INR' }, products: arrayOf(ref('Product')) }, ['owner', 'currency', 'products']),
+    LinkPreview: obj({ url: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, site: { type: 'string' }, image: { type: 'string', description: 'a small picture as a `data:` URL (left out when the page picture is bigger than 60 KB)' } }, ['url', 'title']),
     Envelope: obj({
       v: { const: 1 },
       sd: { type: 'string', description: 'id of the sending device' },
@@ -208,6 +209,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       replyTo: obj({ id: { type: 'string' }, from: { type: 'string' }, kind: { type: 'string', description: 'text, voice, image, video, file, location, poll or event' }, text: { type: 'string', description: 'a short quote; only when neither message is end-to-end encrypted (otherwise it is inside the envelope)' } }, ['id', 'from', 'kind']),
       forwarded: { type: 'boolean', description: 'sent on from another chat' },
       edited: { type: 'integer', description: 'when it was last edited (ms since 1970)' },
+      mentions: arrayOf({ type: 'string' }),
+      sticker: { type: 'boolean' },
+      preview: ref('LinkPreview'),
       reactions: { type: 'object', additionalProperties: { type: 'string' }, description: 'username -> the emoji they chose (one each)' },
       media: obj({
         mediaId: { type: 'string', description: 'download with `GET /media/{id}`' },
@@ -896,7 +900,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.msg, 'Send a text message', {
         description: 'Send `Idempotency-Key` (or `clientId` in the body) to make retries safe: the same key returns the original message instead of sending twice.\n\nPlain `text` sent through the API is **not** end-to-end encrypted (the server sees it, and it is shown to recipients as unencrypted). To send an end-to-end encrypted message, encrypt on your own device and send an `e2ee` envelope instead of `text` (see **Encryption**). A stale device list answers `409 keys_changed`: fetch `GET /conversations/{id}/keys` and encrypt again.',
         params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
-        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' }, e2ee: ref('Envelope'), replyTo: { type: 'string', description: 'id of a message in this chat that this one answers (`400` if it is not there)' }, forwarded: { type: 'boolean', description: 'mark as sent on from another chat' } }), { text: 'Hello from the API 👋' }),
+        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, masked: { type: 'boolean' }, clientId: { type: 'string' }, e2ee: ref('Envelope'), replyTo: { type: 'string', description: 'id of a message in this chat that this one answers (`400` if it is not there)' }, forwarded: { type: 'boolean', description: 'mark as sent on from another chat' }, sticker: { type: 'boolean', description: 'send `text` (one emoji) as a large sticker' }, preview: { allOf: [ref('LinkPreview')], description: 'plain messages only: what `POST /link-preview` returned for a link in the text (encrypted messages carry it inside the encrypted part)' }, mentions: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'groups only: usernames of members tagged with @ (they are notified even if they muted the chat; others are ignored)' } }), { text: 'Hello from the API 👋' }),
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423, 429) },
       }),
     },
@@ -947,6 +951,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         ],
         body: { required: true, content: { 'audio/*': { schema: { type: 'string', format: 'binary' } } } },
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
+      }),
+    },
+    '/link-preview': {
+      post: op(T.msg, 'Get the title and picture of a link', {
+        description: 'The sender\'s app asks for this before sending a message with a link, then attaches the result as `preview` (inside the encrypted message in encrypted chats). The server fetches the page itself (public web addresses only, a few seconds, small downloads), so the person who receives the message never contacts the website. 60 requests an hour per person. `preview` is `null` when the page has nothing to show. The administrator can switch link previews off.',
+        body: jsonBody(obj({ url: { type: 'string' } }, ['url']), { url: 'https://example.com/' }),
+        responses: { 200: ok(obj({ preview: { oneOf: [ref('LinkPreview'), { type: 'null' }] } }, ['preview'])), ...errors(400, 401, 403, 429) },
       }),
     },
     '/contacts/match': {
@@ -1606,6 +1617,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /hidden-contacts/{username}': 'hideContactChat',
     'post /conversations/{id}/location': 'shareLocation',
     'post /contacts/match': 'matchContacts',
+    'post /link-preview': 'linkPreview',
     'put /me/privacy/findable': 'setFindableByPhone',
     'get /me/business/bot': 'getBusinessBot',
     'put /me/business/bot': 'setBusinessBot',

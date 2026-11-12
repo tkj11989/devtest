@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-11-12';
+const VERSION = '2026-11-13';
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -154,6 +154,8 @@ function privacyNotice() {
         'Messages sent through the {brand} developer API (for example by a bot or another platform), and automatic business replies, are stored as readable text.',
         'Chats with a business that answers with an automatic assistant are not end-to-end encrypted: the assistant reads the messages customers send so it can answer them, and its replies are stored as readable text.',
         'Find friends (only when you use it): the app turns the phone numbers you choose from your contacts into fingerprints (SHA-256) on your device and sends only those; we compare them with our accounts to show you which of your contacts are here, and we do not keep what you send. People can be found this way unless they turn it off.',
+        'Link previews (only when you turn them on): when you send a link, our server opens the page to get its title and a small picture and sends them with your message. Our server therefore sees that link, even in an encrypted chat; the people who receive the message do not contact the website.',
+        'In groups, the people you tag with @ are visible to our servers, and so is whether a message is a sticker or was edited; the words themselves stay encrypted in encrypted chats.',
         'Public channel posts, status updates, profile and business details, group names, and the names of people in a chat are visible to our servers (and to the people allowed to see them).',
         'Locations you share in the web app are end-to-end encrypted like messages. A location shared through the developer API is stored as readable coordinates.',
         'Profile photos are not end-to-end encrypted: the people you allow can see them, and our moderators can see a photo that has been reported.',

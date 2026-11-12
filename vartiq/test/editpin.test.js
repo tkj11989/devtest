@@ -97,3 +97,34 @@ test('pin: in a group only an admin can pin', async (t) => {
   assert.strictEqual((await call(bob.s, 'message:pin', { id: m.id, pinned: true })).code, 'forbidden');
   assert.ok((await call(ann.s, 'message:pin', { id: m.id, pinned: true })).ok);
 });
+
+test('mentions: only group members are tagged, not yourself, at most 10; the chat list shows an unread mention', async (t) => {
+  const { store, ann, bob, cat, dm, rest } = await setup(t);
+  const g = store.createGroup('ann', 'Team', ['bob', 'cat']);
+  const sent = await call(ann.s, 'message:send', { convId: g.id, text: '@bob @cat @ann @zed hi', mentions: ['bob', 'cat', 'ann', 'zed', 'bob'] });
+  assert.ok(sent.ok, sent.error);
+  assert.deepStrictEqual(sent.message.mentions, ['bob', 'cat']);
+  assert.strictEqual(store.summarize(g, 'bob').mentioned, true);
+  assert.strictEqual(store.summarize(g, 'ann').mentioned, undefined);
+  store.markRead(g.id, 'bob');
+  assert.strictEqual(store.summarize(g, 'bob').mentioned, undefined);
+  // Not in a one-to-one chat; none at all when the list is empty or invalid.
+  assert.strictEqual((await call(ann.s, 'message:send', { convId: dm.id, text: '@bob', mentions: ['bob'] })).message.mentions, undefined);
+  assert.strictEqual((await call(ann.s, 'message:send', { convId: g.id, text: 'x', mentions: 'bob' })).message.mentions, undefined);
+  const viaRest = await rest(ann.token, 'POST', `/conversations/${g.id}/messages`, { text: '@cat', mentions: ['cat'] });
+  assert.deepStrictEqual(viaRest.body.message.mentions, ['cat']);
+  void cat;
+});
+
+test('stickers: one emoji sent large; anything longer is refused; the flag survives to the other side', async (t) => {
+  const { ann, bob, dm, rest } = await setup(t);
+  const heard = once(bob.s, 'message:new');
+  const res = await call(ann.s, 'message:send', { convId: dm.id, text: '🎉', sticker: true });
+  assert.ok(res.ok, res.error);
+  assert.strictEqual(res.message.sticker, true);
+  assert.strictEqual((await heard).message.sticker, true);
+  assert.strictEqual((await call(ann.s, 'message:send', { convId: dm.id, text: 'a long text instead of one emoji', sticker: true })).code, 'invalid_request');
+  assert.strictEqual((await call(ann.s, 'message:send', { convId: dm.id, text: 'hello' })).message.sticker, undefined);
+  const viaRest = await rest(ann.token, 'POST', `/conversations/${dm.id}/messages`, { text: '🙏', sticker: true });
+  assert.strictEqual(viaRest.body.message.sticker, true);
+});

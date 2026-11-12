@@ -302,9 +302,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     before: req.query.before,
     limit: req.query.limit,
   }, req.ctx)));
-  router.post('/conversations/:id/messages', ...authed, json, run((req) => {
+  router.post('/conversations/:id/messages', ...authed, json2m, run((req) => {
     const { text, masked } = req.body || {};
-    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req), e2ee: req.body?.e2ee, replyTo: req.body?.replyTo, forwarded: req.body?.forwarded }, req.ctx);
+    return actions.sendText(req.user, { convId: p(req, 'id'), text, masked, clientId: idempotency(req), e2ee: req.body?.e2ee, replyTo: req.body?.replyTo, forwarded: req.body?.forwarded, mentions: req.body?.mentions, preview: req.body?.preview, sticker: req.body?.sticker }, req.ctx);
   }, 201));
   router.post('/conversations/:id/voice', ...authed,
     express.raw({ type: () => true, limit: '3mb' }),
@@ -443,6 +443,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   // ---------- find friends from phone contacts ----------
 
+  router.post('/link-preview', ...authed, json, run((req) => actions.linkPreview(req.user, { url: req.body?.url }, req.ctx)));
   router.post('/contacts/match', ...authed, json2m, run((req) => actions.contactsMatch(req.user, { hashes: req.body?.hashes }, req.ctx)));
   router.put('/me/privacy/findable', ...authed, json, run((req) => actions.setFindable(req.user, { byPhone: req.body?.byPhone }, req.ctx)));
 

@@ -2929,6 +2929,7 @@ class Store {
       ...conv,
       lastMessage: last ? this.viewFor(last, username) : null,
       unread,
+      ...(conv.type === 'group' && msgs.some((m) => m.from !== username && !m.readBy.includes(username) && m.mentions?.includes(username)) ? { mentioned: true } : {}),
       ...(Object.keys(this.chatPrefs(username, conv.id)).length ? { prefs: this.chatPrefs(username, conv.id) } : {}),
       ...(this.translateTo(username, conv.id) ? { translateTo: this.translateTo(username, conv.id) } : {}),
     };
@@ -3236,7 +3237,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -3277,6 +3278,9 @@ class Store {
     }
     if (replyTo) msg.replyTo = replyTo; // { id, from, kind, text? }: the message this one answers
     if (forwarded) msg.forwarded = true;
+    if (sticker) msg.sticker = true; // a sticker: `text` is one large emoji (inside the encrypted part in encrypted chats)
+    if (preview) msg.preview = preview; // { url, title, description?, site?, image? } of a link in the text (plain messages only)
+    if (mentions?.length) msg.mentions = mentions; // usernames tagged with @ in a group (metadata: the text may be encrypted)
     if (media) { msg.type = 'media'; msg.media = media; } // a photo, video or document; the caption is `text`
     if (poll) { msg.type = 'poll'; msg.poll = poll; }
     if (event) { msg.type = 'event'; msg.event = event; }

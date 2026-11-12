@@ -251,7 +251,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
       } else {
         if (!prefs.messages) return;
         if (msg.type === 'system') return;
-        if (store.isMuted(to, conv.id)) return; // a muted chat makes no sound
+        if (store.isMuted(to, conv.id) && !msg.mentions?.includes(to)) return; // a muted chat makes no sound, except for @mentions
       }
       const who = namesFor(conv, msg, to);
       if (!who.generic) {
@@ -261,7 +261,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
           const what = msg.type === 'media' ? ({ image: 'Photo', video: 'Video', file: 'Document' }[msg.media?.kind] || 'File') : (LABEL[msg.type] || 'New message');
           if (who.group) {
             title = who.group;
-            body = msg.type === 'call' ? `${who.sender}: ${body}` : `${who.sender}: ${what}`;
+            body = msg.type === 'call' ? `${who.sender}: ${body}` : msg.mentions?.includes(to) ? `${who.sender} mentioned you` : `${who.sender}: ${what}`;
           } else {
             title = who.sender;
             if (msg.type !== 'call') body = what;

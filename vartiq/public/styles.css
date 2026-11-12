@@ -488,11 +488,19 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color:
   border-radius: 10px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, .2);
   padding: 8px;
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 2px;
   z-index: 3;
 }
+.picker-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+.picker-grid.hidden, .picker-stickers.hidden { display: none; }
+.picker-tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+.picker-tabs button { flex: 1; font-size: 13px !important; padding: 4px 8px !important; border-bottom: 2px solid transparent !important; border-radius: 0 !important; }
+.picker-tabs button.active { border-bottom-color: #0670de !important; font-weight: 600; }
+.picker-stickers { max-height: 260px; overflow-y: auto; }
+.sticker-pack-name { font-size: 12px; opacity: .7; margin: 6px 2px 2px; }
+.sticker-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+.emoji-picker .sticker-btn { font-size: 40px; padding: 2px; }
+.msg.sticker-bubble { background: transparent !important; box-shadow: none !important; }
+.sticker-text { font-size: 64px; line-height: 1.1; display: block; }
 .emoji-picker button { background: none; border: 0; font-size: 22px; padding: 4px; border-radius: 6px; }
 .emoji-picker button:hover { background: var(--hover); }
 
@@ -1629,3 +1637,16 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .pin-bar-body{flex:1;min-width:0;display:flex;gap:8px;align-items:center;background:none;border:0;text-align:left;cursor:pointer;color:inherit;font:inherit}
 .pin-bar-label{font-weight:600;font-size:.8em;white-space:nowrap}
 .pin-bar-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.85}
+
+.mention{color:#0670de;font-weight:600}
+.mention.me{background:rgba(6,112,222,.15);border-radius:4px;padding:0 2px}
+.badge.mention{background:#0670de;margin-right:4px}
+.mention-list{list-style:none;margin:0;padding:4px 0;position:absolute;bottom:100%;left:8px;right:8px;background:#fff;border:1px solid rgba(0,0,0,.15);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:20}
+.mention-list.hidden{display:none}
+.mention-item{padding:8px 12px;cursor:pointer}
+.mention-item:hover{background:rgba(6,112,222,.08)}
+
+.link-preview{display:flex;flex-direction:column;gap:2px;margin:4px 0 2px;border-radius:8px;overflow:hidden;background:rgba(0,0,0,.06);text-decoration:none;color:inherit;max-width:320px}
+.link-preview-img{width:100%;max-height:180px;object-fit:cover;display:block}
+.link-preview-body{display:flex;flex-direction:column;padding:6px 10px 8px;gap:2px}
+.link-preview-desc{font-size:.9em;opacity:.85;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}

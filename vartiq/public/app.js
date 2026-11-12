@@ -227,6 +227,7 @@
     try {
       const { payload } = await state.e2ee.decrypt(m);
       if (m.type !== 'voice') m.text = payload.t ?? '';
+      if (payload.lp && typeof payload.lp === 'object') m.preview = { url: String(payload.lp.url || ''), title: String(payload.lp.title || ''), description: payload.lp.description, site: payload.lp.site, image: payload.lp.image };
       if (m.type === 'location') m.loc = window.Place.clean(payload.loc);
       if (m.type === 'media' && m.media) Object.assign(m.media, payload.media || {}); // name, type, size of picture, preview: inside the envelope
       if (m.replyTo && payload.q !== undefined) m.replyTo.text = payload.q;
@@ -1711,6 +1712,7 @@
         preview.append(el('span', 'draft-label', 'Draft: '), draft.slice(0, 80));
       }
       bottom.appendChild(preview);
+      if (c.unread && c.mentioned) bottom.appendChild(el('span', 'badge mention', '@'));
       if (c.unread) bottom.appendChild(el('span', `badge${c.prefs?.muted ? ' quiet' : ''}`, String(c.unread)));
       else if (c.prefs?.unread) bottom.appendChild(el('span', 'badge dot', ''));
       if (isMutedNow(c)) top.insertBefore(el('span', 'muted-icon', '🔕'), top.querySelector('.time'));
@@ -2147,6 +2149,7 @@
     const conv = state.conversations.get(id);
     if (!conv || document.hidden || isLockedView(conv)) return;
     conv.unread = 0;
+    delete conv.mentioned;
     emit('messages:read', { convId: id }).catch(() => {});
     renderChatList();
   }
@@ -2365,7 +2368,9 @@
       } else {
         // Received messages of a chat with translation on: show the translation, with a way back to the original.
         const tr = !mine && m.tr && !state.showOriginal.has(m.id) ? m.tr : null;
-        bubble.appendChild(el('span', 'text', tr ? tr.text : m.text));
+        if (m.sticker && !m.masked) bubble.classList.add('sticker-bubble');
+        bubble.appendChild(withMentions(el('span', m.sticker && !m.masked ? 'text sticker-text' : 'text', tr ? tr.text : m.text), m));
+        if (m.preview && !m.masked) { const card = previewCard(m.preview); if (card) bubble.appendChild(card); }
         if (!mine && m.tr) {
           const note = el('span', 'tr-note');
           const flip = el('button', '', tr ? 'Show original' : 'Show translation');
@@ -2618,16 +2623,18 @@
         ? { convId: msg.convId, clientId: msg.id, duration: msg.voice.duration, mime: msg.voice.mime }
         : { convId: msg.convId, masked: !!msg.masked, clientId: msg.id }),
       ...(msg.replyTo ? { replyTo: msg.replyTo.id } : {}),
+      ...(msg.mentions?.length && !voice ? { mentions: msg.mentions } : {}),
+      ...(msg.sticker && !voice ? { sticker: true } : {}),
       ...(msg.forwarded ? { forwarded: true } : {}),
     };
     const quote = msg.replyTo?.text ? { q: msg.replyTo.text } : {}; // the quote travels inside the encrypted message
     if (conv && state.e2ee?.ready && await canSeal(conv.id).catch(() => false)) {
-      const sealed = await state.e2ee.encrypt(conv, voice ? { kind: 'voice', ...quote } : { t: msg.text, ...quote }, voice ? new Uint8Array(msg.audio) : undefined);
+      const sealed = await state.e2ee.encrypt(conv, voice ? { kind: 'voice', ...quote } : { t: msg.text, ...(msg.preview ? { lp: msg.preview } : {}), ...quote }, voice ? new Uint8Array(msg.audio) : undefined);
       msg.encrypted = true;
       return voice ? { ...base, e2ee: sealed.envelope, data: sealed.media } : { ...base, e2ee: sealed.envelope };
     }
     msg.encrypted = false;
-    return voice ? { ...base, data: msg.audio } : { ...base, text: msg.text };
+    return voice ? { ...base, data: msg.audio } : { ...base, text: msg.text, ...(msg.preview ? { preview: msg.preview } : {}) };
   }
 
   /** Send (or re-send) one of my messages; failures leave it in the chat marked as failed. */
@@ -2776,6 +2783,7 @@
       maybeTranslate(conv);
     } else if (!mine && !msg.readBy.includes(state.me.username)) {
       conv.unread = (conv.unread || 0) + 1;
+      if (msg.mentions?.includes(state.me.username)) conv.mentioned = true;
     }
     // Sender stops typing once a message arrives.
     const typingMap = state.typing.get(msg.convId);
@@ -2842,8 +2850,16 @@
     autosize();
     updateComposerButtons();
     $('#emoji-picker').classList.add('hidden');
-    sendNew(state.activeId, text, state.maskNext, takeReply());
+    const tagged = mentionsIn(state.activeId, text);
+    const extra = { ...takeReply(), ...(tagged.length ? { mentions: tagged } : {}) };
+    const convId = state.activeId;
+    const masked = state.maskNext;
     setMaskNext(false);
+    // A message with a link waits (a moment) for its preview; messages stay in the order they were written.
+    sendChain = sendChain.then(async () => {
+      const preview = masked ? null : await previewFor(convId, text);
+      sendNew(convId, text, masked, preview ? { ...extra, preview } : extra);
+    });
   });
 
   // ---------- replies, reactions and forwarding ----------
@@ -2938,6 +2954,121 @@
   const closeMessageMenu = () => document.querySelector('.msg-menu')?.remove();
   document.addEventListener('click', (e) => { if (!e.target.closest?.('.msg-menu, .msg-more')) closeMessageMenu(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMessageMenu(); });
+
+  // ---------- link previews ----------
+
+  let sendChain = Promise.resolve();
+  const linkPreviewsOn = () => storage.get('chat.linkPreviews') === 'on' && state.config?.features?.linkPreviews !== false;
+  const URL_RE = /https?:\/\/[^\s<>"']+/i;
+
+  /** The preview of the first link in `text` (null: previews are off, no link, or the page has nothing to show). */
+  async function previewFor(convId, text) {
+    if (!linkPreviewsOn() || assistantChat(convId)) return null;
+    const url = (text.match(URL_RE) || [])[0]?.replace(/[.,;:!?)\]}]+$/, '');
+    if (!url) return null;
+    try {
+      const res = await Promise.race([emit('link:preview', { url }), new Promise((r) => setTimeout(() => r(null), 4000))]);
+      return res?.preview || null;
+    } catch { return null; }
+  }
+
+  /** The card under a message that has a link preview: picture, title, site. Opens the page in a new tab. */
+  function previewCard(p) {
+    let href;
+    try { const u = new URL(p.url); if (!['http:', 'https:'].includes(u.protocol)) return null; href = u.href; } catch { return null; }
+    const a = el('a', 'link-preview');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer nofollow';
+    if (typeof p.image === 'string' && /^data:image\/(jpeg|png|webp|gif);base64,/.test(p.image)) {
+      const img = el('img', 'link-preview-img');
+      img.src = p.image;
+      img.alt = '';
+      a.appendChild(img);
+    }
+    const body = el('span', 'link-preview-body');
+    body.appendChild(el('strong', '', String(p.title || '').slice(0, 140)));
+    if (p.description) body.appendChild(el('span', 'link-preview-desc', String(p.description).slice(0, 240)));
+    body.appendChild(el('small', 'muted', String(p.site || new URL(href).hostname).slice(0, 60)));
+    a.appendChild(body);
+    return a;
+  }
+
+  // ---------- @mentions in groups ----------
+
+  const MENTION_RE = /(^|[\s(])@([\p{L}\p{N}_.-]{1,32})/gu;
+
+  /** Usernames of group members the text tags with @ (the server checks them again). */
+  function mentionsIn(convId, text) {
+    const conv = state.conversations.get(convId);
+    if (conv?.type !== 'group') return [];
+    const out = new Set();
+    for (const [, , name] of text.matchAll(MENTION_RE)) {
+      const u = name.toLowerCase();
+      if (u !== state.me.username && conv.members.includes(u)) out.add(u);
+    }
+    return [...out].slice(0, 10);
+  }
+
+  /** Show @name of a tagged person as a highlighted chip inside a message's text. */
+  function withMentions(node, m) {
+    if (!m.mentions?.length || m.masked) return node;
+    const text = node.textContent;
+    node.textContent = '';
+    let last = 0;
+    for (const hit of text.matchAll(MENTION_RE)) {
+      const name = hit[2].toLowerCase();
+      if (!m.mentions.includes(name)) continue;
+      const start = hit.index + hit[1].length;
+      node.appendChild(document.createTextNode(text.slice(last, start)));
+      node.appendChild(el('span', `mention${name === state.me.username ? ' me' : ''}`, `@${hit[2]}`));
+      last = start + 1 + hit[2].length;
+    }
+    node.appendChild(document.createTextNode(text.slice(last)));
+    return node;
+  }
+
+  const mentionBox = el('ul', 'mention-list hidden');
+  mentionBox.id = 'mention-list';
+  mentionBox.setAttribute('role', 'listbox');
+  $('#composer').style.position = 'relative';
+  $('#composer').prepend(mentionBox);
+
+  /** While typing "@ab" in a group, offer the members whose name or username starts with it. */
+  function updateMentionBox() {
+    const conv = state.conversations.get(state.activeId);
+    const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+    const hit = conv?.type === 'group' ? before.match(/(^|[\s(])@([\p{L}\p{N}_.-]{0,32})$/u) : null;
+    if (!hit) return mentionBox.classList.add('hidden');
+    const q = hit[2].toLowerCase();
+    const people = conv.members.filter((u) => u !== state.me.username)
+      .filter((u) => u.startsWith(q) || displayName(u).toLowerCase().split(/\s+/).some((w) => w.startsWith(q)) || displayName(u).toLowerCase().startsWith(q))
+      .slice(0, 6);
+    mentionBox.textContent = '';
+    if (!people.length) return mentionBox.classList.add('hidden');
+    for (const u of people) {
+      const li = el('li', 'mention-item');
+      li.setAttribute('role', 'option');
+      li.append(el('strong', '', displayName(u)), el('span', 'muted', ` @${u}`));
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const at = before.length - hit[2].length - 1;
+        input.value = `${input.value.slice(0, at)}@${u} ${input.value.slice(before.length)}`;
+        const pos = at + u.length + 2;
+        input.setSelectionRange(pos, pos);
+        mentionBox.classList.add('hidden');
+        autosize();
+        updateComposerButtons();
+        saveDraft();
+        input.focus();
+      });
+      mentionBox.appendChild(li);
+    }
+    mentionBox.classList.remove('hidden');
+  }
+  input.addEventListener('input', updateMentionBox);
+  input.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) updateMentionBox(); });
+  input.addEventListener('blur', () => setTimeout(() => mentionBox.classList.add('hidden'), 150));
 
   // ---------- edit and pin ----------
 
@@ -3297,6 +3428,7 @@
 
   // emoji picker
   const picker = $('#emoji-picker');
+  const pickerEmoji = $('#picker-emoji');
   for (const em of EMOJIS) {
     const b = el('button', '', em);
     b.type = 'button';
@@ -3307,7 +3439,42 @@
       updateComposerButtons();
       input.focus();
     });
-    picker.appendChild(b);
+    pickerEmoji.appendChild(b);
+  }
+  // Stickers: one large emoji sent on its own, in a ready-made pack.
+  const STICKER_PACKS = [
+    ['Happy', ['😀', '😂', '🤣', '😍', '🥰', '😎', '🤩', '🥳', '😇', '😜', '🤗', '😋']],
+    ['Feelings', ['😢', '😭', '😡', '😱', '🥺', '😴', '🤒', '🤯', '😬', '🙄', '😅', '🤔']],
+    ['Love', ['❤️', '💕', '💖', '😘', '💐', '🌹', '💌', '🫶', '💑', '💯', '🔥', '✨']],
+    ['Hands', ['👍', '👏', '🙏', '🙌', '🤝', '💪', '✌️', '🤞', '👋', '👌', '🫡', '🤟']],
+    ['Celebrate', ['🎉', '🎂', '🎁', '🎈', '🥂', '🏆', '🎊', '🪅', '🎶', '🍰', '🌟', '🎆']],
+    ['India', ['🪔', '🏏', '🇮🇳', '🥭', '🛺', '🍵', '🪁', '🥘', '🧿', '🐘', '🪷', '🚩']],
+    ['Animals', ['🐶', '🐱', '🐯', '🦁', '🐵', '🐼', '🦄', '🐸', '🐧', '🦋', '🐢', '🐥']],
+    ['Food', ['🍕', '🍔', '🍟', '🍦', '🍩', '☕', '🍎', '🍜', '🍫', '🍿', '🥪', '🍪']],
+  ];
+  const stickerBox = $('#picker-stickers');
+  for (const [name, list] of STICKER_PACKS) {
+    stickerBox.appendChild(el('div', 'sticker-pack-name', name));
+    const row = el('div', 'sticker-row');
+    for (const st of list) {
+      const b = el('button', 'sticker-btn', st);
+      b.type = 'button';
+      b.setAttribute('aria-label', `Send sticker ${st}`);
+      b.addEventListener('click', () => {
+        if (!state.activeId) return;
+        picker.classList.add('hidden');
+        sendNew(state.activeId, st, false, { sticker: true, ...takeReply() });
+      });
+      row.appendChild(b);
+    }
+    stickerBox.appendChild(row);
+  }
+  for (const tab of $('#picker-tabs').querySelectorAll('button')) {
+    tab.addEventListener('click', () => {
+      for (const t of $('#picker-tabs').querySelectorAll('button')) t.classList.toggle('active', t === tab);
+      pickerEmoji.classList.toggle('hidden', tab.dataset.tab !== 'emoji');
+      stickerBox.classList.toggle('hidden', tab.dataset.tab !== 'stickers');
+    });
   }
   $('#btn-emoji').addEventListener('click', () => picker.classList.toggle('hidden'));
   document.addEventListener('click', (e) => {
@@ -5699,7 +5866,8 @@
     toast('Saved chats removed from this device');
     renderCacheRow();
   });
-  $('#btn-profile').addEventListener('click', () => { renderCacheRow(); });
+  $('#btn-profile').addEventListener('click', () => { renderCacheRow(); $('#linkprev-toggle').checked = linkPreviewsOn(); });
+  $('#linkprev-toggle').addEventListener('change', (e) => storage.set('chat.linkPreviews', e.target.checked ? 'on' : 'off'));
 
   // ---------- appearance ----------
 

@@ -22,6 +22,7 @@ const { createLinking } = require('./linking');
 const { createAdminRouter } = require('./admin');
 const { createKyc, createKycGateway } = require('./kyc');
 const { createTranslator, createTranslateGateway } = require('./translate');
+const { createLinkPreviewer } = require('./linkpreview');
 const { createPayments, plansFromEnv } = require('./payments');
 const { selectProvider } = require('./payment-providers');
 
@@ -59,6 +60,7 @@ const SOCKET_ACTIONS = {
   conversations: 'conversations',
   'users:search': 'searchUsers',
   'contacts:match': 'contactsMatch',
+  'link:preview': 'linkPreview',
   'privacy:findable': 'setFindable',
   'user:block': 'block',
   'user:get': 'getUser',
@@ -244,6 +246,7 @@ function createApp({
   paymentProvider = undefined,
   admin: adminOptions = {},
   translate: translateOptions = {},
+  linkPreview: linkPreviewOptions = { allowPrivate: process.env.WEBHOOKS_ALLOW_PRIVATE === '1' },
   push: pushOptions = {},
   trustProxy = process.env.TRUST_PROXY,
   publicUrl = process.env.PUBLIC_URL,
@@ -309,7 +312,8 @@ function createApp({
     vapid: { file: dataDir ? path.join(dataDir, 'vapid.json') : undefined },
     ...pushOptions,
   });
-  const service = createService({ store, io, isOnline, linking, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl, accountEraseDelayMs });
+  const linkPreviewer = createLinkPreviewer(linkPreviewOptions);
+  const service = createService({ store, io, linkPreviewer, isOnline, linking, webhooks, iceServers, otp, kyc, payments, translator, push, publicUrl, accountEraseDelayMs });
   const { actions } = service;
 
   // Wrap a handler so thrown errors are returned through the ack callback.
