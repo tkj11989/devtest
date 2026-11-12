@@ -1288,6 +1288,22 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
       }),
     },
+    '/messages/{id}/report': {
+      post: op(T.msg, 'Report a message', {
+        description: 'Tell the people who run the service about a message that is spam, abuse, a scam or worse. `reason`: `spam`, `harassment`, `scam`, `inappropriate`, `violence`, `child_safety` or `other`. In a chat the server can read, it keeps the message and up to 5 before it as evidence. In an encrypted chat it cannot read them, so the app may send the decrypted ones it chose as `evidence` (kept as unverified, up to 6, 500 characters each). `block: true` also blocks the sender. 20 reports a day; reporting the same message twice is `409`; many different people reporting one account limits that account\'s new chats until a person has looked.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ reason: { type: 'string', enum: ['spam', 'harassment', 'scam', 'inappropriate', 'violence', 'child_safety', 'other'] }, detail: { type: 'string', maxLength: 500 }, block: { type: 'boolean' }, evidence: arrayOf(obj({ id: { type: 'string' }, from: { type: 'string' }, ts: { type: 'integer' }, kind: { type: 'string' }, text: { type: 'string', maxLength: 500 } })) }, ['reason']), { reason: 'spam', block: true }),
+        responses: { 201: ok(obj({ reported: { type: 'boolean' }, blocked: { type: 'boolean' } })), ...errors(400, 401, 404, 409, 429) },
+      }),
+    },
+    '/users/{username}/report': {
+      post: op(T.users, 'Report a person', {
+        description: 'Same reasons as for a message. One report per person per day. `block: true` also blocks them.',
+        params: [idParam('username')],
+        body: jsonBody(obj({ reason: { type: 'string', enum: ['spam', 'harassment', 'scam', 'inappropriate', 'violence', 'child_safety', 'other'] }, detail: { type: 'string', maxLength: 500 }, block: { type: 'boolean' } }, ['reason']), { reason: 'scam', detail: 'Asked me to pay first' }),
+        responses: { 201: ok(obj({ reported: { type: 'boolean' }, blocked: { type: 'boolean' } })), ...errors(400, 401, 404, 409, 429) },
+      }),
+    },
     '/messages/{id}/pin': {
       put: op(T.msg, 'Pin or unpin a message', {
         description: 'Up to 3 pinned messages per chat (`409 too_many_pins`). In a group only an admin can pin (`403`). A deleted or expired message is unpinned automatically. Members get a `chat:pins` event; chats carry `pins: [{ id, by, at }]`.',
@@ -1600,6 +1616,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /messages/{id}': 'deleteMessage',
     'put /messages/{id}': 'editMessage',
     'put /messages/{id}/pin': 'pinMessage',
+    'post /messages/{id}/report': 'reportMessage',
+    'post /users/{username}/report': 'reportUser',
     'get /conversations/{id}/pins': 'listPinnedMessages',
     'put /messages/{id}/reaction': 'reactToMessage',
     'put /messages/{id}/star': 'starMessage',

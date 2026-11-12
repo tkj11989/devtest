@@ -2166,6 +2166,7 @@
       group: conv.type === 'group',
     });
     $('#chat-name').textContent = convTitle(conv);
+    $('#menu-report').classList.toggle('hidden', conv.type !== 'direct');
     const badgesEl = $('#chat-badges');
     badgesEl.textContent = '';
     if (peer && state.users[peer]) badgesEl.append(...userBadges(state.users[peer]));
@@ -3070,6 +3071,53 @@
   input.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) updateMentionBox(); });
   input.addEventListener('blur', () => setTimeout(() => mentionBox.classList.add('hidden'), 150));
 
+  // ---------- reporting ----------
+
+  const REPORT_REASONS = [['spam', 'Spam or unwanted promotion'], ['scam', 'Scam or fraud'], ['harassment', 'Harassment or abuse'], ['inappropriate', 'Sexual or inappropriate'], ['violence', 'Violence or threats'], ['child_safety', 'A child may be at risk'], ['other', 'Something else']];
+
+  /** The reported message and up to 5 before it, as readable on this device (sent only when the person agrees, for encrypted chats). */
+  function evidenceFor(m) {
+    const list = (state.messages.get(m.convId) || []).filter((x) => x.type !== 'system' && x.type !== 'call' && !x.deleted);
+    const at = list.findIndex((x) => x.id === m.id);
+    return list.slice(Math.max(0, at - 5), at + 1).filter((x) => !x.masked && !x.undecryptable).map((x) => ({
+      id: x.id, from: x.from, ts: x.ts,
+      kind: x.voice ? 'voice' : x.media ? x.media.kind : x.type || 'text',
+      text: String(x.text || '').slice(0, 500),
+    }));
+  }
+
+  /** Ask why, then tell the people who run the service. `{ msg }` reports a message, `{ username }` a person. */
+  function reportDialog({ msg, username }) {
+    const target = msg ? msg.from : username;
+    const encrypted = !!(msg && (msg.e2ee || msg.encrypted));
+    return dialog({
+      title: msg ? 'Report this message' : `Report ${displayName(target)}`,
+      text: msg
+        ? (encrypted
+          ? 'This chat is end-to-end encrypted, so VartiQ cannot read it. If you report, this message and up to 5 before it are decrypted on your phone and sent to the VartiQ review team, with your reason. Nothing else from the chat is shared.'
+          : 'The review team will see this message and up to 5 before it, with your reason. The person is not told who reported.')
+        : 'The review team will look at this account. The person is not told who reported.',
+      submit: 'Report',
+      fields: [
+        { name: 'reason', label: 'What is wrong?', options: REPORT_REASONS, value: 'spam' },
+        { name: 'detail', label: 'More details (optional)', type: 'text', required: false, maxLength: 500 },
+        { name: 'block', label: `Also block ${displayName(target)}`, type: 'checkbox', required: false, checked: true },
+      ],
+      async onSubmit(v) {
+        const body = { reason: v.reason, detail: v.detail || undefined, block: v.block === 'on' };
+        if (msg && encrypted) body.evidence = evidenceFor(msg);
+        await emit('safety:report', msg ? { msgId: msg.id, ...body } : { username: target, ...body });
+        toast(body.block ? 'Reported and blocked. Thank you.' : 'Reported. Thank you.');
+        if (body.block) { state.blocked.add(target); renderChatList(); renderHeader(); }
+      },
+    });
+  }
+  $('#menu-report').addEventListener('click', () => {
+    const conv = state.conversations.get(state.activeId);
+    const peer = conv && convPeer(conv);
+    if (peer) reportDialog({ username: peer });
+  });
+
   // ---------- edit and pin ----------
 
   const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -3208,6 +3256,7 @@
       const pinned = (conv.pins || []).some((p) => p.id === m.id);
       item(pinned ? 'Unpin' : 'Pin', () => setPin(m, !pinned));
     }
+    if (m.from !== state.me.username && !m.deleted && m.type !== 'system' && m.type !== 'call' && !m.pending && !m.localStatus) item('Report', () => reportDialog({ msg: m }));
     if (m.text && !m.masked) item('Copy text', () => navigator.clipboard?.writeText(m.text).then(() => toast('Copied'), () => toast('Could not copy')));
     document.body.appendChild(menu);
     const r = menu.getBoundingClientRect();

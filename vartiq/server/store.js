@@ -2367,6 +2367,123 @@ class Store {
     this._save();
   }
 
+  // ---------- safety: reports about messages and people, spam flags, restrictions ----------
+
+  static REPORT_REASONS = ['spam', 'harassment', 'scam', 'inappropriate', 'violence', 'child_safety', 'other'];
+  static REPORTS_PER_DAY = 20;
+  static REPORT_KEEP_MS = 180 * 24 * 3600 * 1000;
+  static AUTO_RESTRICT_REPORTERS = 5; // this many different people reporting one account in 7 days limits it until a person looks
+
+  /**
+   * Report a message (`msgId`) or a person (`username`). For a message the server builds the evidence itself when it can read
+   * the chat (the reported message and up to 5 before it); in an encrypted chat it uses what the reporter's app chose to send
+   * (marked `verified: false`). Returns { owner, urgent, restricted }.
+   */
+  reportSafety(reporter, { msgId, username, reason, detail, evidence } = {}, now = Date.now()) {
+    const bad = (status, code, message) => Object.assign(new Error(message), { status, code });
+    if (!Store.REPORT_REASONS.includes(reason)) throw bad(400, 'invalid_request', `Reason must be one of: ${Store.REPORT_REASONS.join(', ')}`);
+    detail = String(detail ?? '').trim().slice(0, 500);
+    let owner;
+    const rec = { reporter, reason, detail, ts: now };
+    if (msgId) {
+      const found = this.findMessage(String(msgId));
+      if (!found || !this.isMember(found.convId, reporter) || !Store.visibleTo(found.message, reporter)) throw bad(404, 'not_found', 'Message not found');
+      const m = found.message;
+      if (m.from === reporter) throw bad(400, 'invalid_request', 'You cannot report your own message');
+      if (m.type === 'system' || m.type === 'call') throw bad(400, 'invalid_request', 'This cannot be reported');
+      owner = m.from;
+      Object.assign(rec, { type: 'message', owner, convId: found.convId, msgId: m.id });
+      const all = (this.data.messages[found.convId] || []).filter((x) => Store.visibleTo(x, reporter) && x.type !== 'system');
+      const at = all.findIndex((x) => x.id === m.id);
+      const kind = (x) => (x.voice ? 'voice' : x.media ? x.media.kind : x.type || 'text');
+      if (!m.e2ee) {
+        rec.verified = true;
+        rec.evidence = all.slice(Math.max(0, at - 5), at + 1).filter((x) => !x.e2ee && !x.deleted).map((x) => ({ from: x.from, ts: x.ts, kind: kind(x), text: String(x.text || '').slice(0, 500), ...(x.id === m.id ? { reported: true } : {}) }));
+      } else {
+        rec.verified = false;
+        const members = this.getConversation(found.convId).members;
+        rec.evidence = (Array.isArray(evidence) ? evidence : []).slice(0, 6).filter((x) => x && members.includes(x.from)).map((x) => ({ from: x.from, ts: Number(x.ts) || 0, kind: String(x.kind || 'text').slice(0, 12), text: String(x.text || '').slice(0, 500), ...(x.id === m.id || x.reported ? { reported: true } : {}) }));
+      }
+    } else {
+      owner = String(username || '').toLowerCase();
+      if (!this.data.users[owner] || this.isClosed(owner)) throw bad(404, 'not_found', 'User not found');
+      if (owner === reporter) throw bad(400, 'invalid_request', 'You cannot report yourself');
+      Object.assign(rec, { type: 'user', owner });
+    }
+    const mine = this.data.reports.filter((r) => (r.type === 'message' || r.type === 'user') && r.reporter === reporter);
+    if (msgId ? mine.some((r) => r.msgId === msgId) : mine.some((r) => r.type === 'user' && r.owner === owner && r.ts > now - 24 * 3600 * 1000)) throw bad(409, 'conflict', 'You already reported this');
+    if (mine.filter((r) => r.ts > now - 24 * 3600 * 1000).length >= Store.REPORTS_PER_DAY) throw bad(429, 'rate_limited', 'Too many reports today. Try again tomorrow.');
+    this.data.reports.push(rec);
+    const week = new Set(this.data.reports.filter((r) => (r.type === 'message' || r.type === 'user') && r.owner === owner && r.ts > now - 7 * 24 * 3600 * 1000).map((r) => r.reporter));
+    let restricted = false;
+    if (week.size >= Store.AUTO_RESTRICT_REPORTERS && !this.isRestricted(owner, now)) { this.restrictUser(owner, 48, 'Reported by several people', now); restricted = true; }
+    this._save();
+    return { owner, urgent: reason === 'child_safety', restricted };
+  }
+
+  /** Open reports about messages and people, grouped by the reported account: urgent first, then most reporters, then newest. */
+  safetyReports(now = Date.now()) {
+    const groups = new Map();
+    for (const r of this.data.reports) {
+      if (r.type !== 'message' && r.type !== 'user') continue;
+      if (!groups.has(r.owner)) groups.set(r.owner, { owner: r.owner, reports: [] });
+      groups.get(r.owner).reports.push({ type: r.type, reporter: r.reporter, reason: r.reason, detail: r.detail, ts: r.ts, convId: r.convId || null, msgId: r.msgId || null, verified: r.verified ?? null, evidence: r.evidence || null });
+    }
+    return [...groups.values()].map((g) => {
+      const u = this.data.users[g.owner];
+      const people = new Set(g.reports.map((r) => r.reporter));
+      return { ...g, reporters: people.size, urgent: g.reports.some((r) => r.reason === 'child_safety'), latest: Math.max(...g.reports.map((r) => r.ts)),
+        displayName: u?.displayName || g.owner, suspended: !!u?.suspended, restricted: this.isRestricted(g.owner, now) ? { until: u.restricted.until, reason: u.restricted.reason } : null, spamFlags: (u?.spamFlags || []).length };
+    }).sort((a, b) => (b.urgent - a.urgent) || (b.reporters - a.reporters) || (b.latest - a.latest));
+  }
+
+  /** A person looked: the reports about this account are cleared (and the restriction lifted if `lift`). */
+  dismissSafetyReports(owner, { lift = true } = {}) {
+    const before = this.data.reports.length;
+    this.data.reports = this.data.reports.filter((r) => !((r.type === 'message' || r.type === 'user') && r.owner === owner));
+    if (lift) this.unrestrictUser(owner);
+    this._save();
+    return before - this.data.reports.length;
+  }
+
+  /** Reports older than six months are deleted. */
+  pruneReports(now = Date.now()) {
+    const before = this.data.reports.length;
+    this.data.reports = this.data.reports.filter((r) => !((r.type === 'message' || r.type === 'user') && r.ts < now - Store.REPORT_KEEP_MS));
+    if (this.data.reports.length !== before) this._save();
+    return before - this.data.reports.length;
+  }
+
+  /** A restricted account cannot start new chats or groups until `until`; chats it already has keep working. */
+  isRestricted(username, now = Date.now()) {
+    const r = this.data.users[username]?.restricted;
+    return !!r && r.until > now;
+  }
+
+  restrictUser(username, hours, reason, now = Date.now()) {
+    const u = this.data.users[username];
+    if (!u) return;
+    u.restricted = { until: now + Math.max(1, Math.min(24 * 30, Number(hours) || 24)) * 3600 * 1000, reason: String(reason || '').slice(0, 200), at: now };
+    this._save();
+  }
+
+  unrestrictUser(username) {
+    const u = this.data.users[username];
+    if (u?.restricted) { delete u.restricted; this._save(); }
+  }
+
+  /** The spam checks stopped this account: remember it (last 20, for the dashboard). Three in a day restrict new chats for 24 hours. */
+  flagSpam(username, why, now = Date.now()) {
+    const u = this.data.users[username];
+    if (!u) return 0;
+    const flags = [...(u.spamFlags || []), { ts: now, why: String(why).slice(0, 80) }].slice(-20);
+    u.spamFlags = flags;
+    const recent = flags.filter((f) => f.ts > now - 24 * 3600 * 1000).length;
+    if (recent >= 3 && !this.isRestricted(username, now)) this.restrictUser(username, 24, 'Looked like spam', now);
+    this._save();
+    return recent;
+  }
+
   // ---------- product catalogue (business accounts) ----------
 
   /** The catalogue anyone can see on a business profile, or null for a non-business account. */

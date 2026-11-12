@@ -265,7 +265,7 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
   }));
 
   router.get('/reports', auth, run(() => ({
-    reports: store.data.reports.filter((r) => r.type !== 'photo').map((r) => ({ ...r, channel: store.data.channels[r.channelId] ? { id: r.channelId, handle: store.data.channels[r.channelId].handle, name: store.data.channels[r.channelId].name, owner: store.data.channels[r.channelId].owner } : null })).sort((a, b) => b.ts - a.ts),
+    reports: store.data.reports.filter((r) => !r.type).map((r) => ({ ...r, channel: store.data.channels[r.channelId] ? { id: r.channelId, handle: store.data.channels[r.channelId].handle, name: store.data.channels[r.channelId].name, owner: store.data.channels[r.channelId].owner } : null })).sort((a, b) => b.ts - a.ts),
   })));
 
   // ---------- bulk messaging: every campaign, and a way to stop one (abuse) ----------
@@ -277,6 +277,33 @@ function createAdminRouter({ store, service, io, onlineCount, integrations = () 
     const campaign = service.campaigns.adminStop(req.params.id, req.admin);
     log(req, 'campaign-stop', req.params.id, `${before?.owner}: ${before?.name}`);
     return { campaign: { ...campaign, owner: before?.owner } };
+  }));
+
+  // ---------- reports about messages and people (safety) ----------
+
+  router.get('/safety-reports', auth, run(() => ({ reports: store.safetyReports() })));
+
+  router.post('/safety-reports/:username/dismiss', auth, run((req) => {
+    const n = store.dismissSafetyReports(String(req.params.username).toLowerCase());
+    if (!n) throw fail(404, 'not_found', 'No open reports about this account');
+    log(req, 'safety-dismiss', String(req.params.username).toLowerCase(), `${n} report(s) cleared`);
+    return { cleared: n };
+  }));
+
+  router.post('/safety-reports/:username/restrict', auth, run((req) => {
+    const u = String(req.params.username).toLowerCase();
+    if (!store.data.users[u]) throw fail(404, 'not_found', 'User not found');
+    const hours = Number(req.body?.hours) || 48;
+    store.restrictUser(u, hours, String(req.body?.reason || 'Restricted by an administrator'));
+    log(req, 'restrict', u, `${hours} h: ${req.body?.reason || ''}`);
+    return { reports: store.safetyReports() };
+  }));
+
+  router.post('/safety-reports/:username/unrestrict', auth, run((req) => {
+    const u = String(req.params.username).toLowerCase();
+    store.unrestrictUser(u);
+    log(req, 'unrestrict', u, null);
+    return { reports: store.safetyReports() };
   }));
 
   router.post('/reports/dismiss', auth, run((req) => {

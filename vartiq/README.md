@@ -484,6 +484,12 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 
 **Stickers.** The smiley button has a *Stickers* tab with 8 ready-made packs (96 large emoji stickers); one tap sends it on its own (`sticker: true`, `text` is one emoji). Searching GIFs needs an outside GIF service and key, so it is not included; GIF files can be sent as pictures.
 
+**Safety: reports, spam checks, review queue.**
+- **Report** a message (message menu → Report) or a person (chat menu → Report this person): choose a reason (spam, scam, harassment, sexual or inappropriate, violence, a child at risk, other), add details, and optionally block them at the same time. In a chat the server can read it keeps the reported message and up to 5 before it as evidence. In an **encrypted** chat the server cannot read anything, so the app says so and, only if the person goes ahead, sends the decrypted message and up to 5 before it; these are stored as *unverified* because the server cannot check them. API: `POST /messages/{id}/report`, `POST /users/{username}/report` (event `safety:report`). 20 reports a day; one report per message; one per person per day. The reported person is never told who reported. Reports are deleted when reviewed and after 6 months.
+- **Automatic limit:** five different people reporting one account within 7 days stop that account from **starting new chats or groups** (existing chats keep working) for 48 hours or until a person has looked.
+- **Spam checks** (when sending): more than **20 chats an hour** with people who have not written back, or the **same words to 5 other such chats** within 10 minutes (only where the server can read the text, never for encrypted messages), are stopped with `429 spam_suspected`. Each stop is remembered on the account; three in a day limit new chats for 24 hours. Chats where the other person has already replied are never counted.
+- **Review queue:** Admin → Channels & reports → *Reported messages and people*: one row per reported account, child-safety reports first, then most reporters; shows the evidence, spam stops and status, and lets an administrator clear the reports (also lifts a limit), restrict new chats for 3 days, lift a limit, or suspend the account. Every action is written to the audit log.
+
 **Search.** The box above the chat list also searches messages. The server finds messages **it can read** (plain chats, captions, document names, poll questions; API `GET /search/messages`); **encrypted chats are searched on the device** (the chats opened and the copies saved on the device, decrypted as they are searched). Tapping a result opens the chat at that message, loading older messages as needed. Hidden and locked chats are not searched.
 
 ## Business assistant (bot)
@@ -864,6 +870,7 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `pins:get`          | The pinned messages of a chat            |
 | `chat:pref`         | Mute, archive, mark unread (`convId`, ...) |
 | `link:preview`      | Title and picture of a link (`url`)      |
+| `safety:report`     | Report a message (`msgId`) or person (`username`) with `reason` |
 | `typing`            | Typing or recording started/stopped (`activity`) |
 | `profile:update`    | Change display name / about              |
 | `me:contact-code` / `me:contact-verify` | Send a code to a new mobile number/email, then save it |

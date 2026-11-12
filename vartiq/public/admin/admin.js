@@ -278,9 +278,27 @@
 
   // --- channels & reports ---
   async function channels() {
-    const [{ channels: list }, { reports }, { reports: photoReports }] = await Promise.all([api('GET', '/channels'), api('GET', '/reports'), api('GET', '/photo-reports')]);
-    $('#nav-reports').textContent = reports.length + photoReports.length;
-    $('#nav-reports').classList.toggle('hidden', !(reports.length + photoReports.length));
+    const [{ channels: list }, { reports }, { reports: photoReports }, { reports: safety }] = await Promise.all([api('GET', '/channels'), api('GET', '/reports'), api('GET', '/photo-reports'), api('GET', '/safety-reports')]);
+    $('#nav-reports').textContent = reports.length + photoReports.length + safety.length;
+    $('#nav-reports').classList.toggle('hidden', !(reports.length + photoReports.length + safety.length));
+    const REASON = { spam: 'Spam', harassment: 'Harassment or abuse', scam: 'Scam or fraud', inappropriate: 'Sexual or inappropriate', violence: 'Violence or threats', child_safety: 'Child safety', other: 'Other' };
+    const safetyAct = (label, fn, done) => async () => { if (await attempt(fn) !== null) { toast(done); route(); } };
+    const evidenceView = (r) => (r.evidence?.length
+      ? h('div', { class: 'evidence' }, h('div', { class: 'muted' }, r.verified ? 'Kept by the server (verified)' : 'Sent by the reporter from an encrypted chat (the server cannot check it)'),
+        r.evidence.map((e) => h('div', { style: e.reported ? 'font-weight:600' : 'opacity:.8' }, `${e.reported ? '▶ ' : ''}@${e.from} · ${fmt.date(e.ts)} · ${e.kind}: ${e.text || ''}`)))
+      : null);
+    const safetyCard = h('div', { class: 'card' }, h('h3', {}, `Reported messages and people (${safety.length})`),
+      safety.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Account', 'Reports', 'Status', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, safety.map((g) => h('tr', {},
+          h('td', {}, g.displayName, h('br'), h('span', { class: 'muted' }, `@${g.owner}`), h('br'), g.urgent && h('span', { class: 'tag bad' }, 'Child safety: urgent')),
+          h('td', { class: 'wrap' }, `${g.reporters} ${g.reporters === 1 ? 'person' : 'people'}`, g.reports.map((r) => h('div', {}, `${fmt.date(r.ts)} · @${r.reporter} · ${r.type === 'message' ? 'message' : 'person'} · ${REASON[r.reason] || r.reason}${r.detail ? ` — ${r.detail}` : ''}`, evidenceView(r)))),
+          h('td', {}, g.suspended && h('span', { class: 'tag bad' }, 'Suspended'), g.restricted && h('span', { class: 'tag' }, `No new chats until ${fmt.date(g.restricted.until)}`), g.spamFlags ? h('div', { class: 'muted' }, `${g.spamFlags} spam stop${g.spamFlags === 1 ? '' : 's'}`) : null),
+          h('td', {}, h('div', { class: 'actions' },
+            h('button', { class: 'btn small', onclick: safetyAct('ok', () => api('POST', `/safety-reports/${encodeURIComponent(g.owner)}/dismiss`), 'Reports cleared') }, 'Looks fine'),
+            g.restricted ? h('button', { class: 'btn small', onclick: safetyAct('lift', () => api('POST', `/safety-reports/${encodeURIComponent(g.owner)}/unrestrict`), 'Restriction lifted') }, 'Lift restriction')
+              : h('button', { class: 'btn small', onclick: safetyAct('restrict', () => api('POST', `/safety-reports/${encodeURIComponent(g.owner)}/restrict`, { hours: 72, reason: 'Restricted after reports' }), 'Restricted for 3 days') }, 'Restrict 3 days'),
+            !g.suspended && h('button', { class: 'btn small danger', onclick: () => { const reason = prompt(`Suspend @${g.owner}? They are logged out and cannot log in. Reason (shown in the log):`, 'Reported for abuse'); if (reason !== null) safetyAct('s', () => api('POST', `/users/${encodeURIComponent(g.owner)}/suspend`, { reason }), 'Suspended')(); } }, 'Suspend'))))))))
+        : h('p', { class: 'muted' }, 'No open reports about messages or people. People report from a message\'s menu or a chat\'s menu. Five different people in a week limit an account\'s new chats until you look; child-safety reports are listed first.'));
     // Reported profile photos: the picture is fetched with the administrator's session (it is never public).
     const photoImg = (g, size) => {
       const img = h('img', { alt: 'Reported photo', width: 96, height: 96, style: 'border-radius:10px;object-fit:cover;background:#ccc;cursor:pointer' });
@@ -306,6 +324,7 @@
     };
     return h('div', {},
       head('Channels & reports'),
+      safetyCard,
       photoCard,
       h('div', { class: 'card' }, h('h3', {}, `Open channel reports (${reports.length})`),
         reports.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Channel', 'Owner', 'Reported by', 'Reason', ''].map((t) => h('th', {}, t)))),

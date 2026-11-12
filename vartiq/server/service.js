@@ -14,6 +14,7 @@ const photoRules = require('./photos');
 const BusinessHours = require('../public/business-hours.js');
 const { createCampaigns } = require('./campaigns');
 const botRules = require('./bot');
+const { createSpamGuard } = require('./safety');
 const { cleanPreview, allowedUrl } = require('./linkpreview');
 const mediaRules = require('./media');
 
@@ -627,6 +628,13 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     return { id, from: orig.from, kind, ...quote };
   };
 
+  const spam = createSpamGuard({ store });
+  const spamStop = (me, conv, text) => {
+    if (spam.check(me, conv, text)) throw new ApiError(429, 'spam_suspected', 'You are sending too many similar messages or starting too many chats. Please wait a while.');
+  };
+  const noNewChatsWhenRestricted = (me) => {
+    if (store.isRestricted(me)) throw new ApiError(403, 'restricted', 'Your account cannot start new chats right now. Your existing chats still work.');
+  };
   const previewLog = new Map(); // username -> times of recent link previews
 
   /** Who a message tags with @ (groups only): members other than the sender, at most 10, no repeats; anything else is dropped. */
@@ -1287,6 +1295,25 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
       return { user: userView(u, me), blocked: store.hasBlocked(me, u) };
     },
 
+    /**
+     * Report a message (`msgId`) or a person (`username`) to the people who run the service. For a message in an encrypted chat the
+     * app sends the (decrypted) message and up to 5 before it as `evidence`; the person chose to share them. `block: true` also blocks.
+     */
+    reportSafety(me, { msgId, username, reason, detail, evidence, block } = {}, ctx) {
+      if (msgId) {
+        const found = store.findMessage(String(msgId));
+        if (found && store.isMember(found.convId, me)) requireUnlocked(me, found.convId, ctx);
+      }
+      let done;
+      try {
+        done = store.reportSafety(me, { msgId: msgId ? String(msgId) : undefined, username, reason, detail, evidence });
+      } catch (err) {
+        throw err.status ? new ApiError(err.status, err.code, err.message) : err;
+      }
+      if (block === true && done.owner !== me) actions.block(me, { username: done.owner, blocked: true });
+      return { reported: true, blocked: block === true };
+    },
+
     block(me, { username, blocked }) {
       const target = String(username || '').toLowerCase();
       const list = store.setBlocked(me, target, !!blocked);
@@ -1315,6 +1342,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     },
 
     openDirect(me, { username }, ctx) {
+      noNewChatsWhenRestricted(me);
       const target = String(username || '').toLowerCase();
       if (!store.canStartChat(me, target)) throw new ApiError(403, 'not_accepting', 'This person is not accepting new chats');
       const conv = store.getOrCreateDirect(me, target);
@@ -1322,6 +1350,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     },
 
     createGroup(me, { name, members }, ctx) {
+      noNewChatsWhenRestricted(me);
       for (const m of members || []) {
         if (!store.canStartChat(me, String(m).toLowerCase())) throw new ApiError(403, 'not_accepting', `${store.publicUser(String(m).toLowerCase())?.displayName || m} is not accepting new chats or groups`);
       }
@@ -1393,6 +1422,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
       requireUnlocked(me, convId, ctx);
       // With `e2ee` the text is inside the encrypted envelope and the server never sees it.
       const env = e2ee ? checkEnvelope(me, conv, e2ee) : undefined;
+      spamStop(me, conv, env ? '' : String(text || ''));
       if (sticker && !env && (typeof text !== 'string' || !text.trim() || [...text].length > 8)) throw new ApiError(400, 'invalid_request', 'A sticker is one emoji');
       return { message: sendMessage(me, convId, env ? '' : text, { sticker: sticker === true, masked: !!masked, clientId, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded, mentions: resolveMentions(conv, me, mentions), preview: env || masked || !store.featureOn('linkPreviews') ? undefined : cleanPreview(preview, linkPreviewer?.anyPort) || undefined }) };
     },
@@ -2294,6 +2324,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     endDueLocations();
     runPlans();
     store.pruneUploads();
+    store.pruneReports();
     for (const { convId, ids } of store.pruneMessages()) {
       const conv = store.getConversation(convId);
       if (conv) notifyMembers(conv, 'message:expired', { convId, ids });

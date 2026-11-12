@@ -443,6 +443,8 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   // ---------- find friends from phone contacts ----------
 
+  router.post('/messages/:id/report', ...authed, json2m, run((req) => actions.reportSafety(req.user, { msgId: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail, evidence: req.body?.evidence, block: req.body?.block }, req.ctx), 201));
+  router.post('/users/:username/report', ...authed, json, run((req) => actions.reportSafety(req.user, { username: p(req, 'username'), reason: req.body?.reason, detail: req.body?.detail, block: req.body?.block }, req.ctx), 201));
   router.post('/link-preview', ...authed, json, run((req) => actions.linkPreview(req.user, { url: req.body?.url }, req.ctx)));
   router.post('/contacts/match', ...authed, json2m, run((req) => actions.contactsMatch(req.user, { hashes: req.body?.hashes }, req.ctx)));
   router.put('/me/privacy/findable', ...authed, json, run((req) => actions.setFindable(req.user, { byPhone: req.body?.byPhone }, req.ctx)));

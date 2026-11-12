@@ -64,7 +64,7 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 ### D. Trust, safety and the law
 14. **No business is registered yet**, so the notice names a person, Razorpay live payments and the Play Store cannot be used, and no Grievance Officer is appointed.
 15. **The legal texts and the 22 translations need review** by a lawyer and certified translators.
-16. **Safety tools are thin:** channels, profile photos and accounts can be reported, but messages cannot be reported from the chat, there is no spam detection, and no tools to review reports at scale. Bulk messages and the assistant make this more important.
+16. **~~Safety tools are thin~~ Mostly done on 12 Nov 2026:** messages and people can be reported from the chat (with evidence, also from encrypted chats by the reporter's choice), spam checks stop bulk cold messaging, many reports limit an account until a person looks, and administrators have a review queue. Still missing: automatic image or link scanning, appeals, a trained moderation team and a written moderation policy, reports to authorities (for example child-safety reporting duties) and counting repeat false reporters.
 17. **Real SMS for sign-up is not connected** (codes appear in the server log), and the Indian rules for sender registration (DLT) need several days.
 18. **Security hardening still open:** SSH key-only login, uptime alerts, and the open items listed in `docs/SECURITY.md`.
 

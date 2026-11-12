@@ -61,6 +61,7 @@ const SOCKET_ACTIONS = {
   'users:search': 'searchUsers',
   'contacts:match': 'contactsMatch',
   'link:preview': 'linkPreview',
+  'safety:report': 'reportSafety',
   'privacy:findable': 'setFindable',
   'user:block': 'block',
   'user:get': 'getUser',
