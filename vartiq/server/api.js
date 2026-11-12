@@ -364,6 +364,9 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     actions.deleteMessage(req.user, { id: p(req, 'id') }, req.ctx);
     return undefined;
   }));
+  router.put('/messages/:id', ...authed, json, run((req) => actions.editMessage(req.user, { id: p(req, 'id'), text: req.body?.text, e2ee: req.body?.e2ee }, req.ctx)));
+  router.put('/messages/:id/pin', ...authed, json, run((req) => actions.pinMessage(req.user, { id: p(req, 'id'), pinned: req.body?.pinned }, req.ctx)));
+  router.get('/conversations/:id/pins', ...authed, run((req) => actions.pins(req.user, { convId: p(req, 'id') }, req.ctx)));
   router.put('/messages/:id/reaction', ...authed, json, run((req) => actions.react(req.user, { id: p(req, 'id'), emoji: req.body?.emoji ?? null }, req.ctx)));
   router.put('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: true }, req.ctx)));
   router.delete('/messages/:id/star', ...authed, run((req) => actions.star(req.user, { id: p(req, 'id'), starred: false }, req.ctx)));

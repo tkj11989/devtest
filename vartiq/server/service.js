@@ -1915,6 +1915,49 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return {};
     },
 
+    /**
+     * Edit my own message within 15 minutes. Plain: `text`. Encrypted chat: `e2ee`, the new encrypted text made by the app.
+     * Everyone who can see it gets `message:edited` with the new message.
+     */
+    editMessage(me, { id, text, e2ee } = {}, ctx) {
+      const found = store.findMessage(id);
+      if (found && store.isMember(found.convId, me)) requireUnlocked(me, found.convId, ctx);
+      const conv = found && store.getConversation(found.convId);
+      const env = e2ee && conv ? checkEnvelope(me, conv, e2ee) : undefined;
+      let done;
+      try {
+        done = store.editMessage(me, id, { text, e2ee: env });
+      } catch (err) {
+        throw err.status ? new ApiError(err.status, err.code, err.message) : err;
+      }
+      for (const m of conv.members) if (Store.visibleTo(done.message, m)) notify(m, 'message:edited', { message: store.viewFor(done.message, m) });
+      return { message: store.viewFor(done.message, me) };
+    },
+
+    /** Pin or unpin a message (`pinned: true | false`; up to 3; in a group only admins). Members hear `chat:pins`. */
+    pinMessage(me, { id, pinned } = {}, ctx) {
+      const found = store.findMessage(id);
+      if (found && store.isMember(found.convId, me)) requireUnlocked(me, found.convId, ctx);
+      if (typeof pinned !== 'boolean') throw new ApiError(400, 'invalid_request', 'pinned must be true or false');
+      let done;
+      try {
+        done = store.pinMessage(me, id, pinned);
+      } catch (err) {
+        throw err.status ? new ApiError(err.status, err.code, err.message) : err;
+      }
+      for (const m of done.conv.members) notify(m, 'chat:pins', { convId: done.conv.id, pins: done.conv.pins || [] });
+      return { pins: done.conv.pins || [] };
+    },
+
+    /** The pinned messages of a chat (so a pin older than what is loaded can still be shown). */
+    pins(me, { convId } = {}, ctx) {
+      const conv = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const ids = new Set((conv.pins || []).map((p) => p.id));
+      const messages = (store.data.messages[convId] || []).filter((m) => ids.has(m.id) && !m.deleted && Store.visibleTo(m, me)).map((m) => sealMessage(me, store.viewFor(m, me), sealedBefore(me, convId)));
+      return { pins: conv.pins || [], messages };
+    },
+
     /** React to a message with one emoji (`emoji: null` takes it back). Everyone who can see the message hears about it. */
     react(me, { id, emoji }, ctx) {
       const found = store.findMessage(id);

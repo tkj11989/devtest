@@ -334,6 +334,7 @@ class Store {
         if (m.from === username && m.type !== 'call' && m.type !== 'system') {
           if (m.voice) this.deleteMedia(m.voice.mediaId);
           if (m.media) this.deleteMedia(m.media.mediaId);
+          this._unpin(conv.id, m.id);
           m.text = '';
           m.deleted = true;
           delete m.voice;
@@ -2544,7 +2545,7 @@ class Store {
     for (const [convId, msgs] of Object.entries(this.data.messages)) {
       const expired = msgs.filter((m) => m.expiresAt && m.expiresAt <= now);
       if (!expired.length) continue;
-      for (const m of expired) { if (m.voice) this.deleteMedia(m.voice.mediaId); if (m.media) this.deleteMedia(m.media.mediaId); }
+      for (const m of expired) { if (m.voice) this.deleteMedia(m.voice.mediaId); if (m.media) this.deleteMedia(m.media.mediaId); this._unpin(convId, m.id); }
       this.data.messages[convId] = msgs.filter((m) => !(m.expiresAt && m.expiresAt <= now));
       removed.push({ convId, ids: expired.map((m) => m.id) });
     }
@@ -3032,6 +3033,68 @@ class Store {
     return null;
   }
 
+  static EDIT_WINDOW_MS = 15 * 60 * 1000;
+  static MAX_EDITS = 10;
+  static MAX_PINS = 3;
+
+  /**
+   * Change the text of my own message within 15 minutes. A plain message gets `text`; an encrypted one gets a new envelope
+   * (`e2ee`) made by the app (the server never sees the words). Marked `edited`; the old words are not kept.
+   */
+  editMessage(username, msgId, { text, e2ee } = {}, now = Date.now()) {
+    const found = this.findMessage(msgId);
+    const err = (status, code, message) => Object.assign(new Error(message), { status, code });
+    if (!found || !this.isMember(found.convId, username) || !Store.visibleTo(found.message, username)) throw err(404, 'not_found', 'Message not found');
+    const m = found.message;
+    if (m.from !== username) throw err(403, 'forbidden', 'You can only edit your own messages');
+    if (m.deleted || m.type || m.auto || m.campaign) throw err(409, 'conflict', 'This message cannot be edited');
+    if (now - m.ts > Store.EDIT_WINDOW_MS) throw err(409, 'edit_window_closed', 'A message can only be edited within 15 minutes of sending it');
+    if ((m.editCount || 0) >= Store.MAX_EDITS) throw err(409, 'conflict', `A message can be edited ${Store.MAX_EDITS} times`);
+    if (m.e2ee) {
+      if (!e2ee) throw err(400, 'invalid_request', 'An encrypted message needs its new encrypted text');
+      m.e2ee = e2ee;
+      m.text = '';
+    } else {
+      const t = String(text ?? '').trim();
+      if (!t) throw err(400, 'invalid_request', 'The message cannot be empty');
+      if (t.length > 4000) throw err(400, 'invalid_request', 'Message is too long');
+      if (e2ee) throw err(400, 'invalid_request', 'This message is not encrypted');
+      m.text = t;
+    }
+    m.edited = now;
+    m.editCount = (m.editCount || 0) + 1;
+    this._touchMsg(found.convId, m);
+    this._save();
+    return found;
+  }
+
+  /** Pin or unpin a message (up to 3 per chat). In a group only an admin can. Returns { conv, message }. */
+  pinMessage(username, msgId, pinned) {
+    const found = this.findMessage(msgId);
+    const err = (status, code, message) => Object.assign(new Error(message), { status, code });
+    if (!found || !this.isMember(found.convId, username) || !Store.visibleTo(found.message, username)) throw err(404, 'not_found', 'Message not found');
+    const conv = this.getConversation(found.convId);
+    const m = found.message;
+    if (conv.type === 'group' && !(conv.admins || []).includes(username)) throw err(403, 'forbidden', 'Only a group admin can pin messages');
+    if (m.deleted || m.type === 'system' || m.type === 'call') throw err(409, 'conflict', 'This message cannot be pinned');
+    const pins = (conv.pins || []).filter((p) => p.id !== msgId);
+    if (pinned) {
+      if (pins.length >= Store.MAX_PINS) throw err(409, 'too_many_pins', `A chat can have ${Store.MAX_PINS} pinned messages. Unpin one first.`);
+      pins.push({ id: msgId, by: username, at: Date.now() });
+    }
+    if (pins.length) conv.pins = pins; else delete conv.pins;
+    this._save();
+    return { conv, message: m };
+  }
+
+  /** A message is gone (deleted, expired): it is no longer pinned. */
+  _unpin(convId, msgId) {
+    const conv = this.data.conversations[convId];
+    if (!conv?.pins) return;
+    const left = conv.pins.filter((p) => p.id !== msgId);
+    if (left.length) conv.pins = left; else delete conv.pins;
+  }
+
   static REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
   /** One reaction per person per message: choose one, change it, or pass `null` to take it back. Returns { convId, message }. */
@@ -3448,6 +3511,7 @@ class Store {
       if (m.type === 'call') throw new Error('Call history entries cannot be deleted');
       if (m.voice) this.deleteMedia(m.voice.mediaId);
       if (m.media) this.deleteMedia(m.media.mediaId);
+      this._unpin(convId, m.id);
       m.text = '';
       m.deleted = true;
       delete m.voice;

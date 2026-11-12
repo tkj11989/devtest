@@ -1463,6 +1463,8 @@
     socket.on('event:reminder', ({ message }) => { toast(`Reminder: ${message.event.title} starts ${new Date(message.event.startsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); onPlanUpdate(message); });
     socket.on('call:incoming', (call) => localNotifyCall(call));
     onOrdered('message:reaction', (e) => state.onReaction?.(e));
+    onOrdered('message:edited', async ({ message }) => { await readMessage(message); applyEdited(message); });
+    onOrdered('chat:pins', ({ convId, pins }) => applyPins(convId, pins));
     socket.on('chat:prefs', ({ convId, prefs }) => applyChatPrefs(convId, prefs));
     onOrdered('message:starred', ({ convId, id, starred }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
@@ -2051,8 +2053,11 @@
     if (!conv) return;
     // Switching chats mid-recording sends the recording to the chat it was made in.
     if (state.recorder && state.recorder.convId !== id) stopRecording(true);
+    if (state.editing && state.editing.convId !== id) state.editing = null;
     state.activeId = id;
+    state.pinIndex = 0;
     paintReplyBar?.();
+    $('#pin-bar').classList.add('hidden');
     channelsUI?.hide();
     $('#empty-state').classList.add('hidden');
     $('#chat-view').classList.remove('hidden');
@@ -2104,6 +2109,7 @@
       messages = withOutbox(messages);
       state.messages.set(id, messages);
       renderMessages(true);
+      loadPins(id);
       maybeTranslate(conv);
       markRead(id);
       if (highlight) flashMessage(highlight);
@@ -2381,6 +2387,7 @@
       if (m.expiresAt && !m.deleted) meta.appendChild(timerIcon(`Removed on ${new Date(m.expiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
       if (m.starred && !m.deleted) meta.appendChild(icon('starred'));
       if (m.masked && !m.deleted && !covered) meta.appendChild(icon('masked'));
+      if (m.edited && !m.deleted) meta.appendChild(el('span', 'edited-label', 'edited'));
       meta.appendChild(document.createTextNode(timeOf(m.ts)));
       if (status) meta.appendChild(icon(status));
       bubble.appendChild(meta);
@@ -2828,6 +2835,7 @@
     e.preventDefault();
     const text = input.value.trim();
     if (!text || !state.activeId) return;
+    if (state.editing) return submitEdit(text);
     stopTyping();
     clearDraft(state.activeId);
     input.value = '';
@@ -2852,6 +2860,13 @@
   }
 
   function paintReplyBar() {
+    const ed = state.editing && state.editing.convId === state.activeId ? state.editing : null;
+    if (ed) {
+      $('#reply-bar').classList.remove('hidden');
+      $('#reply-bar-who').textContent = 'Edit message';
+      $('#reply-bar-text').textContent = ed.original;
+      return;
+    }
     const r = state.replyTo && state.replyTo.convId === state.activeId ? state.replyTo : null;
     $('#reply-bar').classList.toggle('hidden', !r);
     if (!r) return;
@@ -2865,7 +2880,11 @@
     $('#message-input').focus();
   }
 
-  const clearReply = () => { state.replyTo = null; paintReplyBar(); };
+  const clearReply = () => {
+    if (state.editing) { state.editing = null; input.value = ''; autosize(); updateComposerButtons(); }
+    state.replyTo = null;
+    paintReplyBar();
+  };
   $('#reply-bar-close').addEventListener('click', clearReply);
 
   /** The reply to attach to the message being sent in `convId` (once), as extra fields for sendNew. */
@@ -2920,6 +2939,112 @@
   document.addEventListener('click', (e) => { if (!e.target.closest?.('.msg-menu, .msg-more')) closeMessageMenu(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMessageMenu(); });
 
+  // ---------- edit and pin ----------
+
+  const EDIT_WINDOW_MS = 15 * 60 * 1000;
+  state.editing = null; // { convId, id, original }
+
+  function startEdit(m) {
+    state.replyTo = null;
+    state.editing = { convId: m.convId, id: m.id, original: m.text || '' };
+    input.value = m.text || '';
+    autosize();
+    updateComposerButtons();
+    paintReplyBar();
+    input.focus();
+  }
+
+  async function submitEdit(text) {
+    const ed = state.editing;
+    const conv = state.conversations.get(ed.convId);
+    const m = state.messages.get(ed.convId)?.find((x) => x.id === ed.id);
+    if (!m || !conv || text === ed.original) { clearReply(); return; }
+    try {
+      const body = { id: ed.id };
+      if (m.e2ee) {
+        const quote = m.replyTo?.text ? { q: m.replyTo.text } : {};
+        body.e2ee = (await state.e2ee.encrypt(conv, { t: text, ...quote })).envelope;
+      } else {
+        body.text = text;
+      }
+      const res = await emit('message:edit', body);
+      await readMessage(res.message);
+      applyEdited(res.message);
+      clearReply();
+    } catch (err) {
+      toast(err.message || 'Could not edit the message');
+    }
+  }
+
+  /** Put an edited message (from the server) into place in the list, the chat list and the pinned bar. */
+  function applyEdited(s) {
+    const m = state.messages.get(s.convId)?.find((x) => x.id === s.id);
+    if (m) {
+      m.text = s.text;
+      m.edited = s.edited;
+      if (s.e2ee) m.e2ee = s.e2ee;
+      if (s.undecryptable) m.undecryptable = true; else delete m.undecryptable;
+    }
+    const conv = state.conversations.get(s.convId);
+    if (conv?.lastMessage?.id === s.id) Object.assign(conv.lastMessage, { text: s.text, edited: s.edited });
+    if (s.convId === state.activeId) { renderMessages(); paintPinBar(); }
+    renderChatList();
+  }
+
+  async function setPin(m, pinned) {
+    try {
+      const res = await emit('message:pin', { id: m.id, pinned });
+      applyPins(m.convId, res.pins);
+      toast(pinned ? 'Message pinned' : 'Message unpinned');
+    } catch (err) {
+      toast(err.message || 'Could not change the pin');
+    }
+  }
+
+  state.pinned = new Map(); // convId -> pinned messages (decrypted) for the bar
+  state.pinIndex = 0;
+
+  function applyPins(convId, pins) {
+    const conv = state.conversations.get(convId);
+    if (!conv) return;
+    if (pins.length) conv.pins = pins; else delete conv.pins;
+    if (convId === state.activeId) { state.pinIndex = 0; loadPins(convId); }
+  }
+
+  /** Make sure every pinned message of the open chat is known (older ones are fetched), then paint the bar. */
+  async function loadPins(convId) {
+    const conv = state.conversations.get(convId);
+    const pins = conv?.pins || [];
+    if (!pins.length) { state.pinned.delete(convId); return paintPinBar(); }
+    const have = new Map((state.messages.get(convId) || []).map((m) => [m.id, m]));
+    if (pins.some((p) => !have.has(p.id))) {
+      try {
+        const res = await emit('pins:get', { convId });
+        for (const m of res.messages) { await readMessage(m); if (!have.has(m.id)) have.set(m.id, m); }
+      } catch { /* the bar just stays shorter */ }
+    }
+    state.pinned.set(convId, pins.map((p) => have.get(p.id)).filter(Boolean));
+    if (convId === state.activeId) paintPinBar();
+  }
+
+  function paintPinBar() {
+    const bar = $('#pin-bar');
+    const conv = state.conversations.get(state.activeId);
+    const ids = new Set((conv?.pins || []).map((p) => p.id));
+    const live = (state.pinned.get(state.activeId) || []).filter((m) => ids.has(m.id) && !m.deleted);
+    bar.classList.toggle('hidden', !live.length);
+    if (!live.length) return;
+    state.pinIndex %= live.length;
+    const m = live[live.length - 1 - state.pinIndex];
+    $('#pin-bar-label').textContent = live.length > 1 ? `📌 Pinned ${state.pinIndex + 1}/${live.length}` : '📌 Pinned';
+    $('#pin-bar-text').textContent = m.masked ? 'Hidden message' : m.undecryptable ? 'Encrypted message' : (m.text || KIND_LABEL[m.media?.kind || (m.voice ? 'voice' : m.type)] || 'Message');
+    $('#pin-bar-next').classList.toggle('hidden', live.length < 2);
+    bar.dataset.id = m.id;
+  }
+
+  $('#pin-bar-body').addEventListener('click', () => { const id = $('#pin-bar').dataset.id; if (id) jumpToMessage(state.activeId, id); });
+  $('#pin-bar-next').addEventListener('click', () => { state.pinIndex++; paintPinBar(); });
+
   /** The menu of a message: reactions, Reply, Forward, Copy. */
   function openMessageMenu(m, x, y) {
     closeMessageMenu();
@@ -2945,6 +3070,13 @@
     item('Reply', () => setReplyTo(m));
     const forwardable = (m.media || m.voice || (m.text && !m.type && !m.masked)) && !m.sealed && !m.undecryptable;
     if (forwardable) item('Forward', () => forwardDialog(m));
+    const conv = state.conversations.get(m.convId);
+    if (m.from === state.me.username && !m.deleted && !m.type && !m.auto && !m.campaign && !m.voice && !m.media && !m.pending && !m.localStatus
+      && Date.now() - m.ts < EDIT_WINDOW_MS && (m.text || m.e2ee) && !m.undecryptable) item('Edit', () => startEdit(m));
+    if (conv && !m.deleted && !m.pending && !m.localStatus && !m.masked && !(conv.type === 'group' && !conv.admins?.includes(state.me.username))) {
+      const pinned = (conv.pins || []).some((p) => p.id === m.id);
+      item(pinned ? 'Unpin' : 'Pin', () => setPin(m, !pinned));
+    }
     if (m.text && !m.masked) item('Copy text', () => navigator.clipboard?.writeText(m.text).then(() => toast('Copied'), () => toast('Could not copy')));
     document.body.appendChild(menu);
     const r = menu.getBoundingClientRect();

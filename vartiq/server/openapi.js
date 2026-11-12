@@ -207,6 +207,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       live: obj({ startedAt: { type: 'integer' }, until: { type: 'integer', description: 'when the share stops by itself' }, updatedAt: { type: 'integer' }, endedAt: { type: 'integer', description: 'set when the share has ended; the position is then erased' } }, ['startedAt', 'until']),
       replyTo: obj({ id: { type: 'string' }, from: { type: 'string' }, kind: { type: 'string', description: 'text, voice, image, video, file, location, poll or event' }, text: { type: 'string', description: 'a short quote; only when neither message is end-to-end encrypted (otherwise it is inside the envelope)' } }, ['id', 'from', 'kind']),
       forwarded: { type: 'boolean', description: 'sent on from another chat' },
+      edited: { type: 'integer', description: 'when it was last edited (ms since 1970)' },
       reactions: { type: 'object', additionalProperties: { type: 'string' }, description: 'username -> the emoji they chose (one each)' },
       media: obj({
         mediaId: { type: 'string', description: 'download with `GET /media/{id}`' },
@@ -1267,7 +1268,26 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ call: { oneOf: [ref('ActiveCall'), { type: 'null' }] } })), ...errors(401, 404) },
       }),
     },
-    '/messages/{id}': { delete: op(T.msg, 'Delete my message for everyone', { params: [idParam('id')], responses: { 204: noContent, ...errors(401, 403, 404) } }) },
+    '/messages/{id}': {
+      delete: op(T.msg, 'Delete my message for everyone', { params: [idParam('id')], responses: { 204: noContent, ...errors(401, 403, 404) } }),
+      put: op(T.msg, 'Edit my message', {
+        description: 'Only my own text messages, within **15 minutes** of sending, up to 10 times (`409 edit_window_closed`). A plain message takes `text`; an encrypted chat takes `e2ee`, the new encrypted text made by the app. The message gets `edited` (ms since 1970); the old words are not kept. Not for media, polls, events, automatic or campaign messages. Everyone who can see it gets a `message:edited` event.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ text: { type: 'string', maxLength: 4000 }, e2ee: ref('Envelope') }), { text: 'Meet at 6, not 5' }),
+        responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
+      }),
+    },
+    '/messages/{id}/pin': {
+      put: op(T.msg, 'Pin or unpin a message', {
+        description: 'Up to 3 pinned messages per chat (`409 too_many_pins`). In a group only an admin can pin (`403`). A deleted or expired message is unpinned automatically. Members get a `chat:pins` event; chats carry `pins: [{ id, by, at }]`.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ pinned: { type: 'boolean' } }, ['pinned']), { pinned: true }),
+        responses: { 200: ok(obj({ pins: arrayOf(obj({ id: { type: 'string' }, by: { type: 'string' }, at: { type: 'integer' } })) })), ...errors(400, 401, 403, 404, 409, 423) },
+      }),
+    },
+    '/conversations/{id}/pins': {
+      get: op(T.msg, 'The pinned messages of a chat', { params: [CONV_ID], responses: { 200: ok(obj({ pins: arrayOf(obj({ id: { type: 'string' }, by: { type: 'string' }, at: { type: 'integer' } })), messages: arrayOf(ref('Message')) })), ...errors(401, 404, 423) } }),
+    },
     '/messages/{id}/reaction': {
       put: op(T.msg, 'React to a message with an emoji', {
         description: 'One reaction per person: send a new `emoji` to change it, or `null` to take it back. Allowed: 👍 ❤️ 😂 😮 😢 🙏 (`400` otherwise). Everyone who can see the message gets a `message:reaction` event with the full `reactions` map. Reactions are readable by the server (not end-to-end encrypted). Not on deleted, system or call messages (`409`).',
@@ -1567,6 +1587,9 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'post /conversations/{id}/typing': 'sendTyping',
     'get /conversations/{id}/call': 'getActiveCall',
     'delete /messages/{id}': 'deleteMessage',
+    'put /messages/{id}': 'editMessage',
+    'put /messages/{id}/pin': 'pinMessage',
+    'get /conversations/{id}/pins': 'listPinnedMessages',
     'put /messages/{id}/reaction': 'reactToMessage',
     'put /messages/{id}/star': 'starMessage',
     'delete /messages/{id}/star': 'unstarMessage',
