@@ -208,6 +208,7 @@ class Store {
         defaultDisappearSeconds: u.defaultDisappear || null,
         blockedPeople: u.blocked || [],
         profileViewsEnabled: this.profileViewsEnabled(username),
+        findableByPhone: this.findableByPhone(username),
         lockedChats: u.lockedChats || [],
         hiddenChats: u.hiddenChats || [],
         chatLockSet: !!u.chatLock,
@@ -1508,14 +1509,49 @@ class Store {
   /** Lookup tables for phone and email, so signing in doesn't scan every user. Dropped whenever a user or contact changes. */
   _contacts() {
     if (!this._contactIdx) {
-      const idx = { phone: new Map(), email: new Map() };
+      const idx = { phone: new Map(), email: new Map(), hash: new Map() };
       for (const u of Object.values(this.data.users)) {
-        if (u.phone && !idx.phone.has(u.phone)) idx.phone.set(u.phone, u.username);
+        if (u.phone && !idx.phone.has(u.phone)) {
+          idx.phone.set(u.phone, u.username);
+          idx.hash.set(crypto.createHash('sha256').update(u.phone).digest('hex'), u.username); // for "find friends": the app sends fingerprints, not numbers
+        }
         if (u.email && !idx.email.has(u.email)) idx.email.set(u.email, u.username);
       }
       this._contactIdx = idx;
     }
     return this._contactIdx;
+  }
+
+  /** The account whose mobile number has this SHA-256 fingerprint (of the E.164 number, e.g. "+919876543210"), or null. */
+  findByPhoneHash(hash) {
+    return this._contacts().hash.get(hash) || null;
+  }
+
+  /** May other people find this account from their phone contacts? On unless the person turned it off. */
+  findableByPhone(username) {
+    return this.data.users[username]?.findableByPhone !== false;
+  }
+
+  setFindableByPhone(username, on) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.findableByPhone = !!on;
+    this._save();
+  }
+
+  static CONTACT_DAILY_CALLS = 20;
+  static CONTACT_DAILY_HASHES = 5000;
+
+  /** Count one "find friends" lookup of `n` numbers against today's allowance. Throws (429) past it. */
+  useContactQuota(username, n, now = Date.now()) {
+    const u = this.data.users[username];
+    const day = new Date(now).toISOString().slice(0, 10);
+    const q = u.contactSync?.day === day ? u.contactSync : { day, calls: 0, hashes: 0 };
+    if (q.calls + 1 > Store.CONTACT_DAILY_CALLS || q.hashes + n > Store.CONTACT_DAILY_HASHES) {
+      throw Object.assign(new Error('You have looked up the most contacts allowed for today. Try again tomorrow.'), { status: 429, code: 'contact_limit' });
+    }
+    u.contactSync = { day, calls: q.calls + 1, hashes: q.hashes + n };
+    this._save();
   }
 
   findByPhone(phone) {

@@ -757,7 +757,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
         defaultDisappear: store.defaultDisappear(me),
         business: store.getBusiness(me),
         contact: { ...store.contactOf(me), ...(store.numberChangedAt(me) ? { numberChangedAt: store.numberChangedAt(me) } : {}) },
-        privacy: { profileViews: store.profileViewsEnabled(me) },
+        privacy: { profileViews: store.profileViewsEnabled(me), findableByPhone: store.findableByPhone(me) },
         guardian: guardianView(me),
         consent: { version: legal.VERSION, upToDate: store.consentUpToDate(me, legal.VERSION), optional: Object.fromEntries(legal.CONSENTS.filter((x) => !x.required).map((x) => [x.id, store.hasOptionalConsent(me, x.id)])) },
         appearance: appearance.effective(store.prefsOf(me), store.isPremium(me)),
@@ -1130,6 +1130,42 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     updateProfile(me, { displayName, about }) {
       store.updateProfile(me, { displayName, about });
       return { user: announceProfile(me) };
+    },
+
+    // ----- find friends from phone contacts -----
+
+    /**
+     * Which of these phone numbers belong to VartiQ accounts? The app sends the SHA-256 fingerprint of each number (E.164, e.g.
+     * "+919876543210"), not the number; nothing sent is kept. Only people who allow it (Settings, Privacy), who are not blocked either way
+     * and whom a guardian does not keep from new people are returned, with the same public view of them as anywhere else. At most 1000
+     * numbers per call, 20 calls and 5000 numbers a day.
+     */
+    contactsMatch(me, { hashes } = {}) {
+      if (!Array.isArray(hashes) || !hashes.length) throw new ApiError(400, 'invalid_request', 'Send a list of fingerprints');
+      if (hashes.length > 1000) throw new ApiError(400, 'too_many', 'Send at most 1000 numbers at a time');
+      const list = [...new Set(hashes.map((h) => String(h).toLowerCase()))];
+      if (list.some((h) => !/^[0-9a-f]{64}$/.test(h))) throw new ApiError(400, 'invalid_request', 'Each fingerprint is 64 hexadecimal characters (SHA-256)');
+      try {
+        store.useContactQuota(me, list.length);
+      } catch (err) {
+        throw new ApiError(err.status || 429, err.code || 'contact_limit', err.message);
+      }
+      const matches = [];
+      for (const hash of list) {
+        const u = store.findByPhoneHash(hash);
+        if (!u || u === me || store.isClosed(u) || !store.findableByPhone(u) || store.blockedEither(me, u)) continue;
+        const chatting = store.hasDirect(me, u);
+        if (!chatting && !store.canStartChat(me, u)) continue;
+        matches.push({ hash, user: userView(u, me), chatting });
+      }
+      return { matches, checked: list.length };
+    },
+
+    /** Let people who have my number find me (on by default). */
+    setFindable(me, { byPhone } = {}) {
+      if (typeof byPhone !== 'boolean') throw new ApiError(400, 'invalid_request', 'byPhone must be true or false');
+      store.setFindableByPhone(me, byPhone);
+      return { findableByPhone: byPhone };
     },
 
     // ----- business profile -----
@@ -2235,6 +2271,7 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
     sendLocation: 'location', updateLocation: 'location',
     sendPoll: 'polls', votePoll: 'polls',
     sendEvent: 'events', rsvpEvent: 'events', updateEvent: 'events',
+    contactsMatch: 'contactDiscovery',
     campaignCreate: 'bulkMessaging', campaignRetry: 'bulkMessaging', // reports, cancelling and stopping messages from a business always work
   };
   const assertFeature = (id) => {

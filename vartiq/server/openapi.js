@@ -940,6 +940,20 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 413, 415, 423) },
       }),
     },
+    '/contacts/match': {
+      post: op(T.users, 'Find friends: which phone numbers are on VartiQ', {
+        description: 'The app sends the **SHA-256 fingerprint** (64 hex characters) of each number from the phone\'s contacts, written in E.164 (`+919876543210`); the server compares them with its accounts and **keeps nothing it was sent**. Returns the matching accounts (the usual public view, not the number) and whether you already chat with them. Left out: people who turned off *Let people who have my number find me*, deleted accounts, anyone blocked in either direction, and children whose guardian keeps them from new people. At most 1000 per call, 20 calls and 5000 numbers a day (`429 contact_limit`). `403 feature_disabled` when switched off.',
+        body: jsonBody(obj({ hashes: { type: 'array', items: { type: 'string', pattern: '^[0-9a-f]{64}$' }, minItems: 1, maxItems: 1000 } }, ['hashes']), { hashes: ['9b5c0f...64 hex characters'] }),
+        responses: { 200: ok(obj({ matches: arrayOf(obj({ hash: { type: 'string' }, user: ref('User'), chatting: { type: 'boolean' } }, ['hash', 'user'])), checked: { type: 'integer' } })), ...errors(400, 401, 403, 429) },
+      }),
+    },
+    '/me/privacy/findable': {
+      put: op(T.me, 'Let people who have my number find me', {
+        description: 'On by default. Off: nobody can find this account by matching their contacts (searching for the full number still works for people who know it, as before).',
+        body: jsonBody(obj({ byPhone: { type: 'boolean' } }, ['byPhone']), { byPhone: false }),
+        responses: { 200: ok(obj({ findableByPhone: { type: 'boolean' } })), ...errors(400, 401) },
+      }),
+    },
     '/me/business/bot': {
       get: op(T.biz, 'The business assistant (bot): setup and limits', {
         description: 'Business accounts only. The assistant answers customers automatically from rules the business typed in: keywords to replies, a numbered menu, a hand-over to a person, and an optional fallback. No AI: the business decides every word.',
@@ -1560,6 +1574,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'delete /conversations/{id}/hide': 'unhideChat',
     'put /hidden-contacts/{username}': 'hideContactChat',
     'post /conversations/{id}/location': 'shareLocation',
+    'post /contacts/match': 'matchContacts',
+    'put /me/privacy/findable': 'setFindableByPhone',
     'get /me/business/bot': 'getBusinessBot',
     'put /me/business/bot': 'setBusinessBot',
     'post /me/business/bot/test': 'testBusinessBot',

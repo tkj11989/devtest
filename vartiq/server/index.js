@@ -58,6 +58,8 @@ const SOCKET_ACTIONS = {
   me: 'me',
   conversations: 'conversations',
   'users:search': 'searchUsers',
+  'contacts:match': 'contactsMatch',
+  'privacy:findable': 'setFindable',
   'user:block': 'block',
   'user:get': 'getUser',
   'profile:view': 'viewProfile',

@@ -72,6 +72,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   // ---------- helpers ----------
 
   const json = express.json({ limit: '50kb' });
+  const json2m = express.json({ limit: '120kb' }); // up to 1000 fingerprints of 64 characters
   const bearer = (req) => req.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
 
   const auth = (req, res, next) => {
@@ -435,6 +436,11 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.post('/push/unsubscribe', ...authed, json, run((req) => actions.pushUnsubscribe(req.user, { endpoint: req.body?.endpoint })));
   router.patch('/push/settings', ...authed, json, run((req) => actions.pushSettings(req.user, req.body || {})));
   router.post('/push/test', ...authed, run((req) => actions.pushTest(req.user)));
+
+  // ---------- find friends from phone contacts ----------
+
+  router.post('/contacts/match', ...authed, json2m, run((req) => actions.contactsMatch(req.user, { hashes: req.body?.hashes }, req.ctx)));
+  router.put('/me/privacy/findable', ...authed, json, run((req) => actions.setFindable(req.user, { byPhone: req.body?.byPhone }, req.ctx)));
 
   // ---------- business assistant (bot) ----------
 

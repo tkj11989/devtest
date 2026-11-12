@@ -22,6 +22,7 @@ const FEATURES = [
   { id: 'profilePhotos', group: 'Social', label: 'Profile photos', description: 'Uploading and showing profile photos (2 for a free account, 5 with Premium by default). Off: photos are hidden everywhere and cannot be added; removing always works.' },
   { id: 'status', group: 'Social', label: 'Status updates', description: 'Posting, viewing and replying to status updates.' },
   { id: 'channels', group: 'Social', label: 'Public channels', description: 'Creating, finding, following and posting in channels.' },
+  { id: 'contactDiscovery', group: 'Social', label: 'Find friends from contacts', description: 'Matching the phone numbers in a person\'s contacts (sent as fingerprints, never kept) with VartiQ accounts. Off: the Find friends screen cannot look anyone up.' },
   { id: 'profileViews', group: 'Social', label: 'Who viewed my profile', description: 'Recording and showing profile views.' },
   { id: 'translation', group: 'Social', label: 'Message translation', description: 'Translating received messages (sends text to the translation service).' },
   { id: 'chatLock', group: 'Privacy', label: 'Chat lock', description: 'Locking more chats. Unlocking and removing locks always work.' },
