@@ -693,6 +693,7 @@
     bulkMessaging: ['#btn-campaigns', '#btn-broadcast'],
     businessBot: ['#btn-bot'],
     attachments: ['#btn-attach'],
+    contactDiscovery: ['#btn-find-friends'],
     premium: ['#premium-row'],
     verification: ['#verify-row'],
     developerApi: ['#btn-developer'],
@@ -3761,6 +3762,24 @@
     return li;
   });
 
+  // Find friends from contacts (see findfriends.js)
+  const findFriends = window.createFindFriends({
+    emit, toast, openPanel,
+    userRow: (u) => userRow(u),
+    myPhone: () => state.contact?.phone,
+    openDirect: async (username) => {
+      try {
+        const { conversation } = await emit('chat:direct', { username });
+        if (!state.conversations.has(conversation.id)) state.conversations.set(conversation.id, conversation);
+        $('#panel-find').classList.add('hidden');
+        openChat(conversation.id);
+      } catch (err) {
+        toast(err.message);
+      }
+    },
+  });
+  $('#btn-find-friends').addEventListener('click', () => findFriends.open());
+
   $('#btn-new-chat').addEventListener('click', () => {
     openPanel('#panel-new-chat');
     $('#user-search').value = '';
@@ -5494,6 +5513,19 @@
   });
 
   $('#btn-views').addEventListener('click', openViews);
+  // "Let people who have my number find me"
+  const paintFindable = () => { $('#findable-toggle').checked = state.privacy?.findableByPhone !== false; };
+  $('#btn-profile').addEventListener('click', paintFindable);
+  $('#findable-toggle').addEventListener('change', async (e) => {
+    const byPhone = e.target.checked;
+    try {
+      const res = await emit('privacy:findable', { byPhone });
+      state.privacy = { ...state.privacy, findableByPhone: res.findableByPhone };
+    } catch (err) {
+      e.target.checked = !byPhone;
+      toast(err.message);
+    }
+  });
   $('#views-toggle').addEventListener('change', async (e) => {
     const enabled = e.target.checked;
     if (!enabled && !confirm("Turn off profile views? Your current list is erased, people won't see when you look at their profile, and you won't see who looks at yours.")) {

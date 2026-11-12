@@ -52,7 +52,7 @@ built yet.
    * **Account deletion** (required): `https://vartiq.prayuktech.com/legal/delete-account` (people can also delete in the app, Profile)
    * **Data safety:** the answers are in `docs/PRIVACY-COMPLIANCE.md` (what is collected, why, encrypted in transit, deletable)
    * **Permissions** it will ask about: microphone and camera (calls, voice notes, video calls), location (only when you tap *Share location*),
-     notifications. Nothing runs in the background except notifications.
+     contacts (only when you tap *Find friends*; the numbers become fingerprints on the phone and are not kept), notifications. Nothing runs in the background except notifications.
    * **Target audience and content:** VartiQ lets people from 8 with a parent's or guardian's consent. Choosing an audience that includes
      children brings Google's *Families* rules; take your lawyer's advice before you choose.
 3. **Test first** on a real phone: sign up, send a message, a photo, a voice note, make a voice and a video call over mobile data, turn

@@ -11,6 +11,7 @@ A real-time chat application built with **Node.js**, **Express** and **Socket.IO
 - **Status updates**: post text (on a coloured background) or photo updates that disappear after 24 hours; a Status panel with green rings for unseen updates, a full-screen viewer (tap left/right, hold to pause), "viewed by" lists on your own updates, and replies that land in your one-to-one chat
 - **Voice messages**: tap the mic, record (up to 5 minutes), send; others see "recording audio…" while you record
 - **Polls and events** in any chat: a poll (one question, 2 to 6 options, one choice, names visible) and an event (title, date and time, place, details, Going / Maybe / Can't go, a reminder before it starts). Premium adds multiple-choice, anonymous and self-closing polls (up to 12 options), and any reminder time and weekly or monthly repeating events. See "Polls and events" below.
+- **Find friends from contacts**: see which of your phone contacts are on VartiQ without sending the numbers. See "Find friends" below.
 - **Photos, videos and documents** in chats (attach button, paste or drop), **replies**, **reactions**, **forwarding** and **search**: see "Sharing files and everyday message features" below.
 - **Business assistant (bot)**: a business answers customers automatically from rules it types in (keywords to replies, a numbered menu, hand-over to a person), with a "try it" box. No AI: the business decides every word. See "Business assistant" below.
 - **Bulk messaging (campaigns and broadcasts)**: send one message to many people, now or at a set time, and watch a delivery report: **Sent, Delivered, Read, Failed** (and who replied). Business accounts reach their customers or a list; personal accounts reach only people they already chat with. See "Bulk messaging" below.
@@ -445,6 +446,16 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Admin switch**: *Profile photos* in Features. Off: photos are hidden everywhere and cannot be added; removing always works.
 - **Data**: photos are stored as media files (backed up with the rest of `media/`), erased with the account, and included in *Download my data*. They are not end-to-end encrypted.
 - **API**: `GET /me/photos`, `POST /me/photos` (`image` and `thumb` as base64), `PUT /me/photos/{id}/main`, `DELETE /me/photos/{id}`, `PUT /me/photo-privacy`, `GET /users/{username}/photos`, `POST /users/{username}/photos/{id}/report`; `user.photo` (`id`, `thumb`, `count`) appears wherever users are returned, only if you may see it. Socket: `photos:get`, `photo:upload`, `photo:main`, `photo:delete`, `photo:privacy`, `photos:user`, `photo:report`; server → client `photos:update`.
+
+## Find friends
+
+**New chat → Find friends from your contacts.** It shows which of a person's contacts have a VartiQ account, with a *Message* button, and an *Invite* button (the phone's share sheet) for the rest.
+
+- **Where the numbers come from:** the Android app reads the contacts (asks for the Contacts permission when the button is tapped), Chrome on Android offers its contact picker, and anywhere else the person can paste numbers. A local number such as `98765 43210` is read with the person's own country code (India and the other common ones; others need the `+` form).
+- **What is sent:** nothing but **SHA-256 fingerprints** of the numbers in E.164 form (`+919876543210`), computed on the phone. The server compares them with fingerprints of its accounts' numbers and **keeps nothing it was sent**. It returns the matching accounts with the usual public view, never a number.
+- **Who is found:** accounts that have not turned off *Let people who have my number find me* (Profile, on by default), that are not deleted, not blocked in either direction, and not a child whose guardian keeps them from new people (unless they already chat). Be aware that a fingerprint of a phone number is not a secret (anyone can compute the fingerprint of a number they have), which is why the limits below matter and why the setting is there.
+- **Limits:** 1000 numbers a call, **20 calls and 5000 numbers a day** per account (`429 contact_limit`). Administrators can switch **Find friends from contacts** off (Features).
+- **API:** `POST /contacts/match` with `{ "hashes": ["<64 hex>", ...] }`; `PUT /me/privacy/findable` with `{ "byPhone": false }`. The Privacy Notice says all this, and the Play Store *Data safety* form must say that contacts are collected (in the form of fingerprints), not shared, and not kept.
 
 ## Android app
 

@@ -234,7 +234,30 @@
       <div class="panel overlay hidden" id="panel-new-chat">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>New chat</h2></header>
         <div class="search"><input id="user-search" placeholder="Search people by name or username" /></div>
+        <button class="link-row" type="button" id="btn-find-friends">
+          <svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3Zm8 2c-2.7 0-8 1.340-8 4v2h16v-2c0-2.660-5.300-4-8-4ZM8 13c-.3 0-.64.020-1 .060C5.200 13.400 2 14.400 2 17v2h5v-2c0-1.100.480-2.100 1.300-2.900A9 9 0 0 0 8 13Z"/></svg>
+          <span><strong>Find friends from your contacts</strong><small>See which of your contacts are on VartiQ</small></span>
+        </button>
         <ul id="user-results" class="list"></ul>
+      </div>
+
+      <!-- Find friends from contacts -->
+      <div class="panel overlay hidden" id="panel-find">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Find friends</h2></header>
+        <div class="find-body">
+          <p class="muted" id="find-intro"></p>
+          <div class="find-actions">
+            <button class="primary" type="button" id="find-pick">Choose from my contacts</button>
+            <button class="link" type="button" id="find-paste-toggle">Or paste numbers</button>
+          </div>
+          <div id="find-paste" class="hidden">
+            <label>Phone numbers, one per line <textarea id="find-numbers" rows="5" placeholder="+91 98765 43210&#10;+91 91234 56789"></textarea></label>
+            <button class="primary small" type="button" id="find-go">Find</button>
+          </div>
+          <p class="muted" id="find-status" aria-live="polite"></p>
+          <ul class="list" id="find-results"></ul>
+          <button class="link hidden" type="button" id="find-invite">Invite friends who are not on VartiQ yet</button>
+        </div>
       </div>
 
       <!-- New group -->
@@ -619,6 +642,8 @@
             <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
             <span><strong>Who viewed my profile</strong><small id="views-summary">See who looked at your profile, and when</small></span>
           </button>
+        <label class="pad views-switch"><input type="checkbox" id="findable-toggle" checked /> <span><strong>Let people who have my number find me</strong><small class="muted">When on, someone who has your number in their contacts can see you are on VartiQ when they use Find friends. It never shows your number.</small></span></label>
+
           <button class="link-row" type="button" id="btn-devices">
             <svg viewBox="0 0 24 24" ><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 8V6a3 3 0 1 1 6 0v3H9Zm3 4a2 2 0 0 1 1 3.73V19h-2v-2.27A2 2 0 0 1 12 13Z"/></svg>
             <span><strong>Encryption &amp; linked devices</strong><small id="e2ee-summary">Messages are end-to-end encrypted</small></span>
@@ -1011,6 +1036,7 @@
   <script src="bot.js"></script>
   <script src="attachments.js"></script>
   <script src="native.js"></script>
+  <script src="findfriends.js"></script>
   <script src="business-hours.js"></script>
   <script src="place.js"></script>
   <script src="app.js"></script>
