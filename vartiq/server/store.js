@@ -209,6 +209,7 @@ class Store {
         blockedPeople: u.blocked || [],
         profileViewsEnabled: this.profileViewsEnabled(username),
         findableByPhone: this.findableByPhone(username),
+        chatPreferences: u.chatPrefs || {},
         lockedChats: u.lockedChats || [],
         hiddenChats: u.hiddenChats || [],
         chatLockSet: !!u.chatLock,
@@ -2879,6 +2880,46 @@ class Store {
     this._save();
   }
 
+  // ---------- chat settings: mute, archive, mark unread (private to each person) ----------
+
+  static MUTE_FOR = { '8h': 8 * 3600 * 1000, '1w': 7 * 24 * 3600 * 1000 };
+
+  /** { muted?: until-ms | true, archived?: true, unread?: true } for this person and chat (empty when nothing is set). */
+  chatPrefs(username, convId) {
+    return this.data.users[username]?.chatPrefs?.[convId] || {};
+  }
+
+  /** Is this chat muted for this person right now? (`muted` is an end time, or true for "always".) */
+  isMuted(username, convId, now = Date.now()) {
+    const m = this.chatPrefs(username, convId).muted;
+    return m === true || (typeof m === 'number' && m > now);
+  }
+
+  /** `patch`: { mute: 'off' | '8h' | '1w' | 'always', archived: bool, unread: bool } (any of them). Returns the new settings. */
+  setChatPrefs(username, convId, patch = {}, now = Date.now()) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    const bad = (m) => Object.assign(new Error(m), { status: 400, code: 'invalid_request' });
+    const cur = { ...(u.chatPrefs?.[convId] || {}) };
+    if (patch.mute !== undefined) {
+      if (patch.mute === 'off') delete cur.muted;
+      else if (patch.mute === 'always') cur.muted = true;
+      else if (Store.MUTE_FOR[patch.mute]) cur.muted = now + Store.MUTE_FOR[patch.mute];
+      else throw bad('mute must be off, 8h, 1w or always');
+    }
+    for (const key of ['archived', 'unread']) {
+      if (patch[key] === undefined) continue;
+      if (typeof patch[key] !== 'boolean') throw bad(`${key} must be true or false`);
+      if (patch[key]) cur[key] = true; else delete cur[key];
+    }
+    if (typeof cur.muted === 'number' && cur.muted <= now) delete cur.muted;
+    u.chatPrefs ||= {};
+    if (Object.keys(cur).length) u.chatPrefs[convId] = cur; else delete u.chatPrefs[convId];
+    if (!Object.keys(u.chatPrefs).length) delete u.chatPrefs;
+    this._save();
+    return cur;
+  }
+
   summarize(conv, username) {
     const msgs = (this.data.messages[conv.id] || []).filter((m) => Store.visibleTo(m, username));
     const unread = msgs.filter((m) => m.from !== username && !m.readBy.includes(username)).length;
@@ -2887,6 +2928,7 @@ class Store {
       ...conv,
       lastMessage: last ? this.viewFor(last, username) : null,
       unread,
+      ...(Object.keys(this.chatPrefs(username, conv.id)).length ? { prefs: this.chatPrefs(username, conv.id) } : {}),
       ...(this.translateTo(username, conv.id) ? { translateTo: this.translateTo(username, conv.id) } : {}),
     };
   }

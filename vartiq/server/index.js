@@ -114,6 +114,7 @@ const SOCKET_ACTIONS = {
   'message:star': 'star',
   'messages:starred': 'starred',
   'messages:read': 'markRead',
+  'chat:pref': 'chatPref',
   'message:delete': 'deleteMessage',
   typing: 'typing',
   'profile:update': 'updateProfile',

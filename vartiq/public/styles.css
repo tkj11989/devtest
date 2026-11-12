@@ -1611,3 +1611,14 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .search-snippet { font-size: 13.5px; color: var(--muted); overflow-wrap: anywhere; }
 .search-snippet strong { color: var(--text); font-weight: 600; }
 .search-snippet mark { background: var(--accent-soft); color: var(--accent-text); padding: 0 1px; border-radius: 2px; }
+
+/* ---------- mute, archive, unread, drafts ---------- */
+.archived-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; list-style: none; border-bottom: 1px solid var(--border); }
+.archived-row:hover, .archived-row:focus-visible { background: var(--active); outline: none; }
+.archived-icon { width: 40px; text-align: center; font-size: 20px; }
+.archived-row .badge { margin-left: auto; }
+.badge.quiet { background: var(--muted); color: #fff; }
+.badge.dot { width: 10px; min-width: 10px; height: 10px; padding: 0; }
+.muted-icon { font-size: 12px; margin-left: 4px; opacity: .7; }
+.draft-label { color: var(--danger); }
+.menu-emoji { display: inline-block; width: 24px; text-align: center; }

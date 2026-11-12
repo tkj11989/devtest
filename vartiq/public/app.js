@@ -661,6 +661,7 @@
     stopRecording(false);
     state.voiceUrls.forEach((url) => URL.revokeObjectURL(url));
     state.voiceUrls.clear();
+    forgetDrafts();
     attachments?.reset();
     state.users = {};
     showAuth();
@@ -1462,6 +1463,7 @@
     socket.on('event:reminder', ({ message }) => { toast(`Reminder: ${message.event.title} starts ${new Date(message.event.startsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); onPlanUpdate(message); });
     socket.on('call:incoming', (call) => localNotifyCall(call));
     onOrdered('message:reaction', (e) => state.onReaction?.(e));
+    socket.on('chat:prefs', ({ convId, prefs }) => applyChatPrefs(convId, prefs));
     onOrdered('message:starred', ({ convId, id, starred }) => {
       const m = state.messages.get(convId)?.find((x) => x.id === id);
       if (m) m.starred = starred;
@@ -1623,11 +1625,12 @@
     const convs = [...state.conversations.values()]
       .filter((c) => !c.hidden)
       .filter((c) => c.type === 'group' || c.lastMessage || c.disappearAfter || c.id === state.activeId)
-      .filter((c) => !q || convTitle(c).toLowerCase().includes(q))
+      .filter((c) => (q ? convTitle(c).toLowerCase().includes(q) : !!state.showArchived === !!c.prefs?.archived))
       .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
 
-    $('#chat-list-empty').classList.toggle('hidden', convs.length > 0 || !!q);
+    $('#chat-list-empty').classList.toggle('hidden', convs.length > 0 || !!q || state.showArchived || archivedCount() > 0);
     fillChatList($('#chat-list'), convs);
+    paintArchivedRow();
     if (state.hiddenOpen) renderHiddenList();
   }
 
@@ -1700,14 +1703,130 @@
       } else if (c.type === 'group') {
         preview.textContent = `${c.members.length} participants`;
       }
+      const draft = c.id !== state.activeId ? draftOf(c.id) : '';
+      if (draft && !activity && !live) {
+        preview.textContent = '';
+        preview.append(el('span', 'draft-label', 'Draft: '), draft.slice(0, 80));
+      }
       bottom.appendChild(preview);
-      if (c.unread) bottom.appendChild(el('span', 'badge', String(c.unread)));
+      if (c.unread) bottom.appendChild(el('span', `badge${c.prefs?.muted ? ' quiet' : ''}`, String(c.unread)));
+      else if (c.prefs?.unread) bottom.appendChild(el('span', 'badge dot', ''));
+      if (isMutedNow(c)) top.insertBefore(el('span', 'muted-icon', '🔕'), top.querySelector('.time'));
       body.appendChild(bottom);
 
       li.appendChild(body);
       li.addEventListener('click', () => openChat(c.id));
+      li.addEventListener('contextmenu', (e) => { e.preventDefault(); openChatMenu(c, e.clientX, e.clientY); });
+      let hold = null; // a long press on a touch screen
+      li.addEventListener('touchstart', (e) => { const t = e.touches[0]; hold = setTimeout(() => { hold = null; openChatMenu(c, t.clientX, t.clientY); li.dataset.held = '1'; }, 600); }, { passive: true });
+      for (const ev of ['touchend', 'touchmove', 'touchcancel']) li.addEventListener(ev, () => { clearTimeout(hold); hold = null; setTimeout(() => delete li.dataset.held, 50); });
+      li.addEventListener('click', (e) => { if (li.dataset.held) e.stopImmediatePropagation(); }, true);
       list.appendChild(li);
     }
+  }
+
+  // ---------- mute, archive, mark unread, drafts ----------
+
+  state.showArchived = false;
+  const archivedCount = () => [...state.conversations.values()].filter((c) => c.prefs?.archived && !c.hidden).length;
+  const isMutedNow = (c) => c.prefs?.muted === true || (typeof c.prefs?.muted === 'number' && c.prefs.muted > Date.now());
+
+  /** The "Archived (n)" row above the chats, or a way back from the archive. */
+  function paintArchivedRow() {
+    const list = $('#chat-list');
+    const n = archivedCount();
+    if (state.filter) return;
+    if (!state.showArchived && !n) return;
+    const li = el('li', 'archived-row');
+    li.tabIndex = 0;
+    li.append(el('span', 'archived-icon', state.showArchived ? '←' : '🗄️'), el('strong', '', state.showArchived ? 'Back to chats' : 'Archived'), state.showArchived ? '' : el('span', 'badge quiet', String(n)));
+    const go = () => { state.showArchived = !state.showArchived; renderChatList(); };
+    li.addEventListener('click', go);
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    list.prepend(li);
+  }
+
+  async function setChatPref(convId, patch) {
+    try {
+      const res = await emit('chat:pref', { convId, ...patch });
+      applyChatPrefs(convId, res.prefs);
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  function applyChatPrefs(convId, prefs) {
+    const conv = state.conversations.get(convId);
+    if (!conv) return;
+    if (prefs && Object.keys(prefs).length) conv.prefs = prefs; else delete conv.prefs;
+    if (state.showArchived && !archivedCount()) state.showArchived = false;
+    renderChatList();
+    if (convId === state.activeId) renderHeader();
+  }
+
+  function muteDialog(conv) {
+    if (isMutedNow(conv)) return setChatPref(conv.id, { mute: 'off' }).then(() => toast('Notifications are on again'));
+    return dialog({
+      title: 'Mute notifications',
+      text: 'You will not be notified about new messages in this chat. Calls and @mentions still come through.',
+      submit: 'Mute',
+      fields: [{ name: 'for', label: 'For', options: [['8h', '8 hours'], ['1w', '1 week'], ['always', 'Always']], value: '8h' }],
+      onSubmit: (v) => setChatPref(conv.id, { mute: v.for }),
+    });
+  }
+
+  /** What can be done to a chat from its menu or the chat list. */
+  function chatActions(conv) {
+    const prefs = conv.prefs || {};
+    return [
+      [isMutedNow(conv) ? 'Unmute notifications' : 'Mute notifications…', () => muteDialog(conv)],
+      [prefs.archived ? 'Unarchive chat' : 'Archive chat', () => setChatPref(conv.id, { archived: !prefs.archived }).then(() => { if (!prefs.archived && conv.id === state.activeId) closeChat(); })],
+      [prefs.unread ? 'Mark as read' : 'Mark as unread', async () => { await setChatPref(conv.id, { unread: !prefs.unread }); if (!prefs.unread && conv.id === state.activeId) closeChat(); }],
+    ];
+  }
+
+  function openChatMenu(conv, x, y) {
+    closeMessageMenu();
+    const menu = el('div', 'msg-menu');
+    menu.setAttribute('role', 'menu');
+    for (const [label, fn] of chatActions(conv)) {
+      const b = el('button', 'msg-menu-item', label);
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      b.addEventListener('click', () => { closeMessageMenu(); fn(); });
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - r.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - r.height - 8))}px`;
+  }
+
+  for (const [id, index] of [['#menu-mute', 0], ['#menu-archive', 1], ['#menu-unread', 2]]) {
+    $(id).addEventListener('click', () => { const c = state.conversations.get(state.activeId); if (c) chatActions(c)[index][1](); });
+  }
+
+  // Drafts: what was typed and not sent stays with its chat, on this device only (never for locked or hidden chats).
+  const draftKey = (id) => `chat.draft.${state.me?.username}.${id}`;
+  const draftOf = (id) => (state.me ? (storage.get(draftKey(id)) || '') : '');
+  const draftsAllowed = (conv) => !!conv && !conv.hidden && !isLockedView(conv);
+  let draftTimer = null;
+  function saveDraft() {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      const conv = state.conversations.get(state.activeId);
+      if (!draftsAllowed(conv)) return;
+      const text = $('#message-input').value;
+      if (text.trim()) storage.set(draftKey(conv.id), text); else storage.del(draftKey(conv.id));
+      renderChatList();
+    }, 400);
+  }
+  const clearDraft = (id) => { clearTimeout(draftTimer); storage.del(draftKey(id)); };
+  function forgetDrafts() {
+    try {
+      const prefix = `chat.draft.${state.me?.username}.`;
+      for (const k of Object.keys(localStorage)) if (k.startsWith(prefix)) localStorage.removeItem(k);
+    } catch { /* ignore */ }
   }
 
   $('#chat-filter').addEventListener('input', (e) => {
@@ -1939,6 +2058,7 @@
     $('#chat-view').classList.remove('hidden');
     $('#app').classList.add('chat-open');
     $('#emoji-picker').classList.add('hidden');
+    $('#message-input').value = draftsAllowed(conv) ? draftOf(id) : ''; // each chat keeps its own draft
     renderHeader();
     renderChatList();
     paintNumberBanner(conv);
@@ -2666,6 +2786,7 @@
   let typingTimer = null;
   let isTyping = false;
 
+  input.addEventListener('input', saveDraft);
   function autosize() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
@@ -2708,6 +2829,7 @@
     const text = input.value.trim();
     if (!text || !state.activeId) return;
     stopTyping();
+    clearDraft(state.activeId);
     input.value = '';
     autosize();
     updateComposerButtons();

@@ -251,6 +251,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
       } else {
         if (!prefs.messages) return;
         if (msg.type === 'system') return;
+        if (store.isMuted(to, conv.id)) return; // a muted chat makes no sound
       }
       const who = namesFor(conv, msg, to);
       if (!who.generic) {

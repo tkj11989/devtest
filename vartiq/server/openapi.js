@@ -910,6 +910,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ results: arrayOf(obj({ convId: { type: 'string' }, id: { type: 'string' }, ts: { type: 'integer' }, from: { type: 'string' }, snippet: { type: 'string' }, kind: { type: 'string', enum: ['image', 'video', 'file'] } }, ['convId', 'id', 'ts', 'from', 'snippet'])), words: arrayOf({ type: 'string' }), partial: { type: 'boolean' } })), ...errors(400, 401, 403, 404) },
       }),
     },
+    '/conversations/{id}/preferences': {
+      put: op(T.conv, 'Mute, archive or mark a chat unread (only for me)', {
+        description: 'Any of: `mute` (`off`, `8h`, `1w`, `always`: a muted chat sends no notifications for messages; calls and @mentions still do), `archived` (hidden from the main list until a new message arrives, unless muted), `unread` (a dot until the chat is opened). Returned as `prefs` and sent to my other devices as the `chat:prefs` event; chats carry them as `prefs`.',
+        params: [CONV_ID],
+        body: jsonBody(obj({ mute: { type: 'string', enum: ['off', '8h', '1w', 'always'] }, archived: { type: 'boolean' }, unread: { type: 'boolean' } }), { mute: '8h' }),
+        responses: { 200: ok(obj({ prefs: obj({ muted: { oneOf: [{ type: 'integer', description: 'until (ms since 1970)' }, { type: 'boolean', const: true }] }, archived: { type: 'boolean' }, unread: { type: 'boolean' } }) })), ...errors(400, 401, 404) },
+      }),
+    },
     '/conversations/{id}/uploads': {
       post: op(T.msg, 'Send a photo, video or document, step 1: upload the file', {
         description: 'Body: the file itself (or its end-to-end encrypted ciphertext with `e2ee=1`), with its Content-Type. `kind` is `image` (jpeg, png, webp, gif), `video` (mp4, webm, mov, 3gp) or `file` (pdf, txt, csv, json, rtf, zip, Word, Excel, PowerPoint and OpenDocument). Limits are an administrator setting (default photo 8 MB, video 25 MB, document 20 MB): `413 too_large`. A plain file is checked by its first bytes (`415`). Returns an `uploadId` that waits one hour for step 2 (`POST /conversations/{id}/media`); at most 10 files can wait (`429 too_many_uploads`). `403 feature_disabled` when switched off.',
@@ -1590,6 +1598,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'get /me/promotions': 'listStoppedPromotions',
     'put /me/promotions/{business}': 'setPromotionPreference',
     'get /search/messages': 'searchMessages',
+    'put /conversations/{id}/preferences': 'setChatPreferences',
     'post /conversations/{id}/uploads': 'uploadMedia',
     'post /conversations/{id}/media': 'sendMedia',
     'post /conversations/{id}/polls': 'createPoll',

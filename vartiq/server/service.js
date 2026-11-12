@@ -580,6 +580,11 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       if (m !== msg.from && isOnline(m)) store.addDelivered(msg, m);
     }
     store._save();
+    for (const m of recipients) {
+      if (m !== msg.from && store.chatPrefs(m, conv.id).archived && !store.isMuted(m, conv.id)) {
+        notify(m, 'chat:prefs', { convId: conv.id, prefs: store.setChatPrefs(m, conv.id, { archived: false }) });
+      }
+    }
     for (const m of recipients) notify(m, 'message:new', { message: store.viewFor(msg, m) });
     // Anyone not connected gets a notification on their devices (if they turned that on): who and what kind, never the text.
     if (push) for (const m of recipients) if (m !== msg.from) push.message(m, conv, msg);
@@ -1880,11 +1885,25 @@ function createService({ store, io, isOnline, linking, webhooks, iceServers, otp
       return { ended: true };
     },
 
+    /** Mute, archive or mark as unread one chat (only for me): `mute` 'off' | '8h' | '1w' | 'always', `archived`, `unread`. */
+    chatPref(me, { convId, mute, archived, unread } = {}, ctx) {
+      member(me, convId);
+      let prefs;
+      try {
+        prefs = store.setChatPrefs(me, convId, { mute, archived, unread });
+      } catch (err) {
+        throw new ApiError(err.status || 400, err.code || 'invalid_request', err.message);
+      }
+      notify(me, 'chat:prefs', { convId, prefs }); // my other devices too
+      return { prefs };
+    },
+
     markRead(me, { convId }, ctx) {
       member(me, convId);
       requireUnlocked(me, convId, ctx);
       const changed = store.markRead(convId, me);
       notifyStatus(convId, changed);
+      if (store.chatPrefs(me, convId).unread) notify(me, 'chat:prefs', { convId, prefs: store.setChatPrefs(me, convId, { unread: false }) });
       return { updated: changed.length };
     },
 

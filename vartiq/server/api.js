@@ -347,6 +347,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     clientId: idempotency(req),
   }, req.ctx), 201));
   router.get('/search/messages', ...authed, run((req) => actions.searchMessages(req.user, { q: req.query.q, convId: req.query.conversation, limit: req.query.limit }, req.ctx)));
+  router.put('/conversations/:id/preferences', ...authed, json, run((req) => actions.chatPref(req.user, { convId: p(req, 'id'), mute: req.body?.mute, archived: req.body?.archived, unread: req.body?.unread }, req.ctx)));
   router.post('/conversations/:id/read', ...authed, run((req) => actions.markRead(req.user, { convId: p(req, 'id') }, req.ctx)));
   router.post('/conversations/:id/typing', ...authed, json, run((req) => {
     const { isTyping = true, activity } = req.body || {};
