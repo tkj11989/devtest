@@ -16,7 +16,7 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 | Desktop apps | No (browser) | Yes | Yes | Yes | Yes |
 | End-to-end encryption | Yes for 1:1 and groups in the web app; off in chats with a business assistant | Yes, by default | Only in "secret chats" | Yes, by default | Partial |
 | Several devices | Partial (link a browser by code) | Yes (history syncs) | Yes (cloud) | Yes | Yes |
-| Chat backup and restore | **No** | Yes | Cloud | Partial | Partial |
+| Chat backup and restore | **Yes** (recovery-key backup of message keys; new phone reads the history the server keeps; no media files saved on the phone) | Yes | Cloud | Partial | Partial |
 | Find people from the phone's contacts | **No** (search by username or full number) | Yes | Yes | Yes | Yes |
 | Reply to a message, reactions, forward, edit, pin | **Yes** (edit within 15 minutes, pin up to 3, @mentions in groups) | Yes | Yes | Yes | Yes |
 | Search inside chats | **Yes** (server-readable messages, plus encrypted chats on the device) | Yes | Yes | Yes | Yes |
@@ -47,7 +47,7 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 2. **No Android or iPhone app.** The installable web app cannot ring for a call when the app is closed, is limited on iPhone, and is not in the Play Store or App Store (which is where business customers look). Wrapping the web app with Capacitor is the quickest route. *Medium.*
 3. **No finding people from the phone's contacts.** Without it a new user sees an empty app. Needs the contacts permission and a privacy-safe way to match numbers (hashed matching), plus the Digital Personal Data Protection rules for this. *Medium.*
 4. **~~Everyday message features~~ Done on 12 Nov 2026** (kept for the record): edit within 15 minutes, pin, @mentions, link previews, stickers, mute, archive, mark unread, drafts (reply, reactions, forward and search on 10 Nov). Still missing: GIF search (needs an outside GIF service and key), user-made sticker packs.
-5. **No backup, and a new phone starts with no history.** Chats are encrypted per device, so changing phones loses the history. Needs an encrypted backup (a key the user keeps) and history sync to linked devices. *Large.*
+5. **~~No backup, and a new phone starts with no history~~ Done on 13 Nov 2026** (recovery-key backup of message keys). Still missing: a backup that also keeps the messages themselves when the server no longer has them, restore from the old phone directly (QR / nearby), history sync to linked browsers without the key, and a way to recover if the key is lost (by design there is none).
 6. **App screens are in English only.** Only the legal text and per-contact translation are multilingual. Most of the target market expects Hindi and other Indian languages in the menus. *Medium: collect all screen text into one file, then translate.*
 
 ### B. Businesses will want these (to compete with WhatsApp Business)

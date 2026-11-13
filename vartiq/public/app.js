@@ -220,7 +220,7 @@
     if (!m?.e2ee) return m;
     m.encrypted = true;
     if (m.deleted || m.text || m.undecryptable) return m;
-    if (!state.e2ee?.ready || !m.e2ee.w[state.e2ee.deviceId]) {
+    if (!state.e2ee?.ready || (!m.e2ee.w[state.e2ee.deviceId] && !state.e2ee.hasRestored(m.id))) {
       m.undecryptable = true; // sent before this device had its key, or no key here
       return m;
     }
@@ -1435,6 +1435,11 @@
         if (!state.e2ee) state.e2ee = window.E2EE.createClient({ emit, username: me.username, deviceName: deviceName() });
         await state.e2ee.init();
         renderE2eeSummary();
+        state.backup ||= window.createBackupController({
+          E2EE: window.E2EE, emit, getE2ee: () => state.e2ee, token: () => state.token, appSession: APP_SESSION,
+          username: () => state.me.username, conversations: () => state.conversations, toast, dialog, openPanel,
+          reloadChats: () => loadConversations(), clearCache: () => state.cache?.clear(),
+        });
         emit('subscription:status').then((sub) => { state.sub = sub; renderPremiumRow(); }).catch(() => {});
         state.iceServers = iceServers || [];
         state.blocked = new Set(blocked || []);
@@ -1444,6 +1449,8 @@
         $('#app').classList.remove('hidden');
         paintAvatar($('#btn-profile'), me.displayName, me.username);
         await loadConversations();
+        state.backup?.offerRestore();
+        setTimeout(() => state.backup?.auto(), 20000);
         applyGuardian();
         statusUpdates.load();
         channelsUI.load();

@@ -1306,6 +1306,24 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
       }),
     },
+    '/backup': {
+      get: op(T.e2ee, 'About my history backup', {
+        description: 'When the last backup was made, how big it is and how many messages it covers; `backup` is `null` when there is none. A backup is one file made and locked **by the app** with a recovery key only the person has; it holds the keys that open old encrypted messages, so a new phone can read the history the server still keeps. The server cannot open it.',
+        responses: { 200: ok(obj({ backup: { oneOf: [obj({ at: { type: 'integer' }, size: { type: 'integer' }, messages: { type: 'integer' }, device: { type: ['string', 'null'] } }), { type: 'null' }] }, maxBytes: { type: 'integer' } })), ...errors(401) },
+      }),
+      delete: op(T.e2ee, 'Delete my backup', { responses: { 200: ok(obj({ deleted: { type: 'boolean' } })), ...errors(401) } }),
+    },
+    '/backup/file': {
+      put: op(T.e2ee, 'Save my backup file', {
+        description: 'Body: the locked backup file (bytes, at most 25 MB). Replaces the earlier one. Optional headers `X-Backup-Messages` (how many messages it covers) and `X-Backup-Device` (a name for the device). 24 a day.',
+        body: { required: true, content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } },
+        responses: { 200: ok(obj({ backup: obj({ at: { type: 'integer' }, size: { type: 'integer' }, messages: { type: 'integer' } }) })), ...errors(400, 401, 403, 413, 429) },
+      }),
+      get: op(T.e2ee, 'Download my backup file', {
+        description: 'The locked file exactly as it was saved. Only the app that has the recovery key can open it.',
+        responses: { 200: { description: 'The file', content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } }, ...errors(401, 403, 404) },
+      }),
+    },
     '/communities': {
       get: op(T.conv, 'My communities', { responses: { 200: ok(obj({ communities: arrayOf(ref('Community')) })), ...errors(401) } }),
       post: op(T.conv, 'Create a community', {
@@ -1785,6 +1803,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /messages/{id}': 'editMessage',
     'put /messages/{id}/pin': 'pinMessage',
     'post /messages/{id}/report': 'reportMessage',
+    'get /backup': 'backupInfo',
+    'delete /backup': 'deleteBackup',
+    'put /backup/file': 'saveBackup',
+    'get /backup/file': 'downloadBackup',
     'get /communities': 'listCommunities',
     'post /communities': 'createCommunity',
     'get /communities/{id}': 'getCommunity',

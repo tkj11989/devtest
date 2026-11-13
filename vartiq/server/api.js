@@ -445,6 +445,20 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.post('/messages/:id/report', ...authed, json2m, run((req) => actions.reportSafety(req.user, { msgId: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail, evidence: req.body?.evidence, block: req.body?.block }, req.ctx), 201));
   router.post('/users/:username/report', ...authed, json, run((req) => actions.reportSafety(req.user, { username: p(req, 'username'), reason: req.body?.reason, detail: req.body?.detail, block: req.body?.block }, req.ctx), 201));
+  // ----- encrypted history backup -----
+  const rawBackup = express.raw({ type: '*/*', limit: '26mb' });
+  router.get('/backup', ...authed, run((req) => actions.backupStatus(req.user)));
+  router.put('/backup/file', ...authed, rawBackup, run((req) => actions.backupPut(req.user, { data: req.body, messages: req.get('x-backup-messages'), device: req.get('x-backup-device') })));
+  router.get('/backup/file', ...authed, (req, res) => {
+    try {
+      const { data } = actions.backupGet(req.user);
+      res.set({ 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' }).send(data);
+    } catch (err) {
+      res.status(err.status || 500).json({ error: { code: err.code || 'internal', message: err.message } });
+    }
+  });
+  router.delete('/backup', ...authed, run((req) => actions.backupDelete(req.user)));
+
   // ----- communities -----
   const c = (req, extra = {}) => ({ id: p(req, 'id'), ...extra });
   router.get('/communities', ...authed, run((req) => actions.communities(req.user)));

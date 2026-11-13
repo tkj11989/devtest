@@ -1657,3 +1657,7 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .owner-tag{background:#fff3e0;color:#b45f06}
 .member-more{margin-left:auto;font-size:20px}
 .wide-link{display:block;margin:16px auto}
+
+.restore-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:#e8f1fc;font-size:.9em}
+.restore-banner.hidden{display:none}
+.restore-banner span{flex:1 1 200px}

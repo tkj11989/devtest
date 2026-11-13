@@ -1189,6 +1189,27 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
      * and whom a guardian does not keep from new people are returned, with the same public view of them as anywhere else. At most 1000
      * numbers per call, 20 calls and 5000 numbers a day.
      */
+    /** About my backup (when, how big), or null. */
+    backupStatus(me) {
+      return { backup: store.backupInfo(me), maxBytes: Store.MAX_BACKUP_BYTES };
+    },
+
+    /** Save the backup file (made and locked by the app). Replaces the one before. */
+    backupPut(me, { data, messages, device } = {}) {
+      if (!Buffer.isBuffer(data)) throw new ApiError(400, 'invalid_request', 'Send the backup file as the request body');
+      try { return { backup: store.saveBackup(me, data, { messages, device }) }; } catch (err) { throw groupError(err); }
+    },
+
+    backupGet(me) {
+      const data = store.readBackup(me);
+      if (!data) throw new ApiError(404, 'not_found', 'There is no backup');
+      return { data };
+    },
+
+    backupDelete(me) {
+      return { deleted: store.deleteBackup(me) };
+    },
+
     async linkPreview(me, { url } = {}) {
       const target = typeof url === 'string' ? (linkPreviewer?.allowed(url) || allowedUrl(url)) : null;
       if (!target) throw new ApiError(400, 'invalid_request', 'Send a link that starts with http:// or https://');
@@ -2649,7 +2670,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     sendPoll: 'polls', votePoll: 'polls',
     sendEvent: 'events', rsvpEvent: 'events', updateEvent: 'events',
     contactsMatch: 'contactDiscovery',
-    linkPreview: 'linkPreviews',
+    linkPreview: 'linkPreviews', backupPut: 'backup', backupGet: 'backup',
     campaignCreate: 'bulkMessaging', campaignRetry: 'bulkMessaging', // reports, cancelling and stopping messages from a business always work
   };
   const assertFeature = (id) => {

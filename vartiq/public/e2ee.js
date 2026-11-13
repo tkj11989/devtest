@@ -99,7 +99,7 @@
    *  - `senderDevices`: the sender's registered devices [{ id, publicKey }] (from the key directory)
    * Returns { payload, media } or throws.
    */
-  async function decrypt({ device, convId, from, envelope, senderDevices, media }) {
+  async function unwrapContentKey({ device, convId, from, envelope, senderDevices }) {
     const wrap = envelope.w?.[device.id];
     if (!wrap) throw new Error('not encrypted for this device');
     const sender = senderDevices.find((d) => d.id === envelope.sd);
@@ -119,12 +119,68 @@
       { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('chatapp-e2ee-v1'), info: enc.encode(`wrap|${device.id}`) },
       hk, { name: 'AES-GCM', length: 256 }, false, ['decrypt'],
     );
-    const ck = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64u(wrap.iv), additionalData: ad }, wk, fromB64u(wrap.k));
+    const ck = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: fromB64u(wrap.iv), additionalData: ad }, wk, fromB64u(wrap.k)));
+    return ck;
+  }
+
+  /** Open a message with its content key (from the wrap meant for this device, or from a backup). */
+  async function openWithKey({ ck, convId, from, envelope, media }) {
+    const ad = aad(convId, from, envelope.sd);
     const key = await subtle.importKey('raw', ck, 'AES-GCM', false, ['decrypt']);
     const pt = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64u(envelope.iv), additionalData: ad }, key, fromB64u(envelope.ct));
     let plain;
     if (media) plain = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: fromB64u(envelope.mi), additionalData: ad }, key, media));
     return { payload: JSON.parse(dec.decode(pt)), media: plain };
+  }
+
+  async function decrypt(args) {
+    const ck = await unwrapContentKey(args);
+    return openWithKey({ ck, convId: args.convId, from: args.from, envelope: args.envelope, media: args.media });
+  }
+
+  // ----- history backup: the recovery key and the locked file -----
+
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  /** A new recovery key: 32 random bytes, shown as 13 groups of 4 letters and digits (A-Z, 2-7). */
+  function newRecoveryKey() {
+    const bytes = random(32);
+    let bits = 0, acc = 0, out = '';
+    for (const b of bytes) { acc = (acc << 8) | b; bits += 8; while (bits >= 5) { out += B32[(acc >>> (bits - 5)) & 31]; bits -= 5; } }
+    if (bits) out += B32[(acc << (5 - bits)) & 31];
+    return { bytes, text: out.match(/.{1,4}/g).join('-') };
+  }
+  /** The bytes of a typed recovery key (capitals, spaces and dashes do not matter). Throws if it is not one. */
+  function parseRecoveryKey(text) {
+    const t = String(text || '').toUpperCase().replace(/[\s-]/g, '').replace(/0/g, 'O').replace(/1/g, 'I').replace(/8/g, 'B');
+    if (!/^[A-Z2-7]{52}$/.test(t)) throw new Error('That is not a recovery key. It has 13 groups of 4 letters and digits.');
+    const out = new Uint8Array(32);
+    let bits = 0, acc = 0, n = 0;
+    for (const ch of t) { acc = (acc << 5) | B32.indexOf(ch); bits += 5; if (bits >= 8) { out[n++] = (acc >>> (bits - 8)) & 255; bits -= 8; if (n === 32) break; } }
+    return out;
+  }
+  /** The AES key that locks the backup (not extractable; can be kept in IndexedDB for automatic backups). */
+  async function backupKeyFrom(bytes) {
+    const hk = await subtle.importKey('raw', bytes, 'HKDF', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode('vartiq-backup-v1'), info: enc.encode('history keys') }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  /** `{ v, at, keys: { messageId: contentKeyB64u } }` -> locked bytes (12-byte nonce, then ciphertext). */
+  async function lockBackup(key, content) {
+    const iv = random(12);
+    const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('vartiq-backup-v1') }, key, enc.encode(JSON.stringify(content))));
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv, 0);
+    out.set(ct, 12);
+    return out;
+  }
+  async function unlockBackup(key, bytes) {
+    const b = new Uint8Array(bytes);
+    if (b.length < 29) throw new Error('This is not a backup file');
+    try {
+      const pt = await subtle.decrypt({ name: 'AES-GCM', iv: b.subarray(0, 12), additionalData: enc.encode('vartiq-backup-v1') }, key, b.subarray(12));
+      return JSON.parse(dec.decode(pt));
+    } catch {
+      throw new Error('This recovery key does not open the backup');
+    }
   }
 
   /**
@@ -181,6 +237,7 @@
   function createClient({ emit, username, deviceName }) {
     const keyCache = new Map(); // convId -> { keys: { user: [devices] }, at }
     let device = null; // { id, privateKey }
+    let restored = new Map(); // messageId -> content key (base64url) from a backup: opens old messages this device never received a key for
     const client = {
       get ready() { return !!device; },
       get deviceId() { return device?.id || null; },
@@ -199,6 +256,7 @@
             await keyStore.put(username, saved);
           }
           device = { id: saved.id, privateKey: saved.privateKey, publicKey: saved.publicKey };
+          try { restored = new Map(Object.entries((await keyStore.get(`restored:${username}`))?.keys || {})); } catch { restored = new Map(); }
           return true;
         } catch (err) {
           console.warn('Encryption is not available:', err.message);
@@ -236,7 +294,35 @@
       },
 
       /** Decrypt a message from the server; `media` is the downloaded ciphertext of a voice message. */
+      /** Is there a content key from a backup for this message? */
+      hasRestored(id) { return restored.has(id); },
+      get restoredCount() { return restored.size; },
+      store: keyStore,
+
+      /** Keep the content keys of a restored backup on this device (added to those already here). */
+      async addRestored(keys) {
+        for (const [id, k] of Object.entries(keys || {})) restored.set(id, k);
+        await keyStore.put(`restored:${username}`, { keys: Object.fromEntries(restored), at: Date.now() });
+        return restored.size;
+      },
+
+      /** The content key (base64url) of a message: from the wrap meant for this device, or from a restored backup; null if neither. */
+      async contentKey(msg) {
+        if (!msg?.e2ee) return null;
+        if (msg.e2ee.w?.[device?.id]) {
+          const attempt = async (refresh) => {
+            const keys = await this.keysFor(msg.convId, { refresh });
+            return unwrapContentKey({ device, convId: msg.convId, from: msg.from, envelope: msg.e2ee, senderDevices: keys[msg.from] || [] });
+          };
+          try { return toB64u(await attempt(false)); } catch { try { return toB64u(await attempt(true)); } catch { /* fall through */ } }
+        }
+        return restored.get(msg.id) || null;
+      },
+
       async decrypt(msg, media) {
+        if (!msg.e2ee?.w?.[device?.id] && restored.has(msg.id)) {
+          return openWithKey({ ck: fromB64u(restored.get(msg.id)), convId: msg.convId, from: msg.from, envelope: msg.e2ee, media });
+        }
         const attempt = async (refresh) => {
           const keys = await this.keysFor(msg.convId, { refresh });
           return decrypt({ device, convId: msg.convId, from: msg.from, envelope: msg.e2ee, senderDevices: keys[msg.from] || [], media });
@@ -252,5 +338,5 @@
     return client;
   }
 
-  return { generateDevice, encrypt, decrypt, safetyNumber, createClient, toB64u, fromB64u };
+  return { generateDevice, encrypt, decrypt, unwrapContentKey, openWithKey, newRecoveryKey, parseRecoveryKey, backupKeyFrom, lockBackup, unlockBackup, safetyNumber, createClient, toB64u, fromB64u };
 }));

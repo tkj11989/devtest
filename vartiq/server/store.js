@@ -265,6 +265,7 @@ class Store {
     }
     this._contactIdx = null;
     this.dropSessionsOf(username);
+    this.deleteBackup(username);
     for (const [id, k] of Object.entries(this.data.apiKeys)) if (k.owner === username) delete this.data.apiKeys[id];
     for (const [id, w] of Object.entries(this.data.webhooks)) if (w.owner === username) delete this.data.webhooks[id];
     for (const c of Object.values(this.data.campaigns)) { // nothing more goes out in their name
@@ -3664,6 +3665,51 @@ class Store {
     if (!clientId) return null;
     clientId = String(clientId).slice(0, 64);
     return (this.data.messages[convId] || []).slice(-200).find((m) => m.from === from && m.clientId === clientId) || null;
+  }
+
+  // ---------- encrypted history backup ----------
+  //
+  // One file per account, made and locked by the app with a recovery key only the person has. It holds the keys that open
+  // old encrypted messages, so a new phone can read the history still kept on the server. The server cannot open it.
+
+  static MAX_BACKUP_BYTES = 25 * 1024 * 1024;
+  static BACKUPS_PER_DAY = 24;
+
+  backupInfo(username) {
+    const b = this.data.users[username]?.backup;
+    return b ? { at: b.at, size: b.size, messages: b.messages, device: b.device || null } : null;
+  }
+
+  saveBackup(username, buffer, { messages = 0, device = '' } = {}, now = Date.now()) {
+    const u = this.data.users[username];
+    if (!u) throw Object.assign(new Error('No such account'), { status: 404, code: 'not_found' });
+    if (!buffer?.length) throw Object.assign(new Error('The backup file is empty'), { status: 400, code: 'invalid_request' });
+    if (buffer.length > Store.MAX_BACKUP_BYTES) throw Object.assign(new Error(`A backup can be at most ${Store.MAX_BACKUP_BYTES / 1048576} MB`), { status: 413, code: 'too_large' });
+    const recent = (u.backupLog || []).filter((t) => t > now - 24 * 3600 * 1000);
+    if (recent.length >= Store.BACKUPS_PER_DAY) throw Object.assign(new Error('Too many backups today. Try again later.'), { status: 429, code: 'rate_limited' });
+    const old = u.backup?.mediaId;
+    const mediaId = this.saveMedia({ backupOf: username }, buffer, 'application/octet-stream');
+    u.backup = { mediaId, at: now, size: buffer.length, messages: Math.max(0, Math.floor(Number(messages) || 0)), device: String(device || '').slice(0, 60) };
+    u.backupLog = [...recent, now];
+    if (old) this.deleteMedia(old);
+    this._save();
+    return this.backupInfo(username);
+  }
+
+  readBackup(username) {
+    const id = this.data.users[username]?.backup?.mediaId;
+    if (!id) return null;
+    if (this.mediaDir) { const f = path.join(this.mediaDir, path.basename(id)); return fs.existsSync(f) ? fs.readFileSync(f) : null; }
+    return this.memoryMedia.get(id) || null;
+  }
+
+  deleteBackup(username) {
+    const u = this.data.users[username];
+    if (!u?.backup) return false;
+    this.deleteMedia(u.backup.mediaId);
+    delete u.backup;
+    this._save();
+    return true;
   }
 
   // ---------- voice-message media ----------

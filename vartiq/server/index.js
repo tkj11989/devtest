@@ -61,6 +61,8 @@ const SOCKET_ACTIONS = {
   'users:search': 'searchUsers',
   'contacts:match': 'contactsMatch',
   'link:preview': 'linkPreview',
+  'backup:status': 'backupStatus',
+  'backup:delete': 'backupDelete',
   'safety:report': 'reportSafety',
   'group:edit': 'groupEdit',
   'group:settings': 'groupSettings',

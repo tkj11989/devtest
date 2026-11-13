@@ -10,7 +10,7 @@
  * or with LEGAL_* environment variables. Change a text? Raise VERSION: everybody is asked to accept again.
  */
 
-const VERSION = '2026-11-15';
+const VERSION = '2026-11-16';
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -159,6 +159,7 @@ function privacyNotice() {
         'Reports (only when you report someone): the message you report and up to five messages before it, with the sender, the time and your reason, are sent to us; in an encrypted chat your app decrypts them for this, and only because you chose to report. Reports are deleted when our team has looked at them, and in any case after six months.',
         'To stop spam, we count how many new chats and messages an account starts in a short time, and compare repeated texts only where we can already read them (never the words of encrypted messages); accounts that look like spam can be limited.',
         'Groups and communities: who the members and admins are, names, descriptions and invite links are visible to our servers and to the members. People who join a group later see only the messages sent after they joined.',
+        'Chat backup (only if you turn it on): your app uploads one file that holds the keys to your old messages, locked with a recovery key that only you have, so we cannot open it. Anyone who has your recovery key and your login can read your old messages on a new phone. The file is deleted when you turn backup off or delete your account.',
         'Public channel posts, status updates, profile and business details, group names, and the names of people in a chat are visible to our servers (and to the people allowed to see them).',
         'Locations you share in the web app are end-to-end encrypted like messages. A location shared through the developer API is stored as readable coordinates.',
         'Profile photos are not end-to-end encrypted: the people you allow can see them, and our moderators can see a photo that has been reported.',

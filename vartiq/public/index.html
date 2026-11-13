@@ -211,6 +211,7 @@
           <div><strong>You're offline</strong><span>Reconnecting… messages you send will go out when you're back.</span></div>
         </div>
         <div class="search"><input id="chat-filter" placeholder="Search chats and messages" /></div>
+        <div class="restore-banner hidden" id="restore-banner"><span>You have a chat backup. Restore your old messages on this phone?</span><button type="button" class="link" id="restore-open">Restore</button><button type="button" class="link" id="restore-no">Not now</button></div>
         <ul id="chat-list" class="list"></ul>
         <div id="search-results" class="search-results hidden" aria-live="polite"></div>
         <p id="chat-list-empty" class="muted pad hidden">No chats yet. Tap the + icon to start one.</p>
@@ -240,6 +241,11 @@
           <span><strong>Find friends from your contacts</strong><small>See which of your contacts are on VartiQ</small></span>
         </button>
         <ul id="user-results" class="list"></ul>
+      </div>
+
+      <div class="panel overlay hidden" id="panel-backup">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Chat backup</h2></header>
+        <div class="contact-scroll pad" id="backup-body"></div>
       </div>
 
       <!-- Communities -->
@@ -630,6 +636,10 @@
             <label class="cache-switch"><input type="checkbox" id="cache-toggle" checked aria-label="Save chats on this device" /></label>
             <button class="link" type="button" id="btn-cache-clear">Clear</button>
           </div>
+          <button class="link-row" type="button" id="btn-backup">
+            <svg viewBox="0 0 24 24"><path d="M19.350 10.040A7.490 7.490 0 0 0 12 4C9.110 4 6.600 5.640 5.350 8.040A5.994 5.994 0 0 0 0 14c0 3.310 2.690 6 6 6h13c2.760 0 5-2.240 5-5 0-2.640-2.050-4.780-4.650-4.960ZM14 13v4h-4v-4H7l5-5 5 5h-3Z"/></svg>
+            <span><strong>Chat backup</strong><small>Keep your old messages when you change phone</small></span>
+          </button>
           <div class="link-row static" id="linkprev-row">
             <svg viewBox="0 0 24 24"><path d="M3.900 12a3.100 3.100 0 0 1 3.100-3.100h4V7H7a5 5 0 0 0 0 10h4v-1.900H7A3.100 3.100 0 0 1 3.900 12ZM8 13h8v-2H8v2Zm9-6h-4v1.900h4a3.100 3.100 0 0 1 0 6.200h-4V17h4a5 5 0 0 0 0-10Z"/></svg>
             <span><strong>Link previews</strong><small>When you send a link, VartiQ's server opens it to get the title and a small picture, and sends them with your message. Off by default: the server then never sees your links.</small></span>
@@ -1054,6 +1064,7 @@
   <script src="call.js"></script>
   <script src="status.js"></script>
   <script src="chatcache.js"></script>
+  <script src="backup.js"></script>
   <script src="channels.js"></script>
   <script src="campaigns.js"></script>
   <script src="bot.js"></script>
