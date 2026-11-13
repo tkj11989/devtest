@@ -62,6 +62,17 @@ const SOCKET_ACTIONS = {
   'contacts:match': 'contactsMatch',
   'link:preview': 'linkPreview',
   'backup:status': 'backupStatus',
+  'quick:list': 'quickReplies',
+  'quick:save': 'quickReplySave',
+  'quick:delete': 'quickReplyDelete',
+  'label:list': 'labels',
+  'label:save': 'labelSave',
+  'label:delete': 'labelDelete',
+  'label:chat': 'chatLabelsSet',
+  'order:place': 'orderPlace',
+  'order:update': 'orderUpdate',
+  'order:list': 'orders',
+  'business:insights': 'insights',
   'backup:delete': 'backupDelete',
   'safety:report': 'reportSafety',
   'group:edit': 'groupEdit',
@@ -390,6 +401,8 @@ function createApp({
   const legal = require('./legal');
   // An invite link to a group: the web app picks the code up from the address and asks "Join this group?" (the code never goes to other sites).
   app.get('/join/:code', (req, res) => res.set({ 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' }).redirect(`/#join=${encodeURIComponent(String(req.params.code).slice(0, 64))}`));
+  // A business's "click to chat" link (put it on a website, a poster or a message): opens the app at a chat with that business.
+  app.get('/c/:username', (req, res) => res.set({ 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' }).redirect(`/#chat=${encodeURIComponent(String(req.params.username).slice(0, 30))}${req.query.text ? `&text=${encodeURIComponent(String(req.query.text).slice(0, 500))}` : ''}`));
   app.get('/legal/:doc', (req, res) => {
     const html = legal.documentHtml(req.params.doc, legal.details(store.getSettings()), req.query.lang);
     if (!html) return res.status(404).send('Not found');

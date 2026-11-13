@@ -1189,6 +1189,62 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
      * and whom a guardian does not keep from new people are returned, with the same public view of them as anywhere else. At most 1000
      * numbers per call, 20 calls and 5000 numbers a day.
      */
+    // ----- business tools -----
+
+    quickReplies(me) {
+      try { return { quickReplies: store.quickReplies(me) }; } catch (err) { throw groupError(err); }
+    },
+    quickReplySave(me, { id, shortcut, text } = {}) {
+      try { return { quickReplies: store.saveQuickReply(me, { id, shortcut, text }) }; } catch (err) { throw groupError(err); }
+    },
+    quickReplyDelete(me, { id } = {}) {
+      try { return { quickReplies: store.deleteQuickReply(me, String(id)) }; } catch (err) { throw groupError(err); }
+    },
+
+    labels(me) {
+      try { return store.labelsOf(me); } catch (err) { throw groupError(err); }
+    },
+    labelSave(me, { id, name, color } = {}) {
+      try { store.saveLabel(me, { id, name, color }); return store.labelsOf(me); } catch (err) { throw groupError(err); }
+    },
+    labelDelete(me, { id } = {}) {
+      try { store.deleteLabel(me, String(id)); return store.labelsOf(me); } catch (err) { throw groupError(err); }
+    },
+    chatLabelsSet(me, { convId, ids } = {}) {
+      try { return { ids: store.setChatLabels(me, convId, ids) }; } catch (err) { throw groupError(err); }
+    },
+
+    /** A customer orders from a business's catalogue in their chat. Prices come from the catalogue. */
+    orderPlace(me, { convId, items, note, clientId } = {}, ctx) {
+      const conv = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const business = conv.type === 'direct' ? conv.members.find((m) => m !== me) : null;
+      if (!business || !store.getBusiness(business)) throw new ApiError(400, 'invalid_request', 'You can order from a business account in a direct chat');
+      if (store.getBusiness(me)) throw new ApiError(400, 'invalid_request', 'Business accounts cannot place orders');
+      const dup = store.findByClientId(convId, me, clientId);
+      if (dup) return { message: store.viewFor(dup, me) };
+      let order;
+      try { order = store.buildOrder(business, items, note); } catch (err) { throw groupError(err); }
+      return { message: sendMessage(me, convId, `Order #${order.number}`, { clientId, order }) };
+    },
+
+    /** Move an order on, cancel it, or mark it paid (the business); the customer can cancel until it is packed. */
+    orderUpdate(me, { id, status, paid } = {}, ctx) {
+      let found;
+      try { found = store.updateOrder(me, String(id || ''), { status, paid }); } catch (err) { throw groupError(err); }
+      requireUnlocked(me, found.convId, ctx);
+      planChanged(found.convId, found.message, 'order:update');
+      return { message: store.viewFor(found.message, me) };
+    },
+
+    orders(me, { status } = {}) {
+      try { return { orders: store.ordersOf(me, { status }) }; } catch (err) { throw groupError(err); }
+    },
+
+    insights(me, { days } = {}) {
+      try { return { insights: store.businessInsights(me, { days }) }; } catch (err) { throw groupError(err); }
+    },
+
     /** About my backup (when, how big), or null. */
     backupStatus(me) {
       return { backup: store.backupInfo(me), maxBytes: Store.MAX_BACKUP_BYTES };
@@ -2670,7 +2726,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     sendPoll: 'polls', votePoll: 'polls',
     sendEvent: 'events', rsvpEvent: 'events', updateEvent: 'events',
     contactsMatch: 'contactDiscovery',
-    linkPreview: 'linkPreviews', backupPut: 'backup', backupGet: 'backup',
+    linkPreview: 'linkPreviews', quickReplySave: 'business', labelSave: 'business', insights: 'business', orderPlace: 'catalogue', orderUpdate: 'catalogue', backupPut: 'backup', backupGet: 'backup',
     campaignCreate: 'bulkMessaging', campaignRetry: 'bulkMessaging', // reports, cancelling and stopping messages from a business always work
   };
   const assertFeature = (id) => {

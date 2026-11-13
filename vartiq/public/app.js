@@ -250,7 +250,7 @@
   }
 
   /** Text for a message in lists and previews. */
-  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'poll' && m.poll ? `📊 ${m.poll.question}` : m.type === 'event' && m.event ? `📅 ${m.event.title}` : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
+  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'order' && m.order ? `🛒 Order #${m.order.number}` : m.type === 'poll' && m.poll ? `📊 ${m.poll.question}` : m.type === 'event' && m.event ? `📅 ${m.event.title}` : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
 
   const openLockSvg = () => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1361,7 +1361,7 @@
     });
     statusUpdates.attach(socket);
     channelsUI.attach(socket);
-    socket.once('connect', () => setTimeout(handleJoinLink, 500));
+    socket.once('connect', () => setTimeout(async () => { if (!await handleChatLink()) handleJoinLink(); }, 500));
 
     // Events that carry (or refer to) messages are handled one at a time, in order, after decryption.
     let inbox = Promise.resolve();
@@ -1450,6 +1450,7 @@
         paintAvatar($('#btn-profile'), me.displayName, me.username);
         await loadConversations();
         state.backup?.offerRestore();
+        state.biz?.load().then(() => { state.biz.paintFilter(); renderChatList(); });
         setTimeout(() => state.backup?.auto(), 20000);
         applyGuardian();
         statusUpdates.load();
@@ -1468,6 +1469,7 @@
     onOrdered('message:new', ({ message }) => onMessage(message));
     onOrdered('location:update', ({ message }) => onLocationUpdate(message));
     onOrdered('poll:update', ({ message }) => onPlanUpdate(message));
+    onOrdered('order:update', ({ message }) => onPlanUpdate(message));
     onOrdered('event:update', ({ message }) => onPlanUpdate(message));
     socket.on('event:reminder', ({ message }) => { toast(`Reminder: ${message.event.title} starts ${new Date(message.event.startsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); onPlanUpdate(message); });
     socket.on('call:incoming', (call) => localNotifyCall(call));
@@ -1636,9 +1638,11 @@
   }
 
   function renderChatList() {
+    state.biz?.paintFilter();
     const q = state.filter.toLowerCase();
     const convs = [...state.conversations.values()]
       .filter((c) => !c.hidden)
+      .filter((c) => !state.biz || state.biz.passesFilter(c.id))
       .filter((c) => c.type === 'group' || c.lastMessage || c.disappearAfter || c.id === state.activeId)
       .filter((c) => (q ? convTitle(c).toLowerCase().includes(q) : !!state.showArchived === !!c.prefs?.archived))
       .sort((a, b) => (b.lastMessage?.ts || b.createdAt) - (a.lastMessage?.ts || a.createdAt));
@@ -1673,6 +1677,7 @@
       const body = el('div', 'body');
       const top = el('div', 'row');
       top.appendChild(el('span', 'name', convTitle(c)));
+      if (state.biz) for (const l of state.biz.labelsOf(c.id)) top.appendChild(state.biz.labelDot(l));
       if (peer && state.users[peer]) top.append(...userBadges(state.users[peer]));
       if (c.disappearAfter) top.appendChild(timerIcon(`Auto-delete: ${fmtTimer(c.disappearAfter)}`));
       if (c.locked) top.appendChild(lockIcon(c.unlocked ? 'Locked chat (unlocked for now)' : 'Locked chat'));
@@ -2179,6 +2184,7 @@
     });
     $('#chat-name').textContent = convTitle(conv);
     paintSendNote();
+    { const pu = peer && state.users[peer]; $('#btn-order').classList.toggle('hidden', !(conv.type === 'direct' && pu?.business?.productCount > 0 && !state.me?.business)); $('#menu-labels').classList.toggle('hidden', !state.me?.business); }
     $('#menu-report').classList.toggle('hidden', conv.type !== 'direct');
     const badgesEl = $('#chat-badges');
     badgesEl.textContent = '';
@@ -2364,6 +2370,8 @@
         bubble.appendChild(voicePlayer(m));
       } else if (m.type === 'location') {
         bubble.appendChild(placeCard(m, mine));
+      } else if (m.type === 'order' && m.order) {
+        bubble.appendChild(state.biz.orderCard(m, mine));
       } else if (m.type === 'poll' && m.poll) {
         bubble.appendChild(pollCard(m, mine));
       } else if (m.type === 'event' && m.event) {
@@ -3051,6 +3059,20 @@
   /** While typing "@ab" in a group, offer the members whose name or username starts with it. */
   function updateMentionBox() {
     const conv = state.conversations.get(state.activeId);
+    const slash = state.me?.business && state.biz ? input.value.match(/^\/([a-z0-9_]{0,20})$/i) : null;
+    if (slash) {
+      const found = state.biz.quickMatches(slash[1]);
+      mentionBox.textContent = '';
+      if (!found.length) return mentionBox.classList.add('hidden');
+      for (const qr of found) {
+        const li = el('li', 'mention-item');
+        li.setAttribute('role', 'option');
+        li.append(el('strong', '', `/${qr.shortcut}`), el('span', 'muted', ` ${qr.text.slice(0, 60)}`));
+        li.addEventListener('mousedown', (e) => { e.preventDefault(); input.value = qr.text; mentionBox.classList.add('hidden'); autosize(); updateComposerButtons(); saveDraft(); input.focus(); });
+        mentionBox.appendChild(li);
+      }
+      return mentionBox.classList.remove('hidden');
+    }
     const before = input.value.slice(0, input.selectionStart ?? input.value.length);
     const hit = conv?.type === 'group' ? before.match(/(^|[\s(])@([\p{L}\p{N}_.-]{0,32})$/u) : null;
     if (!hit) return mentionBox.classList.add('hidden');
@@ -5353,6 +5375,21 @@
   }
 
   // Joining with an invite link: the link opens the app at /#join=CODE.
+  // A business's chat link (/c/shop?text=Hello) opens at /#chat=shop&text=Hello: start (or open) that chat with the words filled in.
+  async function handleChatLink() {
+    const m = location.hash.match(/^#chat=([A-Za-z0-9_.]{3,30})(?:&text=(.*))?$/);
+    if (!m) return false;
+    history.replaceState(null, '', location.pathname + location.search);
+    try {
+      const { conversation } = await emit('chat:direct', { username: m[1].toLowerCase() });
+      state.conversations.set(conversation.id, conversation);
+      renderChatList();
+      await openChat(conversation.id);
+      if (m[2]) { try { input.value = decodeURIComponent(m[2]).slice(0, 500); } catch { /* ignore */ } autosize(); updateComposerButtons(); input.focus(); }
+    } catch (err) { toast(err.message); }
+    return true;
+  }
+
   async function handleJoinLink() {
     const m = location.hash.match(/^#join=([A-Za-z0-9_-]{10,64})$/);
     if (!m) return;
@@ -5582,6 +5619,7 @@
     form.address.value = b?.address || '';
     form.email.value = state.contact?.email || b?.email || '';
     form.website.value = b?.website || '';
+    form.upi.value = b?.upi || '';
     // Time-zone lists differ between browsers (e.g. "Asia/Calcutta" vs "Asia/Kolkata"):
     // make sure the saved zone is always selectable.
     const tz = b?.timezone || browserTz;
@@ -5653,6 +5691,7 @@
         description: f.description.value,
         address: f.address.value,
         website: f.website.value,
+        upi: f.upi.value,
         timezone: f.timezone.value,
         hours,
         greeting: { enabled: f.greetingEnabled.checked, text: f.greetingText.value },
@@ -6304,6 +6343,7 @@
     $('#btn-catalogue-edit').classList.toggle('hidden', !state.myBusiness);
     $('#btn-campaigns').classList.toggle('hidden', !state.myBusiness);
     $('#btn-bot').classList.toggle('hidden', !state.myBusiness);
+    $('#btn-biztools').classList.toggle('hidden', !state.myBusiness);
     $('#bot-row-sub').textContent = state.myBusiness?.bot?.enabled ? 'On: answering customers automatically' : 'Answer common questions automatically';
     $('#btn-broadcast').classList.toggle('hidden', !!state.myBusiness); // a business opens it from its business profile
     $('#catalogue-edit-sub').textContent = n ? `${n} product${n === 1 ? '' : 's'} with prices` : 'List your products with prices';
@@ -6993,6 +7033,15 @@
     onSaved(bot) { if (state.myBusiness) { state.myBusiness.bot = bot; updateCatalogueRow(); } },
   });
   $('#btn-bot').addEventListener('click', () => botUI.open());
+
+  // Business tools: quick replies, labels, orders, insights (see biztools.js)
+  state.biz = window.createBizTools({
+    emit, toast, dialog, openPanel, closePanel: (id) => $(id).classList.add('hidden'),
+    me: () => state.me, user: (u) => state.users[u], conversations: () => state.conversations,
+    openChat: (id, opts) => openChat(id, opts), renderChatList: () => renderChatList(), displayName: (u) => displayName(u),
+  });
+  $('#btn-order').addEventListener('click', () => { const c = state.conversations.get(state.activeId); const peer = c && convPeer(c); if (peer) state.biz.orderDialog(c, peer); });
+  $('#menu-labels').addEventListener('click', () => { const c = state.conversations.get(state.activeId); if (c) state.biz.chatLabelsDialog(c); });
 
   // Bulk messaging: campaigns and their delivery reports (see campaigns.js)
   const campaignsUI = window.createCampaignsController({ emit, toast, dialog, openPanel, token: () => state.token });

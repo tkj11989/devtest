@@ -1661,3 +1661,26 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .restore-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:#e8f1fc;font-size:.9em}
 .restore-banner.hidden{display:none}
 .restore-banner span{flex:1 1 200px}
+
+.label-filter{display:flex;gap:6px;flex-wrap:wrap;padding:6px 10px}
+.label-filter.hidden{display:none}
+.chip-btn{border:1px solid rgba(0,0,0,.15);background:none;border-radius:14px;padding:2px 10px;font-size:.85em;cursor:pointer}
+.chip-btn.on{background:#0670de;color:#fff;border-color:#0670de}
+.label-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:4px;vertical-align:middle}
+.order-card{min-width:230px;max-width:320px}
+.order-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.order-status{font-size:.75em;padding:1px 8px;border-radius:10px;background:#e3f2fd;color:#0b5394}
+.order-status.delivered{background:#e8f5e9;color:#2e7d32}
+.order-status.cancelled{background:#ffebee;color:#c62828}
+.order-paid{font-size:.75em;padding:1px 8px;border-radius:10px;background:#e8f5e9;color:#2e7d32}
+.order-items{margin:6px 0;padding-left:0;list-style:none}
+.order-total{font-weight:600}
+.order-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.pay-btn{text-decoration:none;display:inline-block}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.stat-tile{padding:8px;border-radius:8px;background:rgba(0,0,0,.04)}
+.stat-num{font-size:1.4em;font-weight:600}
+.hour-bars{display:flex;align-items:flex-end;gap:2px;height:90px}
+.hour-bar{flex:1;background:#0670de;border-radius:2px 2px 0 0;min-height:2px}
+.hour-axis{display:flex;justify-content:space-between;font-size:.75em;opacity:.7}
+.wrap-code{word-break:break-all;display:block;padding:6px;background:rgba(0,0,0,.05);border-radius:6px}

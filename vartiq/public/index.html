@@ -212,6 +212,7 @@
         </div>
         <div class="search"><input id="chat-filter" placeholder="Search chats and messages" /></div>
         <div class="restore-banner hidden" id="restore-banner"><span>You have a chat backup. Restore your old messages on this phone?</span><button type="button" class="link" id="restore-open">Restore</button><button type="button" class="link" id="restore-no">Not now</button></div>
+        <div class="label-filter hidden" id="label-filter"></div>
         <ul id="chat-list" class="list"></ul>
         <div id="search-results" class="search-results hidden" aria-live="polite"></div>
         <p id="chat-list-empty" class="muted pad hidden">No chats yet. Tap the + icon to start one.</p>
@@ -246,6 +247,19 @@
       <div class="panel overlay hidden" id="panel-backup">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Chat backup</h2></header>
         <div class="contact-scroll pad" id="backup-body"></div>
+      </div>
+
+      <div class="panel overlay hidden" id="panel-biztools">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Business tools</h2></header>
+        <div class="contact-scroll pad" id="biztools-body"></div>
+      </div>
+      <div class="panel overlay hidden" id="panel-bizorders">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Orders</h2></header>
+        <div class="contact-scroll" id="bizorders-body"></div>
+      </div>
+      <div class="panel overlay hidden" id="panel-bizinsights">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>How am I doing?</h2></header>
+        <div class="contact-scroll" id="bizinsights-body"></div>
       </div>
 
       <!-- Communities -->
@@ -524,6 +538,10 @@
             <svg viewBox="0 0 24 24"><path d="M20 4H4v2h16V4Zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1Zm-9 4H6v-4h6v4Z"/></svg>
             <span><strong>Product catalogue</strong><small id="catalogue-edit-sub">List your products with prices</small></span>
           </button>
+          <button class="link-row hidden" type="button" id="btn-biztools">
+            <svg viewBox="0 0 24 24"><path d="M20 6h-4V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2Zm-10-2h4v2h-4V4Z"/></svg>
+            <span><strong>Business tools</strong><small>Quick replies, labels, orders, how you are doing, chat link</small></span>
+          </button>
           <button class="link-row hidden" type="button" id="btn-bot">
             <svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v1.1A6 6 0 0 1 18 10v1h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h1v-1a6 6 0 0 1 5-5.9V3a1 1 0 0 1 1-1Zm-3 9a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
             <span><strong>Assistant (bot)</strong><small id="bot-row-sub">Answer common questions automatically</small></span>
@@ -538,6 +556,8 @@
           <label>Email <input name="email" type="email" maxlength="120" readonly />
             <small class="muted">Your verified email. Change it in Profile.</small></label>
           <label>Website <input name="website" maxlength="200" placeholder="https://example.com" /></label>
+          <label>UPI ID for payments (optional) <input name="upi" maxlength="60" placeholder="yourshop@okbank" autocapitalize="off" />
+            <small class="muted">Customers can pay you with one tap from an order. VartiQ does not handle the money.</small></label>
           <label>Time zone <select name="timezone"></select></label>
           <fieldset class="biz-hours">
             <legend>Business hours</legend>
@@ -825,6 +845,7 @@
               <button role="menuitem" id="menu-mute"><span class="menu-emoji">🔕</span><span id="menu-mute-label">Mute notifications</span></button>
               <button role="menuitem" id="menu-archive"><span class="menu-emoji">🗄️</span><span id="menu-archive-label">Archive chat</span></button>
               <button role="menuitem" id="menu-unread"><span class="menu-emoji">🔵</span><span>Mark as unread</span></button>
+              <button role="menuitem" id="menu-labels" class="hidden"><span class="menu-emoji">🏷️</span><span>Labels</span></button>
               <button role="menuitem" id="menu-report"><span class="menu-emoji">🚩</span><span>Report this person</span></button>
               <button role="menuitem" id="menu-hide"><svg viewBox="0 0 24 24" class="menu-svg"><path d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.8 11.8 0 0 0 22.99 12 11.83 11.83 0 0 0 12 4.5c-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7ZM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12a11.83 11.83 0 0 0 15.38 6.62l.42.42L19.73 22 21 20.73 3.27 3 2 4.27ZM7.53 9.8l1.55 1.55A2.82 2.82 0 0 0 9 12a3 3 0 0 0 3 3c.22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53a5 5 0 0 1-5-5c0-.79.2-1.53.53-2.2Zm4.31-.78 3.15 3.15.02-.16a3 3 0 0 0-3-3l-.17.01Z"/></svg><span>Hide chat</span></button>
               <button role="menuitem" id="menu-block"><img src="icons/blocked.png" alt="" /><span>Block contact</span></button>
@@ -900,6 +921,7 @@
           <button type="button" class="icon-btn" id="btn-place" title="Share location" aria-label="Share location">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
           </button>
+          <button type="button" class="icon-btn hidden" id="btn-order" title="Order from this business" aria-label="Order from this business">🛒</button>
           <button type="button" class="icon-btn" id="btn-poll" title="Create a poll" aria-label="Create a poll">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M5 9h3v10H5V9Zm5.500-5h3v15h-3V4ZM16 13h3v6h-3v-6Z"/></svg>
           </button>
@@ -1065,6 +1087,7 @@
   <script src="status.js"></script>
   <script src="chatcache.js"></script>
   <script src="backup.js"></script>
+  <script src="biztools.js"></script>
   <script src="channels.js"></script>
   <script src="campaigns.js"></script>
   <script src="bot.js"></script>

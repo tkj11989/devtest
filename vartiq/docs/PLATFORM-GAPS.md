@@ -52,7 +52,7 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 
 ### B. Businesses will want these (to compete with WhatsApp Business)
 7. **No approved message templates or an official business API.** There is a developer API and webhooks, but no template approval, no business verification flow with a provider, no QR code or "click to chat" link, and no multi-agent shared inbox.
-8. **Missing business tools:** labels on chats, saved quick replies, order and cart flow, payments in the chat (UPI), and reports beyond campaigns (response time, busiest hours).
+8. **Business tools: mostly done on 13 Nov 2026** (labels, quick replies, orders from the catalogue, UPI pay link, insights, chat link). Still missing: a QR code of the chat link, a shared inbox for several agents, a cart in the catalogue view, UPI payments confirmed automatically (needs a payment provider and a registered business), delivery addresses and shipping, and exports of orders.
 9. **Assistant limits:** it reads only typed text, cannot take an order, and turns off encryption for its chats. Replies to images and voice are not possible.
 
 ### C. Scale and reliability (the product is built for hundreds, not millions)

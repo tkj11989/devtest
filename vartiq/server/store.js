@@ -2085,7 +2085,7 @@ class Store {
 
   /** What everyone sees (greeting/away texts stay private to the owner). */
   static _publicBusiness(b, assistantAllowed = true) {
-    const { greeting, away, bot, ...pub } = b;
+    const { greeting, away, bot, orderSeq, ...pub } = b;
     // Everyone is told whether the business answers with an assistant (chats with it are then not end-to-end encrypted); not how.
     if (bot?.enabled && assistantAllowed) pub.assistant = true;
     return pub;
@@ -2129,6 +2129,8 @@ class Store {
         throw new Error('website is not a valid URL');
       }
     }
+    const upi = input.upi === undefined ? (u.business?.upi || '') : str(input.upi, 60, 'UPI ID').toLowerCase();
+    if (upi && !/^[a-z0-9._-]{2,40}@[a-z][a-z0-9.-]{1,30}$/.test(upi)) throw new Error('UPI ID is not valid (like name@bank)');
     const timezone = str(input.timezone || 'UTC', 64, 'timezone');
     if (!BusinessHours.isValidTimeZone(timezone)) throw new Error('timezone is not a valid IANA time zone (e.g. "Asia/Kolkata")');
     const auto = (v, field) => {
@@ -2148,6 +2150,8 @@ class Store {
       greeting: auto(input.greeting, 'Greeting'),
       away: auto(input.away, 'Away'),
       since: u.business?.since || Date.now(),
+      ...(upi ? { upi } : {}),
+      ...(u.business?.orderSeq ? { orderSeq: u.business.orderSeq } : {}),
       ...(u.business?.bot ? { bot: u.business.bot } : {}), // the assistant is set up on its own screen: saving the profile keeps it
     };
     this._save();
@@ -3163,6 +3167,229 @@ class Store {
     return { conv, approved: !!approve };
   }
 
+  // ---------- business tools: quick replies, labels, orders, insights ----------
+
+  static ORDER_STATUSES = ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled'];
+  static LABEL_COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00897b', '#1e88e5', '#5e35b1', '#d81b60', '#6d4c41', '#546e7a'];
+  static MAX_QUICK_REPLIES = 50;
+  static MAX_LABELS = 20;
+  static MAX_ORDER_ITEMS = 30;
+
+  _biz(username) {
+    const u = this.data.users[username];
+    if (!u?.business) throw Store.gerr(403, 'forbidden', 'Only business accounts can do this');
+    return u;
+  }
+
+  quickReplies(username) {
+    return [...(this._biz(username).quickReplies || [])];
+  }
+
+  /** `shortcut` is what the business types after "/" (letters, digits, _; unique). */
+  saveQuickReply(username, { id, shortcut, text } = {}) {
+    const u = this._biz(username);
+    const sc = String(shortcut ?? '').trim().toLowerCase().replace(/^\//, '');
+    const body = String(text ?? '').trim();
+    if (!/^[a-z0-9_]{1,20}$/.test(sc)) throw Store.gerr(400, 'invalid_request', 'The shortcut is 1 to 20 letters, digits or _');
+    if (!body) throw Store.gerr(400, 'invalid_request', 'Write the reply');
+    if (body.length > 1000) throw Store.gerr(400, 'invalid_request', 'The reply is too long (at most 1000 characters)');
+    const list = u.quickReplies || [];
+    if (list.some((q) => q.shortcut === sc && q.id !== id)) throw Store.gerr(409, 'conflict', `/${sc} is already used`);
+    if (id) {
+      const q = list.find((x) => x.id === id);
+      if (!q) throw Store.gerr(404, 'not_found', 'Quick reply not found');
+      u.quickReplies = list.map((x) => (x.id === id ? { id, shortcut: sc, text: body } : x));
+    } else {
+      if (list.length >= Store.MAX_QUICK_REPLIES) throw Store.gerr(409, 'conflict', `You can save ${Store.MAX_QUICK_REPLIES} quick replies`);
+      u.quickReplies = [...list, { id: crypto.randomBytes(5).toString('hex'), shortcut: sc, text: body }];
+    }
+    this._save();
+    return u.quickReplies;
+  }
+
+  deleteQuickReply(username, id) {
+    const u = this._biz(username);
+    u.quickReplies = (u.quickReplies || []).filter((q) => q.id !== id);
+    this._save();
+    return u.quickReplies;
+  }
+
+  /** Labels a business puts on its chats (private to the business). */
+  labelsOf(username) {
+    const u = this._biz(username);
+    const live = new Set(this._convsOf(username).map((c) => c.id));
+    const chats = Object.fromEntries(Object.entries(u.chatLabels || {}).filter(([c]) => live.has(c)));
+    return { labels: [...(u.labels || [])], chats, colors: Store.LABEL_COLORS };
+  }
+
+  saveLabel(username, { id, name, color } = {}) {
+    const u = this._biz(username);
+    const n = String(name ?? '').trim().slice(0, 24);
+    if (!n) throw Store.gerr(400, 'invalid_request', 'The label needs a name');
+    const col = Store.LABEL_COLORS.includes(color) ? color : Store.LABEL_COLORS[0];
+    const list = u.labels || [];
+    if (list.some((l) => l.name.toLowerCase() === n.toLowerCase() && l.id !== id)) throw Store.gerr(409, 'conflict', 'You already have a label with that name');
+    if (id) {
+      if (!list.some((l) => l.id === id)) throw Store.gerr(404, 'not_found', 'Label not found');
+      u.labels = list.map((l) => (l.id === id ? { id, name: n, color: col } : l));
+    } else {
+      if (list.length >= Store.MAX_LABELS) throw Store.gerr(409, 'conflict', `You can have ${Store.MAX_LABELS} labels`);
+      u.labels = [...list, { id: crypto.randomBytes(4).toString('hex'), name: n, color: col }];
+    }
+    this._save();
+    return u.labels;
+  }
+
+  deleteLabel(username, id) {
+    const u = this._biz(username);
+    u.labels = (u.labels || []).filter((l) => l.id !== id);
+    for (const [c, ids] of Object.entries(u.chatLabels || {})) {
+      const left = ids.filter((x) => x !== id);
+      if (left.length) u.chatLabels[c] = left; else delete u.chatLabels[c];
+    }
+    this._save();
+    return u.labels;
+  }
+
+  setChatLabels(username, convId, ids) {
+    const u = this._biz(username);
+    if (!this.isMember(convId, username)) throw Store.gerr(404, 'not_found', 'Chat not found');
+    const known = new Set((u.labels || []).map((l) => l.id));
+    const list = [...new Set((Array.isArray(ids) ? ids : []).map(String))].filter((x) => known.has(x)).slice(0, 5);
+    u.chatLabels = { ...(u.chatLabels || {}) };
+    if (list.length) u.chatLabels[convId] = list; else delete u.chatLabels[convId];
+    this._save();
+    return list;
+  }
+
+  /** Build the order a customer places from `business`'s catalogue (prices come from the catalogue, not the customer). */
+  buildOrder(business, items, note) {
+    const u = this._biz(business);
+    const products = u.catalogue?.products || [];
+    if (!Array.isArray(items) || !items.length) throw Store.gerr(400, 'invalid_request', 'Choose at least one product');
+    if (items.length > Store.MAX_ORDER_ITEMS) throw Store.gerr(400, 'invalid_request', `An order can have at most ${Store.MAX_ORDER_ITEMS} products`);
+    const lines = [];
+    const seen = new Set();
+    for (const it of items) {
+      const p = products.find((x) => x.id === it?.id);
+      const qty = Math.floor(Number(it?.qty));
+      if (!p || seen.has(p.id)) throw Store.gerr(400, 'invalid_request', 'A product in the order is not in the catalogue');
+      if (!(qty >= 1 && qty <= 99)) throw Store.gerr(400, 'invalid_request', 'Quantity is 1 to 99');
+      if (p.available === false) throw Store.gerr(409, 'conflict', `${p.name} is not available`);
+      seen.add(p.id);
+      lines.push({ id: p.id, name: p.name, price: Number(p.price) || 0, qty });
+    }
+    const total = Math.round(lines.reduce((t, l) => t + l.price * l.qty, 0) * 100) / 100;
+    u.business.orderSeq = (u.business.orderSeq || 0) + 1;
+    return { number: u.business.orderSeq, items: lines, total, currency: u.catalogue?.currency || 'INR', note: String(note ?? '').trim().slice(0, 300), status: 'placed', paid: false, history: [{ status: 'placed', at: Date.now() }] };
+  }
+
+  /** The business moves an order on (or cancels it, or marks it paid); the customer may only cancel before it is packed. */
+  updateOrder(by, msgId, { status, paid } = {}, now = Date.now()) {
+    const found = this.findMessage(msgId);
+    if (!found?.message.order || !this.isMember(found.convId, by)) throw Store.gerr(404, 'not_found', 'Order not found');
+    const m = found.message;
+    const o = m.order;
+    const conv = this.getConversation(found.convId);
+    const business = conv.members.find((x) => x !== m.from);
+    const isBiz = by === business;
+    if (!isBiz && by !== m.from) throw Store.gerr(403, 'forbidden', 'Not your order');
+    if (status !== undefined) {
+      if (!Store.ORDER_STATUSES.includes(status)) throw Store.gerr(400, 'invalid_request', `status must be one of: ${Store.ORDER_STATUSES.join(', ')}`);
+      if (['delivered', 'cancelled'].includes(o.status)) throw Store.gerr(409, 'conflict', `This order is already ${o.status}`);
+      if (status !== o.status) {
+        if (!isBiz) {
+          if (status !== 'cancelled' || !['placed', 'confirmed'].includes(o.status)) throw Store.gerr(403, 'forbidden', 'You can cancel an order until it is packed');
+        } else if (status !== 'cancelled' && Store.ORDER_STATUSES.indexOf(status) < Store.ORDER_STATUSES.indexOf(o.status)) {
+          throw Store.gerr(409, 'conflict', 'An order cannot go back');
+        }
+        o.status = status;
+        o.history = [...o.history, { status, at: now, by }];
+      }
+    }
+    if (paid !== undefined) {
+      if (!isBiz) throw Store.gerr(403, 'forbidden', 'Only the business marks an order as paid');
+      o.paid = paid === true;
+      o.history = [...o.history, { status: o.paid ? 'paid' : 'unpaid', at: now, by }];
+    }
+    m.order = o;
+    this._touchMsg(found.convId, m);
+    this._save();
+    return found;
+  }
+
+  /** Every order in this business's chats, newest first. */
+  ordersOf(username, { status } = {}) {
+    this._biz(username);
+    const out = [];
+    for (const conv of this._convsOf(username)) {
+      for (const m of this.data.messages[conv.id] || []) {
+        if (m.order && !m.deleted && (!status || m.order.status === status)) out.push({ convId: conv.id, id: m.id, customer: m.from, ts: m.ts, order: m.order });
+      }
+    }
+    return out.sort((a, b) => b.ts - a.ts);
+  }
+
+  /**
+   * How the business is doing over the last `days`: new customers, messages, how fast it answers (automatic replies do not
+   * count), when customers write, and orders. Built from who wrote when; message text is never read.
+   */
+  businessInsights(username, { days = 30 } = {}, now = Date.now()) {
+    const u = this._biz(username);
+    days = Math.max(1, Math.min(90, Math.floor(Number(days) || 30)));
+    const since = now - days * 86400000;
+    const tz = u.business.timezone || 'UTC';
+    const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: 'numeric', hourCycle: 'h23', weekday: 'short' });
+    const hours = Array(24).fill(0);
+    const weekdays = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+    let received = 0, sent = 0, auto = 0, newCustomers = 0, waiting = 0;
+    const replyMs = [];
+    const orders = { count: 0, revenue: 0, byStatus: {}, products: {} };
+    for (const conv of this._convsOf(username)) {
+      if (conv.type !== 'direct') continue;
+      const list = (this.data.messages[conv.id] || []).filter((m) => m.type !== 'system' && m.type !== 'call' && !m.deleted);
+      if (!list.length) continue;
+      const customer = conv.members.find((x) => x !== username);
+      if (list[0].from === customer && list[0].ts >= since) newCustomers++;
+      let pending = null; // the first customer message not answered yet
+      for (const m of list) {
+        const mine = m.from === username;
+        if (m.ts < since) { if (!mine && pending === null) pending = m.ts; else if (mine && !m.auto) pending = null; continue; }
+        if (mine) {
+          if (m.auto) { auto++; continue; }
+          sent++;
+          if (pending !== null) { replyMs.push(m.ts - pending); pending = null; }
+        } else {
+          received++;
+          const parts = Object.fromEntries(fmt.formatToParts(new Date(m.ts)).map((p) => [p.type, p.value]));
+          hours[Number(parts.hour)]++;
+          if (parts.weekday in weekdays) weekdays[parts.weekday]++;
+          if (pending === null) pending = m.ts;
+        }
+        if (m.order && m.ts >= since) {
+          orders.count++;
+          orders.byStatus[m.order.status] = (orders.byStatus[m.order.status] || 0) + 1;
+          if (m.order.status !== 'cancelled') {
+            orders.revenue += m.order.total;
+            for (const it of m.order.items) orders.products[it.name] = (orders.products[it.name] || 0) + it.qty;
+          }
+        }
+      }
+      if (pending !== null && now - pending > 3600000) waiting++;
+    }
+    replyMs.sort((a, b) => a - b);
+    const pct = (p) => (replyMs.length ? replyMs[Math.min(replyMs.length - 1, Math.floor(p * replyMs.length))] : null);
+    return {
+      days, timezone: tz, newCustomers, received, sent, automatic: auto,
+      answered: replyMs.length,
+      replyTimeMs: { median: pct(0.5), p90: pct(0.9) },
+      answeredWithinHour: replyMs.length ? Math.round(100 * replyMs.filter((t) => t <= 3600000).length / replyMs.length) : null,
+      waitingOverHour: waiting,
+      busiestHours: hours, weekdays,
+      orders: { count: orders.count, revenue: Math.round(orders.revenue * 100) / 100, currency: u.catalogue?.currency || 'INR', byStatus: orders.byStatus, topProducts: Object.entries(orders.products).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, qty]) => ({ name, qty })) },
+    };
+  }
+
   // ---------- communities: a place with an announcements group and linked groups ----------
 
   static MAX_COMMUNITY_GROUPS = 20;
@@ -3830,7 +4057,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker, order } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -3871,6 +4098,7 @@ class Store {
     }
     if (replyTo) msg.replyTo = replyTo; // { id, from, kind, text? }: the message this one answers
     if (forwarded) msg.forwarded = true;
+    if (order) { msg.type = 'order'; msg.order = order; }
     if (sticker) msg.sticker = true; // a sticker: `text` is one large emoji (inside the encrypted part in encrypted chats)
     if (preview) msg.preview = preview; // { url, title, description?, site?, image? } of a link in the text (plain messages only)
     if (mentions?.length) msg.mentions = mentions; // usernames tagged with @ in a group (metadata: the text may be encrypted)

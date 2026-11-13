@@ -445,6 +445,21 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.post('/messages/:id/report', ...authed, json2m, run((req) => actions.reportSafety(req.user, { msgId: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail, evidence: req.body?.evidence, block: req.body?.block }, req.ctx), 201));
   router.post('/users/:username/report', ...authed, json, run((req) => actions.reportSafety(req.user, { username: p(req, 'username'), reason: req.body?.reason, detail: req.body?.detail, block: req.body?.block }, req.ctx), 201));
+  // ----- business tools -----
+  router.get('/business/quick-replies', ...authed, run((req) => actions.quickReplies(req.user)));
+  router.post('/business/quick-replies', ...authed, json, run((req) => actions.quickReplySave(req.user, { shortcut: req.body?.shortcut, text: req.body?.text }), 201));
+  router.put('/business/quick-replies/:id', ...authed, json, run((req) => actions.quickReplySave(req.user, { id: p(req, 'id'), shortcut: req.body?.shortcut, text: req.body?.text })));
+  router.delete('/business/quick-replies/:id', ...authed, run((req) => actions.quickReplyDelete(req.user, { id: p(req, 'id') })));
+  router.get('/business/labels', ...authed, run((req) => actions.labels(req.user)));
+  router.post('/business/labels', ...authed, json, run((req) => actions.labelSave(req.user, { name: req.body?.name, color: req.body?.color }), 201));
+  router.put('/business/labels/:id', ...authed, json, run((req) => actions.labelSave(req.user, { id: p(req, 'id'), name: req.body?.name, color: req.body?.color })));
+  router.delete('/business/labels/:id', ...authed, run((req) => actions.labelDelete(req.user, { id: p(req, 'id') })));
+  router.put('/conversations/:id/labels', ...authed, json, run((req) => actions.chatLabelsSet(req.user, { convId: p(req, 'id'), ids: req.body?.ids })));
+  router.post('/conversations/:id/orders', ...authed, json, run((req) => actions.orderPlace(req.user, { convId: p(req, 'id'), items: req.body?.items, note: req.body?.note, clientId: idempotency(req) }, req.ctx), 201));
+  router.put('/orders/:id', ...authed, json, run((req) => actions.orderUpdate(req.user, { id: p(req, 'id'), status: req.body?.status, paid: req.body?.paid }, req.ctx)));
+  router.get('/business/orders', ...authed, run((req) => actions.orders(req.user, { status: req.query.status })));
+  router.get('/business/insights', ...authed, run((req) => actions.insights(req.user, { days: req.query.days })));
+
   // ----- encrypted history backup -----
   const rawBackup = express.raw({ type: '*/*', limit: '26mb' });
   router.get('/backup', ...authed, run((req) => actions.backupStatus(req.user)));

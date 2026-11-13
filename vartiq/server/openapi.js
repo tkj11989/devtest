@@ -70,6 +70,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       email: { type: 'string', format: 'email' },
       website: { type: 'string', format: 'uri' },
       timezone: { type: 'string', example: 'Asia/Kolkata', description: 'IANA time zone the hours are in' },
+      upi: { type: 'string', example: 'shop@okbank', description: 'UPI ID customers can pay to (the app opens their UPI app; payments are not processed by VartiQ)' },
       hours: { oneOf: [ref('BusinessHours'), { type: 'null' }] },
       since: { type: 'integer' },
       productCount: { type: 'integer', description: 'products in the catalogue (see `GET /users/{username}/catalogue`)' },
@@ -213,6 +214,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       forwarded: { type: 'boolean', description: 'sent on from another chat' },
       edited: { type: 'integer', description: 'when it was last edited (ms since 1970)' },
       mentions: arrayOf({ type: 'string' }),
+      order: ref('Order'),
       sticker: { type: 'boolean' },
       preview: ref('LinkPreview'),
       reactions: { type: 'object', additionalProperties: { type: 'string' }, description: 'username -> the emoji they chose (one each)' },
@@ -242,6 +244,16 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       participants: arrayOf({ type: 'string' }),
       startedBy: { type: 'string' },
     }),
+    Order: obj({
+      number: { type: 'integer', description: 'the business\'s order number' },
+      items: arrayOf(obj({ id: { type: 'string' }, name: { type: 'string' }, price: { type: 'number' }, qty: { type: 'integer' } })),
+      total: { type: 'number' }, currency: { type: 'string' }, note: { type: 'string' },
+      status: { type: 'string', enum: ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled'] },
+      paid: { type: 'boolean' },
+      history: arrayOf(obj({ status: { type: 'string' }, at: { type: 'integer' }, by: { type: 'string' } })),
+    }),
+    QuickReply: obj({ id: { type: 'string' }, shortcut: { type: 'string' }, text: { type: 'string' } }),
+    Label: obj({ id: { type: 'string' }, name: { type: 'string' }, color: { type: 'string' } }),
     Community: obj({
       id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, owner: { type: 'string' },
       admins: arrayOf({ type: 'string' }), members: arrayOf({ type: 'string' }), createdAt: { type: 'integer' },
@@ -1306,6 +1318,78 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
       }),
     },
+    '/business/quick-replies': {
+      get: op(T.biz, 'My saved quick replies (business)', { responses: { 200: ok(obj({ quickReplies: arrayOf(ref('QuickReply')) })), ...errors(401, 403) } }),
+      post: op(T.biz, 'Save a quick reply (business)', {
+        description: 'In the chat the business types `/` and the shortcut to insert the text. Up to 50; a shortcut is 1 to 20 letters, digits or `_` and must be unique.',
+        body: jsonBody(obj({ shortcut: { type: 'string' }, text: { type: 'string', maxLength: 1000 } }, ['shortcut', 'text']), { shortcut: 'hours', text: 'We are open 9 to 6, Monday to Saturday.' }),
+        responses: { 201: ok(obj({ quickReplies: arrayOf(ref('QuickReply')) })), ...errors(400, 401, 403, 409) },
+      }),
+    },
+    '/business/quick-replies/{id}': {
+      put: op(T.biz, 'Change a quick reply (business)', {
+        params: [idParam('id')],
+        body: jsonBody(obj({ shortcut: { type: 'string' }, text: { type: 'string' } }, ['shortcut', 'text']), { shortcut: 'hours', text: 'Open 10 to 7.' }),
+        responses: { 200: ok(obj({ quickReplies: arrayOf(ref('QuickReply')) })), ...errors(400, 401, 403, 404, 409) },
+      }),
+      delete: op(T.biz, 'Delete a quick reply (business)', { params: [idParam('id')], responses: { 200: ok(obj({ quickReplies: arrayOf(ref('QuickReply')) })), ...errors(401, 403) } }),
+    },
+    '/business/labels': {
+      get: op(T.biz, 'My chat labels and which chats have them (business)', {
+        description: 'Labels are private to the business. `chats` maps a conversation id to its label ids (up to 5). `colors` are the colours a label can have.',
+        responses: { 200: ok(obj({ labels: arrayOf(ref('Label')), chats: { type: 'object', additionalProperties: arrayOf({ type: 'string' }) }, colors: arrayOf({ type: 'string' }) })), ...errors(401, 403) },
+      }),
+      post: op(T.biz, 'Make a label (business)', {
+        description: 'Up to 20 labels.',
+        body: jsonBody(obj({ name: { type: 'string', maxLength: 24 }, color: { type: 'string' } }, ['name']), { name: 'New customer', color: '#43a047' }),
+        responses: { 201: ok(obj({ labels: arrayOf(ref('Label')), chats: { type: 'object' }, colors: arrayOf({ type: 'string' }) })), ...errors(400, 401, 403, 409) },
+      }),
+    },
+    '/business/labels/{id}': {
+      put: op(T.biz, 'Rename or recolour a label (business)', {
+        params: [idParam('id')],
+        body: jsonBody(obj({ name: { type: 'string' }, color: { type: 'string' } }, ['name']), { name: 'VIP' }),
+        responses: { 200: ok(obj({ labels: arrayOf(ref('Label')), chats: { type: 'object' }, colors: arrayOf({ type: 'string' }) })), ...errors(400, 401, 403, 404, 409) },
+      }),
+      delete: op(T.biz, 'Delete a label (business)', { params: [idParam('id')], responses: { 200: ok(obj({ labels: arrayOf(ref('Label')), chats: { type: 'object' }, colors: arrayOf({ type: 'string' }) })), ...errors(401, 403) } }),
+    },
+    '/conversations/{id}/labels': {
+      put: op(T.biz, 'Put labels on a chat (business)', {
+        description: 'Replaces the labels of this chat (at most 5; unknown ids are ignored).',
+        params: [CONV_ID],
+        body: jsonBody(obj({ ids: arrayOf({ type: 'string' }) }, ['ids']), { ids: ['a1b2c3d4'] }),
+        responses: { 200: ok(obj({ ids: arrayOf({ type: 'string' }) })), ...errors(401, 403, 404) },
+      }),
+    },
+    '/conversations/{id}/orders': {
+      post: op(T.biz, 'Order from a business\'s catalogue (customer)', {
+        description: 'In a direct chat with a business account that has a catalogue. `items`: `{ id, qty }` from `GET /users/{username}/catalogue`; names and prices are taken from the catalogue, not from you. The order appears in the chat as a message of type `order` (readable by the server, unlike ordinary encrypted text) and starts as `placed`. Business accounts cannot place orders. Send `clientId` or `Idempotency-Key` to retry safely.',
+        params: [CONV_ID],
+        body: jsonBody(obj({ items: arrayOf(obj({ id: { type: 'string' }, qty: { type: 'integer', minimum: 1, maximum: 99 } }, ['id', 'qty'])), note: { type: 'string', maxLength: 300 }, clientId: { type: 'string' } }, ['items']), { items: [{ id: 'p1', qty: 2 }], note: 'Deliver after 6 pm' }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404, 409, 423) },
+      }),
+    },
+    '/orders/{id}': {
+      put: op(T.biz, 'Move an order on, cancel it or mark it paid', {
+        description: '`id` is the order message id. The business can move `status` forward (`placed` → `confirmed` → `packed` → `shipped` → `delivered`) or `cancelled`, and set `paid`. The customer can only cancel until it is packed. A finished order (`delivered`, `cancelled`) cannot change. Both sides hear `order:update`.',
+        params: [idParam('id')],
+        body: jsonBody(obj({ status: { type: 'string', enum: ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled'] }, paid: { type: 'boolean' } }), { status: 'confirmed' }),
+        responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409) },
+      }),
+    },
+    '/business/orders': {
+      get: op(T.biz, 'Orders customers placed (business)', {
+        params: [{ name: 'status', in: 'query', schema: { type: 'string', enum: ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled'] } }],
+        responses: { 200: ok(obj({ orders: arrayOf(obj({ convId: { type: 'string' }, id: { type: 'string' }, customer: { type: 'string' }, ts: { type: 'integer' }, order: ref('Order') })) })), ...errors(401, 403) },
+      }),
+    },
+    '/business/insights': {
+      get: op(T.biz, 'How the business is doing (business)', {
+        description: 'Over the last `days` (1 to 90, default 30): new customers, messages in and out, how fast the business answers (median and 90th percentile; automatic replies and the assistant do not count), the share answered within an hour, customers waiting over an hour, when customers write (by hour and weekday in the business time zone) and orders (count, revenue without cancelled ones, by status, top products). It is built from who wrote when; message text is never read.',
+        params: [{ name: 'days', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 90 } }],
+        responses: { 200: ok(obj({ insights: { type: 'object', description: 'see the description above' } })), ...errors(401, 403) },
+      }),
+    },
     '/backup': {
       get: op(T.e2ee, 'About my history backup', {
         description: 'When the last backup was made, how big it is and how many messages it covers; `backup` is `null` when there is none. A backup is one file made and locked **by the app** with a recovery key only the person has; it holds the keys that open old encrypted messages, so a new phone can read the history the server still keeps. The server cannot open it.',
@@ -1803,6 +1887,19 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /messages/{id}': 'editMessage',
     'put /messages/{id}/pin': 'pinMessage',
     'post /messages/{id}/report': 'reportMessage',
+    'get /business/quick-replies': 'listQuickReplies',
+    'post /business/quick-replies': 'saveQuickReply',
+    'put /business/quick-replies/{id}': 'updateQuickReply',
+    'delete /business/quick-replies/{id}': 'deleteQuickReply',
+    'get /business/labels': 'listLabels',
+    'post /business/labels': 'createLabel',
+    'put /business/labels/{id}': 'updateLabel',
+    'delete /business/labels/{id}': 'deleteLabel',
+    'put /conversations/{id}/labels': 'setChatLabels',
+    'post /conversations/{id}/orders': 'placeOrder',
+    'put /orders/{id}': 'updateOrder',
+    'get /business/orders': 'listOrders',
+    'get /business/insights': 'businessInsights',
     'get /backup': 'backupInfo',
     'delete /backup': 'deleteBackup',
     'put /backup/file': 'saveBackup',
