@@ -3390,6 +3390,105 @@ class Store {
     };
   }
 
+  // ---------- family space: shared lists, check-ins, bedtime ----------
+
+  static CHECKIN_KINDS = ['home', 'safe', 'late', 'help', 'request'];
+  static MAX_LISTS = 5;
+  static MAX_LIST_ITEMS = 100;
+
+  /** Turn a group into a family space (admins) or back into an ordinary group. */
+  familySet(by, convId, on) {
+    const conv = this._group(convId, by, { admin: true });
+    if (conv.announcements) throw Store.gerr(400, 'invalid_request', 'An announcements group cannot be a family space');
+    if (on) {
+      conv.family = true;
+      if (!conv.lists) conv.lists = [{ id: crypto.randomBytes(4).toString('hex'), name: 'Groceries', items: [] }];
+    } else {
+      delete conv.family;
+    }
+    this._save();
+    return conv;
+  }
+
+  _family(convId, username) {
+    const conv = this._group(convId, username);
+    if (!conv.family) throw Store.gerr(400, 'invalid_request', 'This group is not a family space');
+    return conv;
+  }
+
+  /** One change to the shared lists. `op`: createList, renameList, deleteList, addItem, setItem, deleteItem, clearDone. Everyone in the family can. */
+  familyList(by, convId, { op, listId, name, itemId, text, done } = {}, now = Date.now()) {
+    const conv = this._family(convId, by);
+    const lists = conv.lists || [];
+    const clip = (v, n, what) => { const t = String(v ?? '').trim().slice(0, n); if (!t) throw Store.gerr(400, 'invalid_request', `${what} is required`); return t; };
+    const list = () => { const l = lists.find((x) => x.id === listId); if (!l) throw Store.gerr(404, 'not_found', 'List not found'); return l; };
+    if (op === 'createList') {
+      if (lists.length >= Store.MAX_LISTS) throw Store.gerr(409, 'conflict', `A family can have ${Store.MAX_LISTS} lists`);
+      conv.lists = [...lists, { id: crypto.randomBytes(4).toString('hex'), name: clip(name, 40, 'The list name'), items: [] }];
+    } else if (op === 'renameList') {
+      const l = list(); l.name = clip(name, 40, 'The list name');
+    } else if (op === 'deleteList') {
+      list(); conv.lists = lists.filter((x) => x.id !== listId);
+    } else if (op === 'addItem') {
+      const l = list();
+      if (l.items.length >= Store.MAX_LIST_ITEMS) throw Store.gerr(409, 'conflict', `A list can have ${Store.MAX_LIST_ITEMS} items`);
+      l.items = [...l.items, { id: crypto.randomBytes(4).toString('hex'), text: clip(text, 100, 'The item'), done: false, by, at: now }];
+    } else if (op === 'setItem') {
+      const l = list();
+      const it = l.items.find((x) => x.id === itemId);
+      if (!it) throw Store.gerr(404, 'not_found', 'Item not found');
+      if (text !== undefined) it.text = clip(text, 100, 'The item');
+      if (done !== undefined) { it.done = done === true; if (it.done) { it.doneBy = by; it.doneAt = now; } else { delete it.doneBy; delete it.doneAt; } }
+    } else if (op === 'deleteItem') {
+      const l = list(); l.items = l.items.filter((x) => x.id !== itemId);
+    } else if (op === 'clearDone') {
+      const l = list(); l.items = l.items.filter((x) => !x.done);
+    } else throw Store.gerr(400, 'invalid_request', 'Unknown change');
+    this._save();
+    return conv;
+  }
+
+  /** The family at a glance: lists, the latest check-ins and events coming up. */
+  familyOverview(username, convId, now = Date.now()) {
+    const conv = this._family(convId, username);
+    const msgs = (this.data.messages[convId] || []).filter((m) => Store.visibleTo(m, username) && !m.deleted);
+    return {
+      lists: conv.lists || [],
+      checkins: msgs.filter((m) => m.type === 'checkin').slice(-15).reverse().map((m) => ({ id: m.id, from: m.from, ts: m.ts, kind: m.checkin.kind, note: m.checkin.note || '' })),
+      events: msgs.filter((m) => m.type === 'event' && m.event && (m.event.startsAt || 0) >= now - 3600000).sort((a, b) => a.event.startsAt - b.event.startsAt).slice(0, 8).map((m) => ({ id: m.id, title: m.event.title, startsAt: m.event.startsAt, place: m.event.place || '' })),
+    };
+  }
+
+  /** Do these two people share a family space? */
+  sharesFamily(a, b) {
+    return this._convsOf(a).some((c) => c.family && c.members.includes(b));
+  }
+
+  /** Bedtime: no message or call notifications between `from` and `to` (their own time zone), except from the family. */
+  bedtimeOf(username) {
+    return this.data.users[username]?.bedtime || null;
+  }
+
+  setBedtime(username, { on, from, to, timezone } = {}) {
+    const u = this.data.users[username];
+    if (!u) throw Store.gerr(404, 'not_found', 'No such account');
+    const hm = (v, what) => { if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(v))) throw Store.gerr(400, 'invalid_request', `${what} must be a time like 22:00`); return String(v); };
+    const tz = String(timezone || 'UTC');
+    try { new Intl.DateTimeFormat('en', { timeZone: tz }); } catch { throw Store.gerr(400, 'invalid_request', 'Unknown time zone'); }
+    u.bedtime = { on: on === true, from: hm(from ?? '22:00', 'From'), to: hm(to ?? '06:00', 'To'), timezone: tz };
+    this._save();
+    return u.bedtime;
+  }
+
+  inBedtime(username, now = Date.now()) {
+    const b = this.data.users[username]?.bedtime;
+    if (!b?.on) return false;
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: b.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
+    const cur = parts.replace(':', '');
+    const f = b.from.replace(':', ''), t = b.to.replace(':', '');
+    return f === t ? false : f < t ? cur >= f && cur < t : cur >= f || cur < t;
+  }
+
   // ---------- communities: a place with an announcements group and linked groups ----------
 
   static MAX_COMMUNITY_GROUPS = 20;
@@ -3697,7 +3796,7 @@ class Store {
     const unread = msgs.filter((m) => m.from !== username && !m.readBy.includes(username)).length;
     const last = msgs[msgs.length - 1];
     const admin = conv.type === 'group' && (conv.admins || []).includes(username);
-    const { invite, requests, ...pub } = conv;
+    const { invite, requests, lists, ...pub } = conv;
     return {
       ...pub,
       ...(admin && invite ? { inviteCode: invite.code } : {}),
@@ -4057,7 +4156,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker, order } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker, order, checkin } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -4099,6 +4198,7 @@ class Store {
     if (replyTo) msg.replyTo = replyTo; // { id, from, kind, text? }: the message this one answers
     if (forwarded) msg.forwarded = true;
     if (order) { msg.type = 'order'; msg.order = order; }
+    if (checkin) { msg.type = 'checkin'; msg.checkin = checkin; }
     if (sticker) msg.sticker = true; // a sticker: `text` is one large emoji (inside the encrypted part in encrypted chats)
     if (preview) msg.preview = preview; // { url, title, description?, site?, image? } of a link in the text (plain messages only)
     if (mentions?.length) msg.mentions = mentions; // usernames tagged with @ in a group (metadata: the text may be encrypted)

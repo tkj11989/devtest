@@ -250,7 +250,7 @@
   }
 
   /** Text for a message in lists and previews. */
-  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'order' && m.order ? `🛒 Order #${m.order.number}` : m.type === 'poll' && m.poll ? `📊 ${m.poll.question}` : m.type === 'event' && m.event ? `📅 ${m.event.title}` : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
+  const previewText = (m) => (m.undecryptable ? '🔒 Encrypted message' : m.type === 'checkin' && m.checkin ? `${(FAMILY_LABEL[m.checkin.kind] || ['•'])[0]} ${displayName(m.from)} ${(FAMILY_LABEL[m.checkin.kind] || [0, 'checked in'])[1]}` : m.type === 'order' && m.order ? `🛒 Order #${m.order.number}` : m.type === 'poll' && m.poll ? `📊 ${m.poll.question}` : m.type === 'event' && m.event ? `📅 ${m.event.title}` : m.type === 'location' ? (m.live ? '📍 Live location' : '📍 Location') : m.masked ? 'Masked message' : m.text);
 
   const openLockSvg = () => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1450,6 +1450,7 @@
         paintAvatar($('#btn-profile'), me.displayName, me.username);
         await loadConversations();
         state.backup?.offerRestore();
+        loadBedtime();
         state.biz?.load().then(() => { state.biz.paintFilter(); renderChatList(); });
         setTimeout(() => state.backup?.auto(), 20000);
         applyGuardian();
@@ -1470,6 +1471,7 @@
     onOrdered('location:update', ({ message }) => onLocationUpdate(message));
     onOrdered('poll:update', ({ message }) => onPlanUpdate(message));
     onOrdered('order:update', ({ message }) => onPlanUpdate(message));
+    socket.on('family:update', ({ convId }) => { if (state.familyOpen === convId && !$('#panel-family').classList.contains('hidden')) renderFamily(); });
     onOrdered('event:update', ({ message }) => onPlanUpdate(message));
     socket.on('event:reminder', ({ message }) => { toast(`Reminder: ${message.event.title} starts ${new Date(message.event.startsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); onPlanUpdate(message); });
     socket.on('call:incoming', (call) => localNotifyCall(call));
@@ -2370,6 +2372,8 @@
         bubble.appendChild(voicePlayer(m));
       } else if (m.type === 'location') {
         bubble.appendChild(placeCard(m, mine));
+      } else if (m.type === 'checkin' && m.checkin) {
+        bubble.appendChild(checkinCard(m, mine));
       } else if (m.type === 'order' && m.order) {
         bubble.appendChild(state.biz.orderCard(m, mine));
       } else if (m.type === 'poll' && m.poll) {
@@ -2390,6 +2394,7 @@
       } else {
         // Received messages of a chat with translation on: show the translation, with a way back to the original.
         const tr = !mine && m.tr && !state.showOriginal.has(m.id) ? m.tr : null;
+        if (!mine) { const w = shieldBanner(m); if (w) bubble.appendChild(w); }
         if (m.sticker && !m.masked) bubble.classList.add('sticker-bubble');
         bubble.appendChild(withMentions(el('span', m.sticker && !m.masked ? 'text sticker-text' : 'text', tr ? tr.text : m.text), m));
         if (m.preview && !m.masked) { const card = previewCard(m.preview); if (card) bubble.appendChild(card); }
@@ -2866,6 +2871,10 @@
     const text = input.value.trim();
     if (!text || !state.activeId) return;
     if (state.editing) return submitEdit(text);
+    if (shieldOn()) {
+      const risk = window.ScamShield.assessOutgoing(text);
+      if (risk && !confirm(`This message seems to contain ${risk.why}. Scammers ask for these. Never share them with anyone, not even someone who says they are from your bank.\n\nSend it anyway?`)) return;
+    }
     stopTyping();
     clearDraft(state.activeId);
     input.value = '';
@@ -2976,6 +2985,253 @@
   const closeMessageMenu = () => document.querySelector('.msg-menu')?.remove();
   document.addEventListener('click', (e) => { if (!e.target.closest?.('.msg-menu, .msg-more')) closeMessageMenu(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMessageMenu(); });
+
+  // ---------- family space ----------
+
+  state.bedtime = null;
+  state.familyOpen = null;
+
+  const FAMILY_LABEL = { home: ['🏠', 'reached home'], safe: ['✅', 'is safe'], late: ['⏰', 'is running late'], help: ['🆘', 'needs help'], request: ['📣', 'asks everyone to check in'] };
+
+  /** The card for a check-in message in the chat. */
+  function checkinCard(m, mine) {
+    const [icon, label] = FAMILY_LABEL[m.checkin?.kind] || ['•', 'checked in'];
+    const box = el('div', `checkin-card ${m.checkin?.kind || ''}`);
+    box.appendChild(el('strong', '', `${icon} ${mine ? 'You' : displayName(m.from)} ${label}`));
+    if (m.checkin?.note) box.appendChild(el('div', '', m.checkin.note));
+    if (m.checkin?.kind === 'request' && !mine) {
+      const row = el('div', 'order-actions');
+      for (const k of ['home', 'safe', 'late']) {
+        const b = el('button', 'link', `${FAMILY_LABEL[k][0]} ${k === 'home' ? 'I\'m home' : k === 'safe' ? 'I\'m safe' : 'Running late'}`);
+        b.type = 'button';
+        b.addEventListener('click', () => familyCheckin(m.convId, k));
+        row.appendChild(b);
+      }
+      box.appendChild(row);
+    }
+    return box;
+  }
+
+  async function familyCheckin(convId, kind) {
+    let note = '';
+    if (kind === 'late') { note = prompt('How late, or why? (optional)', '') ?? null; if (note === null) return; }
+    if (kind === 'help' && !confirm('Send a HELP request to your whole family? Everyone is notified, even if they muted the chat.')) return;
+    try {
+      await emit('family:checkin', { convId, kind, note, clientId: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` });
+      toast(kind === 'help' ? 'Help request sent' : 'Sent');
+      if (state.familyOpen === convId) renderFamily();
+    } catch (err) { toast(err.message); }
+  }
+
+  async function openFamily(convId) {
+    state.familyOpen = convId;
+    openPanel('#panel-family');
+    await renderFamily();
+  }
+
+  async function renderFamily() {
+    const convId = state.familyOpen;
+    const conv = state.conversations.get(convId);
+    const body = $('#family-body');
+    if (!conv) return;
+    $('#family-title').textContent = `👨‍👩‍👧 ${conv.name}`;
+    let ov;
+    try { ov = await emit('family:overview', { convId }); } catch (err) { body.textContent = err.message; return; }
+    body.textContent = '';
+    const me = state.me.username;
+
+    const check = el('section', 'info-card');
+    check.appendChild(el('div', 'info-label', 'Check in'));
+    const row = el('div', 'checkin-buttons');
+    for (const [k, text] of [['home', '🏠 Reached home'], ['safe', '✅ I\'m safe'], ['late', '⏰ Running late'], ['help', '🆘 I need help'], ['request', '📣 Ask everyone']]) {
+      const b = el('button', k === 'help' ? 'danger' : 'primary small', text);
+      b.type = 'button';
+      b.addEventListener('click', () => familyCheckin(convId, k));
+      row.appendChild(b);
+    }
+    check.appendChild(row);
+    check.appendChild(el('p', 'muted small-note', 'No location is shared: only what you tap. A help request reaches everyone in the family, even if they muted the chat or are in bedtime mode.'));
+    if (ov.checkins.length) {
+      const ul = el('ul', 'order-items');
+      for (const c of ov.checkins.slice(0, 6)) {
+        const [icon, label] = FAMILY_LABEL[c.kind] || ['•', c.kind];
+        ul.appendChild(el('li', '', `${icon} ${c.from === me ? 'You' : displayName(c.from)} ${label}${c.note ? ` — ${c.note}` : ''} · ${new Date(c.ts).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`));
+      }
+      check.appendChild(ul);
+    }
+    body.appendChild(check);
+
+    for (const l of ov.lists) body.appendChild(familyListCard(convId, l));
+    const add = el('button', 'link', '+ New list');
+    add.type = 'button';
+    add.addEventListener('click', () => dialog({
+      title: 'New list', submit: 'Create', fields: [{ name: 'name', label: 'Name (like Groceries, Chores, Trip packing)', type: 'text', maxLength: 40 }],
+      async onSubmit(v) { await emit('family:list', { convId, op: 'createList', name: v.name }); renderFamily(); },
+    }));
+    body.appendChild(add);
+
+    const ev = el('section', 'info-card');
+    ev.appendChild(el('div', 'info-label', 'Coming up'));
+    if (!ov.events.length) ev.appendChild(el('p', 'muted small-note', 'No events yet. Plan one in the family chat with the calendar button.'));
+    const eul = el('ul', 'list member-list');
+    for (const e of ov.events) {
+      const li = el('li', 'tappable');
+      const b = el('div', 'body');
+      b.append(el('div', 'row', e.title), el('div', 'sub', `${new Date(e.startsAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}${e.place ? ` · ${e.place}` : ''}`));
+      li.appendChild(b);
+      li.addEventListener('click', () => { $('#panel-family').classList.add('hidden'); openChat(convId, { highlight: e.id }); });
+      eul.appendChild(li);
+    }
+    ev.appendChild(eul);
+    body.appendChild(ev);
+
+    const chat = el('button', 'link wide-link', 'Open the family chat');
+    chat.type = 'button';
+    chat.addEventListener('click', () => { $('#panel-family').classList.add('hidden'); openChat(convId); });
+    body.appendChild(chat);
+  }
+
+  function familyListCard(convId, l) {
+    const card = el('section', 'info-card');
+    const head = el('div', 'info-label', l.name);
+    card.appendChild(head);
+    const ul = el('ul', 'family-items');
+    for (const it of l.items) {
+      const li = el('li', it.done ? 'done' : '');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = it.done;
+      cb.addEventListener('change', () => emit('family:list', { convId, op: 'setItem', listId: l.id, itemId: it.id, done: cb.checked }).catch((e) => toast(e.message)));
+      const label = el('span', 'grow', it.text);
+      const x = el('button', 'icon-btn', '✕');
+      x.type = 'button';
+      x.setAttribute('aria-label', `Remove ${it.text}`);
+      x.addEventListener('click', () => emit('family:list', { convId, op: 'deleteItem', listId: l.id, itemId: it.id }).catch((e) => toast(e.message)));
+      li.append(cb, label, x);
+      ul.appendChild(li);
+    }
+    card.appendChild(ul);
+    const form = el('form', 'family-add');
+    const inp = el('input');
+    inp.placeholder = 'Add an item';
+    inp.maxLength = 100;
+    form.append(inp, Object.assign(el('button', 'primary small', 'Add'), { type: 'submit' }));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = inp.value.trim();
+      if (!text) return;
+      inp.value = '';
+      try { await emit('family:list', { convId, op: 'addItem', listId: l.id, text }); } catch (err) { toast(err.message); }
+      card.querySelector('input[placeholder="Add an item"]')?.focus();
+    });
+    card.appendChild(form);
+    const tools = el('div', 'order-actions');
+    const t = (label, fn) => { const b = el('button', 'link', label); b.type = 'button'; b.addEventListener('click', fn); tools.appendChild(b); };
+    t('Clear ticked', () => emit('family:list', { convId, op: 'clearDone', listId: l.id }).catch((e) => toast(e.message)));
+    t('Rename', () => dialog({ title: 'Rename list', submit: 'Save', fields: [{ name: 'name', label: 'Name', type: 'text', maxLength: 40, value: l.name }], async onSubmit(v) { await emit('family:list', { convId, op: 'renameList', listId: l.id, name: v.name }); } }));
+    t('Delete list', () => { if (confirm(`Delete the list "${l.name}"?`)) emit('family:list', { convId, op: 'deleteList', listId: l.id }).catch((e) => toast(e.message)); });
+    card.appendChild(tools);
+    return card;
+  }
+
+  /** In group info: open the family space, or (admins) turn the group into one. */
+  function familyCard(conv) {
+    const card = el('section', 'info-card info-action');
+    const b = el('div', 'grow');
+    if (conv.family) {
+      b.append(el('div', '', '👨‍👩‍👧 Family space'), el('div', 'muted small-note', 'Shared lists, check-ins and coming-up events'));
+      const open = el('button', 'link', 'Open');
+      open.type = 'button';
+      open.addEventListener('click', () => openFamily(conv.id));
+      card.append(b, open);
+      if (iAmGroupAdmin(conv)) {
+        const off = el('button', 'danger-link', 'Turn off');
+        off.type = 'button';
+        off.addEventListener('click', async () => { if (confirm('Turn this back into an ordinary group? Lists stay saved if you turn it on again.')) { try { applyGroupUpdate((await emit('family:set', { convId: conv.id, enabled: false })).conversation); } catch (e) { toast(e.message); } } });
+        card.appendChild(off);
+      }
+      return card;
+    }
+    if (!iAmGroupAdmin(conv) || conv.announcements) return null;
+    b.append(el('div', '', '👨‍👩‍👧 Family space'), el('div', 'muted small-note', 'Turn this group into a family space: shared lists, check-ins like "reached home", and a "need help" button.'));
+    const on = el('button', 'link', 'Turn on');
+    on.type = 'button';
+    on.addEventListener('click', async () => { try { const res = await emit('family:set', { convId: conv.id, enabled: true }); applyGroupUpdate(res.conversation); openFamily(conv.id); } catch (e) { toast(e.message); } });
+    card.append(b, on);
+    return card;
+  }
+
+  // ----- bedtime mode -----
+
+  async function loadBedtime() {
+    try { state.bedtime = (await emit('bedtime:get', {})).bedtime; } catch { state.bedtime = null; }
+    paintBedtime();
+  }
+  function paintBedtime() {
+    const b = state.bedtime;
+    const box = $('#bedtime-summary');
+    if (box) box.textContent = b?.on ? `On, ${b.from} to ${b.to}. Your family and help requests still get through.` : 'Silence notifications at night. Your family and help requests still get through.';
+  }
+  /** Is it bedtime for me right now (used by notifications shown by this app itself)? */
+  function inBedtime() {
+    const b = state.bedtime;
+    if (!b?.on) return false;
+    const now = new Intl.DateTimeFormat('en-GB', { timeZone: b.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()).replace(':', '');
+    const f = b.from.replace(':', ''), t = b.to.replace(':', '');
+    return f === t ? false : f < t ? now >= f && now < t : now >= f || now < t;
+  }
+  $('#btn-bedtime')?.addEventListener('click', () => {
+    const b = state.bedtime || {};
+    const tz = b.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    dialog({
+      title: 'Bedtime mode',
+      text: 'Between these times VartiQ stays quiet: no sound for messages or calls, except from your family space and help requests. Messages still arrive; nothing is blocked.',
+      submit: 'Save',
+      fields: [
+        { name: 'on', label: 'Turn bedtime mode on', type: 'checkbox', required: false, checked: !!b.on },
+        { name: 'from', label: 'From', type: 'time', maxLength: 5, value: b.from || '22:00' },
+        { name: 'to', label: 'Until', type: 'time', maxLength: 5, value: b.to || '06:00' },
+      ],
+      async onSubmit(v) { state.bedtime = (await emit('bedtime:set', { on: v.on === 'on', from: v.from, to: v.to, timezone: tz })).bedtime; paintBedtime(); },
+    });
+  });
+
+  // ---------- scam shield ----------
+
+  const shieldOn = () => !!window.ScamShield && storage.get('chat.scamShield') !== 'off' && state.config?.features?.scamShield !== false;
+  const shieldSeen = new WeakMap();
+  const shieldOk = () => { try { return new Set(JSON.parse(storage.get('chat.shield.ok') || '[]')); } catch { return new Set(); } };
+
+  /** The warning above a received message that looks like a scam, or null. */
+  function shieldBanner(m) {
+    if (!shieldOn() || m.deleted || m.masked || m.undecryptable || !m.text || m.type) return null;
+    if (shieldOk().has(m.id)) return null;
+    let r = shieldSeen.get(m);
+    if (!r || r.text !== m.text) {
+      const conv = state.conversations.get(m.convId);
+      const firstContact = conv?.type === 'direct' && !(state.messages.get(m.convId) || []).some((x) => x.from === state.me.username && x.type !== 'system');
+      r = { text: m.text, ...window.ScamShield.assess(m.text, { firstContact }) };
+      shieldSeen.set(m, r);
+    }
+    if (r.level === 'none') return null;
+    const box = el('div', `scam-warning ${r.level}`);
+    box.setAttribute('role', 'alert');
+    box.appendChild(el('strong', '', r.level === 'danger' ? '⚠ This looks like a scam' : '⚠ Be careful with this message'));
+    const ul = el('ul', '');
+    for (const why of r.reasons) ul.appendChild(el('li', '', why));
+    box.appendChild(ul);
+    box.appendChild(el('div', 'small-note', 'Never share an OTP, PIN or password, never install an app from a message, and never pay to receive money. When unsure, call the person or company on a number you already trust.'));
+    const row = el('div', 'order-actions');
+    const report = el('button', 'link', 'Report and block');
+    report.type = 'button';
+    report.addEventListener('click', () => reportDialog({ msg: m }));
+    const fine = el('button', 'link', 'I know this sender');
+    fine.type = 'button';
+    fine.addEventListener('click', () => { const ok = shieldOk(); ok.add(m.id); storage.set('chat.shield.ok', JSON.stringify([...ok].slice(-500))); renderMessages(); });
+    row.append(report, fine);
+    box.appendChild(row);
+    return box;
+  }
 
   // ---------- link previews ----------
 
@@ -3720,6 +3976,7 @@
     if (document.visibilityState !== 'hidden' || !webPushOk() || native.isNative || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
     const prefs = state.notif?.preferences || { messages: true, preview: true };
     if (!prefs.messages || msg.type === 'call' || msg.type === 'system') return;
+    if (inBedtime() && !conv.family && msg.checkin?.kind !== 'help') return;
     const generic = conv.locked || conv.hidden || !prefs.preview;
     const what = msg.type === 'voice' ? 'Voice message' : msg.type === 'location' ? 'Location' : msg.type === 'poll' ? 'Poll' : msg.type === 'event' ? 'Event' : 'New message';
     const title = generic ? 'VartiQ' : conv.type === 'group' ? conv.name : displayName(msg.from);
@@ -3732,6 +3989,7 @@
   function localNotifyCall(call) {
     if (document.visibilityState !== 'hidden' || !webPushOk() || native.isNative || Notification.permission !== 'granted' || storage.get(pushFlag()) == null) return;
     if (state.notif?.preferences && !state.notif.preferences.calls) return;
+    if (inBedtime() && !state.conversations.get(call.convId)?.family) return;
     const conv = state.conversations.get(call.convId);
     const generic = conv?.locked || conv?.hidden || state.notif?.preferences?.preview === false;
     serviceWorkerReady().then((reg) => reg?.showNotification(generic ? 'VartiQ' : (call.user?.displayName || call.from), {
@@ -4621,6 +4879,8 @@
       case 'members_added': return `${who} added ${(s.users || []).map(who2).join(', ')}.`;
       case 'member_removed': return `${who} removed ${who2(s.user)}.`;
       case 'member_left': return `${who} left the group.`;
+      case 'family_on': return `${who} turned this group into a family space.`;
+      case 'family_off': return `${who} turned off the family space.`;
       case 'joined_community': return `${who} joined the group.`;
       case 'joined_link': return `${who} joined using the invite link.`;
       case 'renamed': return `${who} changed the group name to "${s.name}".`;
@@ -5489,6 +5749,7 @@
     }
 
     if (group) body.appendChild(groupAdminCards(conv));
+    if (group) { const fc = familyCard(conv); if (fc) body.appendChild(fc); }
     if (group) {
       const members = el('section', 'info-card');
       members.appendChild(el('div', 'info-label', `${conv.members.length} members`));
@@ -6533,6 +6794,8 @@
     renderCacheRow();
   });
   $('#btn-profile').addEventListener('click', () => { renderCacheRow(); $('#linkprev-toggle').checked = linkPreviewsOn(); });
+  $('#shield-toggle').checked = storage.get('chat.scamShield') !== 'off';
+  $('#shield-toggle').addEventListener('change', (e) => storage.set('chat.scamShield', e.target.checked ? 'on' : 'off'));
   $('#linkprev-toggle').addEventListener('change', (e) => storage.set('chat.linkPreviews', e.target.checked ? 'on' : 'off'));
 
   // ---------- appearance ----------

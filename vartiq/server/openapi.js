@@ -215,6 +215,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       edited: { type: 'integer', description: 'when it was last edited (ms since 1970)' },
       mentions: arrayOf({ type: 'string' }),
       order: ref('Order'),
+      checkin: obj({ kind: { type: 'string', enum: ['home', 'safe', 'late', 'help', 'request'] }, note: { type: 'string' } }),
       sticker: { type: 'boolean' },
       preview: ref('LinkPreview'),
       reactions: { type: 'object', additionalProperties: { type: 'string' }, description: 'username -> the emoji they chose (one each)' },
@@ -252,6 +253,8 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       paid: { type: 'boolean' },
       history: arrayOf(obj({ status: { type: 'string' }, at: { type: 'integer' }, by: { type: 'string' } })),
     }),
+    FamilyList: obj({ id: { type: 'string' }, name: { type: 'string' }, items: arrayOf(obj({ id: { type: 'string' }, text: { type: 'string' }, done: { type: 'boolean' }, by: { type: 'string' }, at: { type: 'integer' }, doneBy: { type: 'string' }, doneAt: { type: 'integer' } })) }),
+    Bedtime: obj({ on: { type: 'boolean' }, from: { type: 'string' }, to: { type: 'string' }, timezone: { type: 'string' } }),
     QuickReply: obj({ id: { type: 'string' }, shortcut: { type: 'string' }, text: { type: 'string' } }),
     Label: obj({ id: { type: 'string' }, name: { type: 'string' }, color: { type: 'string' } }),
     Community: obj({
@@ -286,6 +289,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       inviteCode: { type: 'string', description: 'groups, admins only: the code in the invite link' },
       requestCount: { type: 'integer', description: 'groups, admins only: people waiting to join' },
       communityId: { type: 'string', description: 'the community this group belongs to' },
+      family: { type: 'boolean', description: 'groups only: this group is a family space' },
     }, ['id', 'type', 'members']),
     ChatLock: obj({
       hasCode: { type: 'boolean', description: 'a secret code has been set' },
@@ -1318,6 +1322,52 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
       }),
     },
+    '/groups/{id}/family': {
+      put: op(T.conv, 'Turn a group into a family space, or back (admins)', {
+        description: 'A family space is a group with extra tools for a family: shared lists (a grocery list, to-dos), check-ins (“reached home”, “running late”, “need help”) and an overview with the events coming up. Everything in it is readable by the server (not end-to-end encrypted, like polls).',
+        params: [GID_PARAM],
+        body: jsonBody(obj({ enabled: { type: 'boolean' } }, ['enabled']), { enabled: true }),
+        responses: { 200: CONV_OK, ...errors(400, 401, 403, 404) },
+      }),
+      get: op(T.conv, 'The family at a glance', {
+        description: 'The shared lists, the 15 latest check-ins and events in this group that have not finished yet.',
+        params: [GID_PARAM],
+        responses: { 200: ok(obj({ lists: arrayOf(ref('FamilyList')), checkins: arrayOf(obj({ id: { type: 'string' }, from: { type: 'string' }, ts: { type: 'integer' }, kind: { type: 'string', enum: ['home', 'safe', 'late', 'help', 'request'] }, note: { type: 'string' } })), events: arrayOf(obj({ id: { type: 'string' }, title: { type: 'string' }, startsAt: { type: 'integer' }, place: { type: 'string' } })) })), ...errors(400, 401, 404) },
+      }),
+    },
+    '/groups/{id}/family/lists': {
+      post: op(T.conv, 'Make a shared list', { description: 'Up to 5 lists. Everyone in the family can change lists.', params: [GID_PARAM], body: jsonBody(obj({ name: { type: 'string', maxLength: 40 } }, ['name']), { name: 'To do' }), responses: { 201: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404, 409) } }),
+    },
+    '/groups/{id}/family/lists/{listId}': {
+      put: op(T.conv, 'Rename a shared list', { params: [GID_PARAM, idParam('listId')], body: jsonBody(obj({ name: { type: 'string' } }, ['name']), { name: 'Groceries' }), responses: { 200: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404) } }),
+      delete: op(T.conv, 'Delete a shared list', { params: [GID_PARAM, idParam('listId')], responses: { 200: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404) } }),
+    },
+    '/groups/{id}/family/lists/{listId}/items': {
+      post: op(T.conv, 'Add an item to a shared list', { description: 'Up to 100 items a list. Every change is sent to the family as `family:update`.', params: [GID_PARAM, idParam('listId')], body: jsonBody(obj({ text: { type: 'string', maxLength: 100 } }, ['text']), { text: 'Milk' }), responses: { 201: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404, 409) } }),
+    },
+    '/groups/{id}/family/lists/{listId}/items/{itemId}': {
+      put: op(T.conv, 'Tick off, un-tick or change an item', { params: [GID_PARAM, idParam('listId'), idParam('itemId')], body: jsonBody(obj({ done: { type: 'boolean' }, text: { type: 'string' } }), { done: true }), responses: { 200: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404) } }),
+      delete: op(T.conv, 'Remove an item', { params: [GID_PARAM, idParam('listId'), idParam('itemId')], responses: { 200: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404) } }),
+    },
+    '/groups/{id}/family/lists/{listId}/clear-done': {
+      post: op(T.conv, 'Remove every ticked item from a list', { params: [GID_PARAM, idParam('listId')], responses: { 200: ok(obj({ lists: arrayOf(ref('FamilyList')) })), ...errors(400, 401, 404) } }),
+    },
+    '/groups/{id}/family/checkins': {
+      post: op(T.conv, 'Check in with the family', {
+        description: '`kind`: `home` (reached home), `safe`, `late` (running late), `help` (needs help: the family is notified even if they muted the chat or are in bedtime mode) or `request` (asks everyone to check in). `note` is up to 100 characters. The check-in appears in the chat as a message of type `checkin`. No location is shared.',
+        params: [GID_PARAM],
+        body: jsonBody(obj({ kind: { type: 'string', enum: ['home', 'safe', 'late', 'help', 'request'] }, note: { type: 'string', maxLength: 100 }, clientId: { type: 'string' } }, ['kind']), { kind: 'late', note: 'Bus is stuck, 20 minutes' }),
+        responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 404) },
+      }),
+    },
+    '/me/bedtime': {
+      get: op(T.me, 'My bedtime mode', { responses: { 200: ok(obj({ bedtime: { oneOf: [ref('Bedtime'), { type: 'null' }] } })), ...errors(401) } }),
+      put: op(T.me, 'Set my bedtime mode', {
+        description: 'Between `from` and `to` (24-hour times in `timezone`, may cross midnight) push notifications for messages and calls are silenced, except from family spaces you are in and `help` check-ins. Messages still arrive; nothing is blocked.',
+        body: jsonBody(obj({ on: { type: 'boolean' }, from: { type: 'string', example: '22:00' }, to: { type: 'string', example: '06:00' }, timezone: { type: 'string', example: 'Asia/Kolkata' } }, ['on']), { on: true, from: '22:00', to: '06:00', timezone: 'Asia/Kolkata' }),
+        responses: { 200: ok(obj({ bedtime: ref('Bedtime') })), ...errors(400, 401) },
+      }),
+    },
     '/business/quick-replies': {
       get: op(T.biz, 'My saved quick replies (business)', { responses: { 200: ok(obj({ quickReplies: arrayOf(ref('QuickReply')) })), ...errors(401, 403) } }),
       post: op(T.biz, 'Save a quick reply (business)', {
@@ -1887,6 +1937,18 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /messages/{id}': 'editMessage',
     'put /messages/{id}/pin': 'pinMessage',
     'post /messages/{id}/report': 'reportMessage',
+    'put /groups/{id}/family': 'setFamilySpace',
+    'get /groups/{id}/family': 'familyOverview',
+    'post /groups/{id}/family/lists': 'createFamilyList',
+    'put /groups/{id}/family/lists/{listId}': 'renameFamilyList',
+    'delete /groups/{id}/family/lists/{listId}': 'deleteFamilyList',
+    'post /groups/{id}/family/lists/{listId}/items': 'addFamilyItem',
+    'put /groups/{id}/family/lists/{listId}/items/{itemId}': 'updateFamilyItem',
+    'delete /groups/{id}/family/lists/{listId}/items/{itemId}': 'deleteFamilyItem',
+    'post /groups/{id}/family/lists/{listId}/clear-done': 'clearFamilyDone',
+    'post /groups/{id}/family/checkins': 'familyCheckin',
+    'get /me/bedtime': 'getBedtime',
+    'put /me/bedtime': 'setBedtime',
     'get /business/quick-replies': 'listQuickReplies',
     'post /business/quick-replies': 'saveQuickReply',
     'put /business/quick-replies/{id}': 'updateQuickReply',

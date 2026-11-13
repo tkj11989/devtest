@@ -251,7 +251,9 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
       } else {
         if (!prefs.messages) return;
         if (msg.type === 'system') return;
-        if (store.isMuted(to, conv.id) && !msg.mentions?.includes(to)) return; // a muted chat makes no sound, except for @mentions
+        const help = msg.checkin?.kind === 'help'; // a family member asking for help always gets through
+        if (!help && store.isMuted(to, conv.id) && !msg.mentions?.includes(to)) return; // a muted chat makes no sound, except for @mentions
+        if (!help && !conv.family && store.inBedtime(to)) return; // bedtime: only the family
       }
       const who = namesFor(conv, msg, to);
       if (!who.generic) {
@@ -261,7 +263,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
           const what = msg.type === 'media' ? ({ image: 'Photo', video: 'Video', file: 'Document' }[msg.media?.kind] || 'File') : (LABEL[msg.type] || 'New message');
           if (who.group) {
             title = who.group;
-            body = msg.type === 'call' ? `${who.sender}: ${body}` : msg.mentions?.includes(to) ? `${who.sender} mentioned you` : `${who.sender}: ${what}`;
+            body = msg.type === 'call' ? `${who.sender}: ${body}` : msg.checkin?.kind === 'help' ? `${who.sender} needs help` : msg.mentions?.includes(to) ? `${who.sender} mentioned you` : `${who.sender}: ${what}`;
           } else {
             title = who.sender;
             if (msg.type !== 'call') body = what;
@@ -295,6 +297,7 @@ function createPush({ store, isOnline, featureOn = () => true, subject = () => u
       if (!enabled() || isOnline(to) || store.isClosed(to) || !store.pushSubs(to).length) return;
       const prefs = store.pushPrefs(to);
       if (!prefs.calls) return;
+      if (store.inBedtime(to) && !store.sharesFamily(to, caller)) return; // bedtime: only the family can ring
       const generic = store.isChatLocked(to, conv.id) || store.isChatHidden(to, conv.id);
       const name = !generic && prefs.preview ? (store.publicUser(caller)?.displayName || caller) : null;
       const kind = call.kind === 'video' ? 'video' : 'voice';

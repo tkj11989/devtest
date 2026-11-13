@@ -70,6 +70,8 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 
 ## 3. Where VartiQ is ahead
 
+Added on 13 Nov 2026: a **scam shield** (on-device warnings for common Indian scams, also in encrypted chats) and **family spaces** (shared lists, check-ins with a help button that overrides mute, bedtime mode).
+
 Parent and guardian controls for under-18 accounts, written around India's Digital Personal Data Protection Act (consent, deletion within 24 hours, data export, legal text in 22 languages); translation per contact; bulk messages with a per-person delivery report and opt-out for ordinary users and businesses alike; a business assistant that needs no code; polls, events and live location in every chat; an admin dashboard with feature switches and limits; and a developer API with webhooks.
 
 ## 4. Suggested order

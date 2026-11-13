@@ -445,6 +445,20 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.post('/messages/:id/report', ...authed, json2m, run((req) => actions.reportSafety(req.user, { msgId: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail, evidence: req.body?.evidence, block: req.body?.block }, req.ctx), 201));
   router.post('/users/:username/report', ...authed, json, run((req) => actions.reportSafety(req.user, { username: p(req, 'username'), reason: req.body?.reason, detail: req.body?.detail, block: req.body?.block }, req.ctx), 201));
+  // ----- family space -----
+  router.put('/groups/:id/family', ...authed, json, run((req) => actions.familySet(req.user, { convId: p(req, 'id'), enabled: req.body?.enabled }, req.ctx)));
+  router.get('/groups/:id/family', ...authed, run((req) => actions.familyOverview(req.user, { convId: p(req, 'id') }, req.ctx)));
+  router.post('/groups/:id/family/lists', ...authed, json, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'createList', name: req.body?.name }, req.ctx), 201));
+  router.put('/groups/:id/family/lists/:listId', ...authed, json, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'renameList', listId: p(req, 'listId'), name: req.body?.name }, req.ctx)));
+  router.delete('/groups/:id/family/lists/:listId', ...authed, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'deleteList', listId: p(req, 'listId') }, req.ctx)));
+  router.post('/groups/:id/family/lists/:listId/items', ...authed, json, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'addItem', listId: p(req, 'listId'), text: req.body?.text }, req.ctx), 201));
+  router.put('/groups/:id/family/lists/:listId/items/:itemId', ...authed, json, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'setItem', listId: p(req, 'listId'), itemId: p(req, 'itemId'), text: req.body?.text, done: req.body?.done }, req.ctx)));
+  router.delete('/groups/:id/family/lists/:listId/items/:itemId', ...authed, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'deleteItem', listId: p(req, 'listId'), itemId: p(req, 'itemId') }, req.ctx)));
+  router.post('/groups/:id/family/lists/:listId/clear-done', ...authed, run((req) => actions.familyList(req.user, { convId: p(req, 'id'), op: 'clearDone', listId: p(req, 'listId') }, req.ctx)));
+  router.post('/groups/:id/family/checkins', ...authed, json, run((req) => actions.familyCheckin(req.user, { convId: p(req, 'id'), kind: req.body?.kind, note: req.body?.note, clientId: idempotency(req) }, req.ctx), 201));
+  router.get('/me/bedtime', ...authed, run((req) => actions.bedtimeGet(req.user)));
+  router.put('/me/bedtime', ...authed, json, run((req) => actions.bedtimeSet(req.user, req.body || {})));
+
   // ----- business tools -----
   router.get('/business/quick-replies', ...authed, run((req) => actions.quickReplies(req.user)));
   router.post('/business/quick-replies', ...authed, json, run((req) => actions.quickReplySave(req.user, { shortcut: req.body?.shortcut, text: req.body?.text }), 201));

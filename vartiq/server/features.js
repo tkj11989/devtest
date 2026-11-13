@@ -25,6 +25,7 @@ const FEATURES = [
   { id: 'contactDiscovery', group: 'Social', label: 'Find friends from contacts', description: 'Matching the phone numbers in a person\'s contacts (sent as fingerprints, never kept) with VartiQ accounts. Off: the Find friends screen cannot look anyone up.' },
   { id: 'profileViews', group: 'Social', label: 'Who viewed my profile', description: 'Recording and showing profile views.' },
   { id: 'backup', group: 'Privacy', label: 'Encrypted history backup', description: 'Saving and restoring a backup of the keys to old messages (locked with a recovery key only the person has). Off: no new backups and no restores; existing backups stay until deleted.' },
+  { id: 'scamShield', group: 'Privacy', label: 'Scam shield', description: 'Warnings in the app about messages that look like scams (fake bank links, OTP requests and the like). It runs on the person\'s device. Off: no warnings.' },
   { id: 'linkPreviews', group: 'Messaging', label: 'Link previews', description: 'Fetching the title and picture of a web page for the person who is sending a link. Off: links are sent as plain text.' },
   { id: 'translation', group: 'Social', label: 'Message translation', description: 'Translating received messages (sends text to the translation service).' },
   { id: 'chatLock', group: 'Privacy', label: 'Chat lock', description: 'Locking more chats. Unlocking and removing locks always work.' },

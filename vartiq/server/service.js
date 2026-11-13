@@ -1189,6 +1189,53 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
      * and whom a guardian does not keep from new people are returned, with the same public view of them as anywhere else. At most 1000
      * numbers per call, 20 calls and 5000 numbers a day.
      */
+    // ----- family space -----
+
+    familySet(me, { convId, enabled } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      let conv;
+      try { conv = store.familySet(me, convId, enabled === true); } catch (err) { throw groupError(err); }
+      postMessage(conv, store.addSystemMessage(convId, me, { event: enabled === true ? 'family_on' : 'family_off' }));
+      groupChanged(conv);
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    familyOverview(me, { convId } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      try { return store.familyOverview(me, convId); } catch (err) { throw groupError(err); }
+    },
+
+    /** One change to the shared lists (`op`: createList, renameList, deleteList, addItem, setItem, deleteItem, clearDone). */
+    familyList(me, { convId, ...change } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      let conv;
+      try { conv = store.familyList(me, convId, change); } catch (err) { throw groupError(err); }
+      for (const m of conv.members) notify(m, 'family:update', { convId, lists: conv.lists || [] });
+      return { lists: conv.lists || [] };
+    },
+
+    /** Tell the family where you are: `home`, `safe`, `late` (with a short note), `help` (reaches everyone, even muted), or `request` (asks them to check in). */
+    familyCheckin(me, { convId, kind, note, clientId } = {}, ctx) {
+      const conv = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      if (!conv.family) throw new ApiError(400, 'invalid_request', 'This group is not a family space');
+      if (!Store.CHECKIN_KINDS.includes(kind)) throw new ApiError(400, 'invalid_request', `kind must be one of: ${Store.CHECKIN_KINDS.join(', ')}`);
+      const n = String(note ?? '').trim().slice(0, 100);
+      const labels = { home: 'reached home', safe: 'is safe', late: 'is running late', help: 'needs help', request: 'asks everyone to check in' };
+      return { message: sendMessage(me, convId, labels[kind], { clientId, checkin: { kind, ...(n ? { note: n } : {}) } }) };
+    },
+
+    bedtimeGet(me) {
+      return { bedtime: store.bedtimeOf(me) };
+    },
+
+    bedtimeSet(me, { on, from, to, timezone } = {}) {
+      try { return { bedtime: store.setBedtime(me, { on, from, to, timezone }) }; } catch (err) { throw groupError(err); }
+    },
+
     // ----- business tools -----
 
     quickReplies(me) {
