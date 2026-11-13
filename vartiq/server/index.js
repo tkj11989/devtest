@@ -62,6 +62,29 @@ const SOCKET_ACTIONS = {
   'contacts:match': 'contactsMatch',
   'link:preview': 'linkPreview',
   'safety:report': 'reportSafety',
+  'group:edit': 'groupEdit',
+  'group:settings': 'groupSettings',
+  'group:add': 'groupAdd',
+  'group:remove': 'groupRemove',
+  'group:leave': 'groupLeave',
+  'group:admin': 'groupAdmin',
+  'group:transfer': 'groupTransfer',
+  'group:invite': 'groupInvite',
+  'group:invite-info': 'groupInviteInfo',
+  'group:join': 'groupJoin',
+  'group:requests': 'groupRequests',
+  'group:decide': 'groupDecide',
+  'community:list': 'communities',
+  'community:get': 'communityGet',
+  'community:create': 'communityCreate',
+  'community:edit': 'communityEdit',
+  'community:add': 'communityAdd',
+  'community:remove': 'communityRemove',
+  'community:leave': 'communityLeave',
+  'community:admin': 'communityAdmin',
+  'community:group': 'communityGroup',
+  'community:join-group': 'communityJoinGroup',
+  'community:invite': 'communityInvite',
   'privacy:findable': 'setFindable',
   'user:block': 'block',
   'user:get': 'getUser',
@@ -363,6 +386,8 @@ function createApp({
   app.use('/api/v1', createApiRouter({ store, service, accounts: auth, webhooks, rateLimit, corsOrigins }));
   // Terms of Use and Privacy Notice: public pages (company details come from the dashboard's Legal settings).
   const legal = require('./legal');
+  // An invite link to a group: the web app picks the code up from the address and asks "Join this group?" (the code never goes to other sites).
+  app.get('/join/:code', (req, res) => res.set({ 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' }).redirect(`/#join=${encodeURIComponent(String(req.params.code).slice(0, 64))}`));
   app.get('/legal/:doc', (req, res) => {
     const html = legal.documentHtml(req.params.doc, legal.details(store.getSettings()), req.query.lang);
     if (!html) return res.status(404).send('Not found');

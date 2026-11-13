@@ -24,7 +24,7 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 | Disappearing messages | Yes | Yes | Yes | Yes | Partial |
 | Status / stories | Yes | Yes | Yes (stories) | Yes | Yes |
 | Public channels | Yes | Yes | Yes (very large) | No | Yes |
-| Groups and communities | Groups up to 256, no communities | Groups 1024, communities | 200,000, topics | 1000 | Groups |
+| Groups and communities | **Groups up to 256 with admin tools (roles, add/remove, announcement mode, invite links, approval); communities with announcements and up to 20 groups** | Groups 1024, communities | 200,000, topics | 1000 | Groups |
 | Polls, events | Yes | Polls yes, events yes | Polls yes | Polls yes | Polls yes |
 | Live location | Yes | Yes | Yes | No | Partial |
 | Chat lock, hidden chats | Yes | Yes (lock) | Passcode | Screen lock | Partial |
@@ -58,7 +58,7 @@ Compared with: **WhatsApp** (and WhatsApp Business), **Telegram**, **Signal**, a
 ### C. Scale and reliability (the product is built for hundreds, not millions)
 10. **One server, one process.** A single outage takes down VartiQ and ExamSuit. There is no second server, no off-server backup yet, and no monitoring or alerts. It was tested with 500 simulated users, not thousands.
 11. **Calls go directly between phones** (a mesh), so group calls are limited to a few people and use a lot of each phone's data. A media server (SFU) is needed for bigger calls and for screen sharing.
-12. **Groups are limited to 256 members**, no communities, no large broadcast groups.
+12. **~~Group admin tools and communities~~ Done on 12 Nov 2026.** Still missing: groups bigger than 256, topics inside a group, a public community directory, per-community rules, admin approval for joining a community, and removing someone's messages for everyone as an admin.
 13. **Messages and files are kept in the database.** Fine for text; media needs a proper store with a content delivery network.
 
 ### D. Trust, safety and the law

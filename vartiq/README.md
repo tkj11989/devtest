@@ -490,6 +490,15 @@ Profile → **Profile photos** (or tap your big picture): add, remove, choose wh
 - **Spam checks** (when sending): more than **20 chats an hour** with people who have not written back, or the **same words to 5 other such chats** within 10 minutes (only where the server can read the text, never for encrypted messages), are stopped with `429 spam_suspected`. Each stop is remembered on the account; three in a day limit new chats for 24 hours. Chats where the other person has already replied are never counted.
 - **Review queue:** Admin → Channels & reports → *Reported messages and people*: one row per reported account, child-safety reports first, then most reporters; shows the evidence, spam stops and status, and lets an administrator clear the reports (also lifts a limit), restrict new chats for 3 days, lift a limit, or suspend the account. Every action is written to the audit log.
 
+**Group admin tools.** Group info (tap the group's name) now has everything for running a group:
+- **Members:** admins **add** people (or every member, if the group allows it) and **remove** them; anyone can **leave**. New members see only messages sent *after* they joined. A notice in the chat says who was added, removed or left.
+- **Roles:** the creator is the **owner** and an admin. Any admin can make another admin (up to 20); only the owner takes admin rights away, removes an admin or hands the group to someone else. If the owner leaves, the oldest admin becomes owner.
+- **Name and description** (up to 500 characters). **Settings** (admins): who can send messages (everyone / only admins, for announcement-style groups), who can change the info, who can add people, and whether joining by link needs an admin's approval.
+- **Invite link** (`/join/<code>`): admins make, replace or switch it off; the link opens the app and asks "Join this group?". With approval on, new people wait in a list (up to 100) that admins approve or decline.
+- API: `PATCH /groups/{id}`, `POST /groups/{id}/members`, `DELETE /groups/{id}/members/{username}`, `PUT /groups/{id}/members/{username}/admin`, `POST /groups/{id}/leave|transfer|invite`, `GET /groups/{id}/requests`, `POST /groups/{id}/requests/{username}`, `GET /groups/invite/{code}`, `POST /groups/join`; events `conversation:updated`, `conversation:removed`.
+
+**Communities.** Chats → New chat → **Communities**. A community is a place for a society, school, club or business: it has an **Announcements** group (only admins write; every member of the community is in it) and up to **20 groups** that its members can join themselves. Admins add people (or share an invite link), create groups inside it or add groups they own, and make other admins. Leaving, or being removed, takes a person out of the announcements and all its groups; when the last person leaves, the groups become ordinary groups. Only members can see a community (no public directory). API: `/communities...` (list, create, get, update, members, admin, leave, groups, groups/{id}/join, invite); socket events `community:*`.
+
 **Search.** The box above the chat list also searches messages. The server finds messages **it can read** (plain chats, captions, document names, poll questions; API `GET /search/messages`); **encrypted chats are searched on the device** (the chats opened and the copies saved on the device, decrypted as they are searched). Tapping a result opens the chat at that message, loading older messages as needed. Hidden and locked chats are not searched.
 
 ## Business assistant (bot)
@@ -871,6 +880,8 @@ The web app uses these over Socket.IO (connect with `auth: { token }`, a session
 | `chat:pref`         | Mute, archive, mark unread (`convId`, ...) |
 | `link:preview`      | Title and picture of a link (`url`)      |
 | `safety:report`     | Report a message (`msgId`) or person (`username`) with `reason` |
+| `group:edit` `group:settings` `group:add` `group:remove` `group:leave` `group:admin` `group:transfer` `group:invite` `group:join` `group:requests` `group:decide` | Group management (see above) |
+| `community:list` `community:get` `community:create` `community:edit` `community:add` `community:remove` `community:leave` `community:admin` `community:group` `community:join-group` `community:invite` | Communities |
 | `typing`            | Typing or recording started/stopped (`activity`) |
 | `profile:update`    | Change display name / about              |
 | `me:contact-code` / `me:contact-verify` | Send a code to a new mobile number/email, then save it |

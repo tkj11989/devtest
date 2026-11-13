@@ -234,11 +234,23 @@
       <div class="panel overlay hidden" id="panel-new-chat">
         <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>New chat</h2></header>
         <div class="search"><input id="user-search" placeholder="Search people by name or username" /></div>
+        <button class="link-row" type="button" id="btn-communities"><span class="menu-emoji">🏘️</span><span><strong>Communities</strong><small>Announcements and groups for a society, school, club or business</small></span></button>
         <button class="link-row" type="button" id="btn-find-friends">
           <svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3Zm8 2c-2.7 0-8 1.340-8 4v2h16v-2c0-2.660-5.300-4-8-4ZM8 13c-.3 0-.64.020-1 .060C5.200 13.400 2 14.400 2 17v2h5v-2c0-1.100.480-2.100 1.300-2.900A9 9 0 0 0 8 13Z"/></svg>
           <span><strong>Find friends from your contacts</strong><small>See which of your contacts are on VartiQ</small></span>
         </button>
         <ul id="user-results" class="list"></ul>
+      </div>
+
+      <!-- Communities -->
+      <div class="panel overlay hidden" id="panel-communities">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>Communities</h2></header>
+        <div class="pad stack"><button class="primary wide" id="btn-new-community" type="button">New community</button></div>
+        <ul id="community-list" class="list"></ul>
+      </div>
+      <div class="panel overlay hidden" id="panel-community">
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="community-title">Community</h2></header>
+        <div class="contact-scroll" id="community-body"></div>
       </div>
 
       <!-- Find friends from contacts -->
@@ -262,7 +274,7 @@
 
       <!-- New group -->
       <div class="panel overlay hidden" id="panel-new-group">
-        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2>New group</h2></header>
+        <header class="bar green"><button class="icon-btn back" data-close>&larr;</button><h2 id="group-panel-title">New group</h2></header>
         <div class="pad stack">
           <input id="group-name" placeholder="Group name" maxlength="50" />
           <div id="group-chips" class="chips"></div>
@@ -844,6 +856,7 @@
           <span id="live-banner-text"></span>
           <button type="button" class="link" id="live-banner-stop">Stop sharing</button>
         </div>
+        <div class="send-note hidden" id="send-note">Only admins can send messages in this group.</div>
         <div class="pin-bar hidden" id="pin-bar"><button type="button" class="pin-bar-body" id="pin-bar-body" title="Go to pinned message"><span class="pin-bar-label" id="pin-bar-label"></span><span class="pin-bar-text" id="pin-bar-text"></span></button><button type="button" class="icon-btn" id="pin-bar-next" aria-label="Next pinned message">&#8635;</button></div>
         <div class="messages" id="messages"></div>
         <button class="blocked-banner hidden" id="blocked-banner" type="button">

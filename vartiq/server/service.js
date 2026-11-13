@@ -598,6 +598,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     const conv = store.getConversation(convId);
     const dup = conv && store.findByClientId(convId, me, opts.clientId);
     if (dup) return store.viewFor(dup, me);
+    if (conv && !opts.auto && !Store.canPost(conv, me)) throw new ApiError(403, 'admins_only', 'Only admins can send messages in this group');
     const isFirst = conv && !(store.data.messages[convId] || []).some((m) => m.type !== 'system');
     const msg = store.addMessage(convId, me, text, opts);
 
@@ -634,6 +635,31 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
   };
   const noNewChatsWhenRestricted = (me) => {
     if (store.isRestricted(me)) throw new ApiError(403, 'restricted', 'Your account cannot start new chats right now. Your existing chats still work.');
+  };
+  const groupError = (err) => (err.status ? new ApiError(err.status, err.code, err.message) : err);
+  /** Everyone in the group hears about the change (admins also get the invite code and waiting list size); `skip` are told another way. */
+  const groupChanged = (conv, skip = []) => {
+    for (const m of conv.members) {
+      if (skip.includes(m)) continue;
+      notify(m, 'conversation:updated', { conversation: { ...store.summarize(conv, m), activeCall: calls?.activeCallFor(conv.id) || null }, users: usersFor(conv.members, m) });
+    }
+  };
+  /** Every member sees the community as it is now. */
+  const communityChanged = (c) => {
+    for (const m of c.members) notify(m, 'community:updated', { community: store.communityView(c, m), users: usersFor(c.members, m) });
+  };
+  /** Someone left or was removed: they lose the community and its groups; the rest see the change. */
+  const communityDropped = ({ community, left, ended }, who, reason) => {
+    notify(who, 'community:removed', { id: community.id, reason });
+    for (const g of left) notify(who, 'conversation:removed', { convId: g.id, reason });
+    if (ended) return;
+    for (const g of left) {
+      const conv = store.getConversation(g.id);
+      if (conv && !g.deleted) groupChanged(conv);
+    }
+    const announce = store.getConversation(community.announceId);
+    if (announce) groupChanged(announce);
+    communityChanged(community);
   };
   const previewLog = new Map(); // username -> times of recent link previews
 
@@ -1312,6 +1338,242 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
       }
       if (block === true && done.owner !== me) actions.block(me, { username: done.owner, blocked: true });
       return { reported: true, blocked: block === true };
+    },
+
+    // ----- group management (admins, members, settings, invite link) -----
+
+    /** Rename, or change the description. */
+    groupEdit(me, { convId, name, description } = {}, ctx) {
+      const c0 = member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      let done;
+      try { done = store.groupEdit(me, c0.id, { name, description }); } catch (err) { throw groupError(err); }
+      if (done.changes.includes('name')) postMessage(done.conv, store.addSystemMessage(convId, me, { event: 'renamed', name: done.conv.name }));
+      if (done.changes.includes('description')) postMessage(done.conv, store.addSystemMessage(convId, me, { event: 'description' }));
+      groupChanged(done.conv);
+      return { conversation: conversationView(me, done.conv, ctx) };
+    },
+
+    /** Who may write (`sendMode`), edit info (`editInfo`) or add people (`addMembers`): `all` or `admins`; `approval`: joining by link needs an admin's yes. */
+    groupSettings(me, { convId, ...patch } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      let conv;
+      try { conv = store.groupSettings(me, convId, patch); } catch (err) { throw groupError(err); }
+      postMessage(conv, store.addSystemMessage(convId, me, { event: 'settings' }));
+      groupChanged(conv);
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    groupAdd(me, { convId, usernames } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const names = (Array.isArray(usernames) ? usernames : []).map((u) => String(u).toLowerCase());
+      for (const u of names) if (u !== me && !store.canStartChat(me, u)) throw new ApiError(403, 'not_accepting', `${store.publicUser(u)?.displayName || u} is not accepting new chats`);
+      let done;
+      try { done = store.groupAdd(me, convId, names, { maxMembers: store.getSettings().limits.maxGroupMembers }); } catch (err) { throw groupError(err); }
+      for (const u of done.added) notify(u, 'conversation:new', { conversation: store.summarize(done.conv, u), users: usersFor(done.conv.members, u) });
+      postMessage(done.conv, store.addSystemMessage(convId, me, { event: 'members_added', users: done.added }));
+      groupChanged(done.conv, done.added);
+      return { conversation: conversationView(me, done.conv, ctx), added: done.added };
+    },
+
+    groupRemove(me, { convId, username } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const target = String(username || '').toLowerCase();
+      let conv;
+      try { conv = store.groupRemove(me, convId, target); } catch (err) { throw groupError(err); }
+      notify(target, 'conversation:removed', { convId, reason: 'removed' });
+      postMessage(conv, store.addSystemMessage(convId, me, { event: 'member_removed', user: target }));
+      groupChanged(conv);
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    groupLeave(me, { convId } = {}, ctx) {
+      member(me, convId);
+      let done;
+      try { done = store.groupLeave(me, convId); } catch (err) { throw groupError(err); }
+      notify(me, 'conversation:removed', { convId, reason: 'left' });
+      if (!done.deleted) {
+        postMessage(done.conv, store.addSystemMessage(convId, me, { event: 'member_left' }));
+        groupChanged(done.conv);
+      }
+      return { left: true };
+    },
+
+    groupAdmin(me, { convId, username, admin } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      const target = String(username || '').toLowerCase();
+      let conv;
+      try { conv = store.groupSetAdmin(me, convId, target, admin === true); } catch (err) { throw groupError(err); }
+      postMessage(conv, store.addSystemMessage(convId, me, { event: 'admin', user: target, admin: admin === true }));
+      groupChanged(conv);
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    groupTransfer(me, { convId, to } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      let conv;
+      try { conv = store.groupTransfer(me, convId, to); } catch (err) { throw groupError(err); }
+      postMessage(conv, store.addSystemMessage(convId, me, { event: 'owner', user: conv.owner }));
+      groupChanged(conv);
+      return { conversation: conversationView(me, conv, ctx) };
+    },
+
+    /** The invite link of a group: made if there is none; `reset` replaces it (the old one stops working); `off` removes it. */
+    groupInvite(me, { convId, reset, off } = {}, ctx) {
+      member(me, convId);
+      requireUnlocked(me, convId, ctx);
+      let code;
+      try { code = store.groupInvite(me, convId, { reset: reset === true, off: off === true }); } catch (err) { throw groupError(err); }
+      groupChanged(store.getConversation(convId));
+      return { code, url: code ? `${(publicUrl || '').replace(/\/$/, '')}/join/${code}` : null };
+    },
+
+    /** What an invite link is for (name, description, how many members), before joining. */
+    groupInviteInfo(me, { code } = {}) {
+      try { return { group: store.groupInfoByInvite(code) }; } catch (err) { throw groupError(err); }
+    },
+
+    /** Join with a link: `joined`, or `pending` when the group's admins have to say yes. */
+    groupJoin(me, { code } = {}, ctx) {
+      const com = store._communityByInvite(code);
+      if (com) {
+        let c;
+        try { c = store.communityJoin(me, code); } catch (err) { throw groupError(err); }
+        if (c.joined) {
+          const announce = store.getConversation(c.community.announceId);
+          notify(me, 'conversation:new', { conversation: store.summarize(announce, me), users: usersFor(announce.members, me) });
+          groupChanged(announce, [me]);
+          communityChanged(c.community);
+        }
+        return { status: c.joined ? 'joined' : 'member', community: store.communityView(c.community, me) };
+      }
+      let done;
+      try { done = store.groupJoin(me, code, { maxMembers: store.getSettings().limits.maxGroupMembers }); } catch (err) { throw groupError(err); }
+      if (done.status === 'joined') {
+        for (const m of done.conv.members) if (m === me) notify(m, 'conversation:new', { conversation: store.summarize(done.conv, m), users: usersFor(done.conv.members, m) });
+        postMessage(done.conv, store.addSystemMessage(done.conv.id, me, { event: 'joined_link' }));
+        groupChanged(done.conv, [me]);
+      } else if (done.status === 'pending') {
+        groupChanged(done.conv);
+      }
+      return { status: done.status, ...(done.status === 'joined' || done.status === 'member' ? { conversation: conversationView(me, done.conv, ctx) } : { name: done.conv.name }) };
+    },
+
+    // ----- communities -----
+
+    communities(me) {
+      return { communities: store.communitiesOf(me).map((c) => store.communityView(c, me)) };
+    },
+
+    communityGet(me, { id } = {}) {
+      try { return { community: store.communityView(store._community(id, me), me) }; } catch (err) { throw groupError(err); }
+    },
+
+    communityCreate(me, { name, description } = {}, ctx) {
+      noNewChatsWhenRestricted(me);
+      let done;
+      try { done = store.communityCreate(me, { name, description }); } catch (err) { throw groupError(err); }
+      notify(me, 'conversation:new', { conversation: store.summarize(done.announce, me), users: usersFor(done.announce.members, me) });
+      communityChanged(done.community);
+      return { community: store.communityView(done.community, me) };
+    },
+
+    communityEdit(me, { id, name, description } = {}) {
+      let c;
+      try { c = store.communityEdit(me, id, { name, description }); } catch (err) { throw groupError(err); }
+      communityChanged(c);
+      return { community: store.communityView(c, me) };
+    },
+
+    communityAdd(me, { id, usernames } = {}) {
+      const names = (Array.isArray(usernames) ? usernames : []).map((u) => String(u).toLowerCase());
+      for (const u of names) if (u !== me && !store.canStartChat(me, u)) throw new ApiError(403, 'not_accepting', `${store.publicUser(u)?.displayName || u} is not accepting new chats`);
+      let done;
+      try { done = store.communityAdd(me, id, names); } catch (err) { throw groupError(err); }
+      const announce = store.getConversation(done.community.announceId);
+      for (const u of done.added) notify(u, 'conversation:new', { conversation: store.summarize(announce, u), users: usersFor(announce.members, u) });
+      groupChanged(announce, done.added);
+      communityChanged(done.community);
+      return { community: store.communityView(done.community, me), added: done.added };
+    },
+
+    communityRemove(me, { id, username } = {}) {
+      let done;
+      try { done = store.communityRemove(me, id, String(username || '').toLowerCase()); } catch (err) { throw groupError(err); }
+      communityDropped(done, String(username).toLowerCase(), 'removed');
+      return { community: store.communityView(done.community, me) };
+    },
+
+    communityLeave(me, { id } = {}) {
+      let done;
+      try { done = store.communityLeave(me, id); } catch (err) { throw groupError(err); }
+      communityDropped(done, me, 'left');
+      return { left: true };
+    },
+
+    communityAdmin(me, { id, username, admin } = {}) {
+      let c;
+      try { c = store.communitySetAdmin(me, id, username, admin === true); } catch (err) { throw groupError(err); }
+      groupChanged(store.getConversation(c.announceId));
+      communityChanged(c);
+      return { community: store.communityView(c, me) };
+    },
+
+    /** `create: { name, members }`, `link: groupId` or `unlink: groupId`. */
+    communityGroup(me, { id, create, link, unlink } = {}) {
+      noNewChatsWhenRestricted(me);
+      let done;
+      try { done = store.communityGroup(me, id, { create, link, unlink }); } catch (err) { throw groupError(err); }
+      if (done.group && !unlink) {
+        for (const m of done.group.members) notify(m, 'conversation:new', { conversation: store.summarize(done.group, m), users: usersFor(done.group.members, m) });
+        if (link) groupChanged(done.group);
+      } else if (done.group) groupChanged(done.group);
+      communityChanged(done.community);
+      return { community: store.communityView(done.community, me), ...(done.group ? { conversation: conversationView(me, done.group) } : {}) };
+    },
+
+    communityJoinGroup(me, { id, convId } = {}, ctx) {
+      let done;
+      try { done = store.communityJoinGroup(me, id, convId); } catch (err) { throw groupError(err); }
+      if (done.joined) {
+        notify(me, 'conversation:new', { conversation: store.summarize(done.group, me), users: usersFor(done.group.members, me) });
+        postMessage(done.group, store.addSystemMessage(done.group.id, me, { event: 'joined_community' }));
+        groupChanged(done.group, [me]);
+        communityChanged(done.community);
+      }
+      return { community: store.communityView(done.community, me), conversation: conversationView(me, done.group, ctx) };
+    },
+
+    communityInvite(me, { id, reset, off } = {}) {
+      let code;
+      try { code = store.communityInvite(me, id, { reset: reset === true, off: off === true }); } catch (err) { throw groupError(err); }
+      communityChanged(store._community(id, me));
+      return { code, url: code ? `${(publicUrl || '').replace(/\/$/, '')}/join/${code}` : null };
+    },
+
+    groupRequests(me, { convId } = {}, ctx) {
+      member(me, convId);
+      let list;
+      try { list = store.groupRequests(me, convId); } catch (err) { throw groupError(err); }
+      return { requests: list.map((r) => ({ ...r, user: store.publicUser(r.username) })) };
+    },
+
+    groupDecide(me, { convId, username, approve } = {}, ctx) {
+      member(me, convId);
+      let done;
+      try { done = store.groupDecide(me, convId, username, approve === true, { maxMembers: store.getSettings().limits.maxGroupMembers }); } catch (err) { throw groupError(err); }
+      const target = String(username).toLowerCase();
+      if (done.approved && done.conv.members.includes(target)) {
+        notify(target, 'conversation:new', { conversation: store.summarize(done.conv, target), users: usersFor(done.conv.members, target) });
+        postMessage(done.conv, store.addSystemMessage(convId, me, { event: 'members_added', users: [target] }));
+      }
+      groupChanged(done.conv, done.approved ? [target] : []);
+      return { approved: done.approved, requests: (done.conv.requests || []).length };
     },
 
     block(me, { username, blocked }) {
@@ -2362,7 +2624,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
   const featureLabel = Object.fromEntries(FEATURES.map((f) => [f.id, f.label]));
   /** Actions that need a feature to be on. A function decides per call (so turning things off or reading stays possible). */
   const GATES = {
-    createGroup: 'groups',
+    createGroup: 'groups', communityCreate: 'groups',
     sendVoice: 'voiceMessages',
     uploadMedia: 'attachments', sendMedia: 'attachments',
     setDisappearing: (p) => (p?.seconds ? 'disappearing' : null),

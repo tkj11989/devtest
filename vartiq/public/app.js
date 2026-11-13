@@ -1361,6 +1361,7 @@
     });
     statusUpdates.attach(socket);
     channelsUI.attach(socket);
+    socket.once('connect', () => setTimeout(handleJoinLink, 500));
 
     // Events that carry (or refer to) messages are handled one at a time, in order, after decryption.
     let inbox = Promise.resolve();
@@ -1473,7 +1474,11 @@
       if (convId === state.activeId) renderMessages();
       if (!$('#panel-starred').classList.contains('hidden')) loadStarred();
     });
-    onOrdered('conversation:updated', ({ conversation }) => {
+    socket.on('community:updated', ({ community, users }) => applyCommunity(community, users));
+    socket.on('community:removed', ({ id, reason }) => { const c = state.communities.get(id); forgetCommunity(id); if (reason === 'removed') toast(`You were removed from ${c?.name || 'a community'}`); });
+    onOrdered('conversation:removed', ({ convId, reason }) => { const c = state.conversations.get(convId); forgetConversation(convId); if (reason === 'removed') toast(`You were removed from ${c?.name || 'a group'}`); });
+    onOrdered('conversation:updated', ({ conversation, users }) => {
+      if (conversation.type === 'group' && state.conversations.has(conversation.id)) return applyGroupUpdate(conversation, users);
       const conv = state.conversations.get(conversation.id);
       if (!conv) {
         loadConversations();
@@ -2166,6 +2171,7 @@
       group: conv.type === 'group',
     });
     $('#chat-name').textContent = convTitle(conv);
+    paintSendNote();
     $('#menu-report').classList.toggle('hidden', conv.type !== 'direct');
     const badgesEl = $('#chat-badges');
     badgesEl.textContent = '';
@@ -2227,7 +2233,7 @@
     // Blocked contact: the composer is replaced by an unblock banner.
     $('#blocked-banner').classList.toggle('hidden', !blocked);
     if (blocked) $('#blocked-banner-text').textContent = `You blocked ${displayName(peer)}. Tap to unblock.`;
-    $('#composer').classList.toggle('hidden', blocked || lockedView || !!state.recorder);
+    $('#composer').classList.toggle('hidden', blocked || lockedView || !canSendIn(conv) || !!state.recorder);
     paintE2eeBanner(conv, lockedView);
     paintTranslateBanner(conv, lockedView);
     $('#menu-translate').classList.toggle('hidden', lockedView);
@@ -4191,7 +4197,7 @@
       users.forEach((u) => (state.users[u.username] = { ...(state.users[u.username] || {}), ...u }));
       target.textContent = '';
       if (!users.length) target.appendChild(el('p', 'muted pad', 'No people found.'));
-      users.forEach((u) => target.appendChild(render(u)));
+      users.forEach((u) => { const row = render(u); if (row) target.appendChild(row); });
     } catch (err) {
       console.error(err);
     }
@@ -4277,6 +4283,8 @@
   }
 
   const renderGroupResults = (q) => searchPeople(q, $('#group-results'), (u) => {
+    if (state.groupAddTo && state.conversations.get(state.groupAddTo)?.members.includes(u.username)) return null; // already in the group
+    if (state.communityAddTo && state.communities.get(state.communityAddTo)?.members.includes(u.username)) return null;
     const li = userRow(u, { checkbox: true, checked: state.groupMembers.has(u.username) });
     li.addEventListener('click', () => {
       if (state.groupMembers.has(u.username)) state.groupMembers.delete(u.username);
@@ -4287,7 +4295,13 @@
     return li;
   });
 
+  state.groupAddTo = null; // set while the panel is used to add people to an existing group
   $('#btn-new-group').addEventListener('click', () => {
+    state.groupAddTo = null;
+    state.communityAddTo = null;
+    $('#group-name').classList.remove('hidden');
+    $('#group-panel-title').textContent = 'New group';
+    $('#btn-create-group').textContent = 'Create group';
     openPanel('#panel-new-group');
     state.groupMembers.clear();
     $('#group-name').value = '';
@@ -4300,6 +4314,32 @@
   $('#group-search').addEventListener('input', debounce((e) => renderGroupResults(e.target.value), 200));
 
   $('#btn-create-group').addEventListener('click', async () => {
+    if (state.communityAddTo) {
+      try {
+        const res = await emit('community:add', { id: state.communityAddTo, usernames: [...state.groupMembers] });
+        applyCommunity(res.community);
+        $('#panel-new-group').classList.add('hidden');
+        toast(`Added ${res.added.length} ${res.added.length === 1 ? 'person' : 'people'}`);
+        state.communityAddTo = null;
+        openPanel('#panel-community');
+        renderCommunity();
+      } catch (err) {
+        $('#group-error').textContent = err.message;
+      }
+      return;
+    }
+    if (state.groupAddTo) {
+      try {
+        const res = await emit('group:add', { convId: state.groupAddTo, usernames: [...state.groupMembers] });
+        applyGroupUpdate(res.conversation);
+        $('#panel-new-group').classList.add('hidden');
+        toast(`Added ${res.added.length} ${res.added.length === 1 ? 'person' : 'people'}`);
+        refreshContactInfo();
+      } catch (err) {
+        $('#group-error').textContent = err.message;
+      }
+      return;
+    }
     try {
       const { conversation } = await emit('group:create', {
         name: $('#group-name').value,
@@ -4547,6 +4587,20 @@
   function describeSystem(m, short = false) {
     const who = m.from === state.me.username ? 'You' : displayName(m.from);
     const s = m.system || {};
+    const who2 = (u) => (u === state.me.username ? 'you' : displayName(u));
+    switch (s.event) {
+      case 'members_added': return `${who} added ${(s.users || []).map(who2).join(', ')}.`;
+      case 'member_removed': return `${who} removed ${who2(s.user)}.`;
+      case 'member_left': return `${who} left the group.`;
+      case 'joined_community': return `${who} joined the group.`;
+      case 'joined_link': return `${who} joined using the invite link.`;
+      case 'renamed': return `${who} changed the group name to "${s.name}".`;
+      case 'description': return `${who} changed the group description.`;
+      case 'admin': return s.admin ? `${who} made ${who2(s.user)} an admin.` : `${who} removed ${who2(s.user)} as admin.`;
+      case 'owner': return `${who} made ${who2(s.user)} the group owner.`;
+      case 'settings': return `${who} changed the group settings.`;
+      default: break;
+    }
     if (s.event !== 'disappearing') return 'Chat settings changed';
     if (!s.seconds) return `${who} switched off auto-delete.`;
     return short
@@ -4822,6 +4876,496 @@
     return card;
   }
 
+  // ---------- communities ----------
+
+  state.communities = new Map();
+  state.communityOpen = null;
+
+  async function openCommunities() {
+    openPanel('#panel-communities');
+    try {
+      const { communities } = await emit('community:list', {});
+      state.communities = new Map(communities.map((c) => [c.id, c]));
+    } catch (err) { toast(err.message); }
+    renderCommunityList();
+  }
+
+  function renderCommunityList() {
+    const ul = $('#community-list');
+    ul.textContent = '';
+    if (!state.communities.size) ul.appendChild(el('p', 'muted pad', 'You are not in any community yet. A community has an announcements group and groups that members can join. Make one, or open an invite link.'));
+    for (const c of state.communities.values()) {
+      const li = el('li', 'tappable');
+      li.appendChild(avatar(c.name, c.id, { group: true }));
+      const b = el('div', 'body');
+      b.append(el('div', 'row', c.name), el('div', 'sub', `${c.members.length} ${c.members.length === 1 ? 'member' : 'members'} · ${c.groups.length} ${c.groups.length === 1 ? 'group' : 'groups'}`));
+      li.appendChild(b);
+      li.addEventListener('click', () => openCommunity(c.id));
+      ul.appendChild(li);
+    }
+  }
+
+  function openCommunity(id) {
+    state.communityOpen = id;
+    openPanel('#panel-community');
+    renderCommunity();
+  }
+
+  function applyCommunity(c, users) {
+    if (users) Object.assign(state.users, users);
+    state.communities.set(c.id, c);
+    if (state.communityOpen === c.id && !$('#panel-community').classList.contains('hidden')) renderCommunity();
+    if (!$('#panel-communities').classList.contains('hidden')) renderCommunityList();
+  }
+
+  function forgetCommunity(id) {
+    state.communities.delete(id);
+    if (state.communityOpen === id) { state.communityOpen = null; $('#panel-community').classList.add('hidden'); }
+    renderCommunityList();
+  }
+
+  const comCall = async (event, payload, done) => {
+    try {
+      const res = await emit(event, payload);
+      if (res.community) applyCommunity(res.community);
+      done?.(res);
+      return res;
+    } catch (err) { toast(err.message); return null; }
+  };
+
+  function renderCommunity() {
+    const c = state.communities.get(state.communityOpen);
+    const body = $('#community-body');
+    body.textContent = '';
+    if (!c) return;
+    const me = state.me.username;
+    const admin = c.admins.includes(me);
+    $('#community-title').textContent = 'Community';
+
+    const top = el('section', 'info-top');
+    const av = el('div', 'avatar xl');
+    paintAvatar(av, c.name, c.id, { group: true, big: true });
+    top.append(av, el('h2', 'info-name', c.name), el('p', 'muted', `${c.members.length} members`));
+    if (c.description) top.appendChild(el('p', 'group-desc', c.description));
+    if (admin) {
+      const edit = el('button', 'link', 'Edit name and description');
+      edit.type = 'button';
+      edit.addEventListener('click', () => dialog({
+        title: 'Community name and description', submit: 'Save',
+        fields: [{ name: 'name', label: 'Name', type: 'text', maxLength: 50, value: c.name }, { name: 'description', label: 'Description (optional)', type: 'textarea', required: false, maxLength: 500, rows: 4, value: c.description || '' }],
+        async onSubmit(v) { const res = await emit('community:edit', { id: c.id, name: v.name, description: v.description }); applyCommunity(res.community); },
+      }));
+      top.appendChild(edit);
+    }
+    body.appendChild(top);
+
+    const ann = el('section', 'info-card info-action');
+    const abody = el('div', 'grow');
+    abody.append(el('div', '', '📣 Announcements'), el('div', 'muted small-note', 'Only admins can write here. Everyone in the community gets it.'));
+    const openAnn = el('button', 'link', 'Open');
+    openAnn.type = 'button';
+    openAnn.addEventListener('click', () => { $('#panel-community').classList.add('hidden'); $('#panel-communities').classList.add('hidden'); openChat(c.announceId); });
+    ann.append(abody, openAnn);
+    body.appendChild(ann);
+
+    const groups = el('section', 'info-card');
+    groups.appendChild(el('div', 'info-label', `Groups (${c.groups.length})`));
+    if (!c.groups.length) groups.appendChild(el('p', 'muted small-note', admin ? 'No groups yet. Add one below.' : 'No groups yet.'));
+    const ul = el('ul', 'list member-list');
+    for (const g of c.groups) {
+      const li = el('li');
+      li.appendChild(avatar(g.name, g.id, { group: true }));
+      const b = el('div', 'body');
+      b.append(el('div', 'row', g.name), el('div', 'sub', g.description || `${g.members} members`));
+      li.appendChild(b);
+      const btn = el('button', 'link', g.joined ? 'Open' : 'Join');
+      btn.type = 'button';
+      btn.addEventListener('click', async () => {
+        if (!g.joined) {
+          const res = await comCall('community:join-group', { id: c.id, convId: g.id });
+          if (!res) return;
+          state.conversations.set(res.conversation.id, res.conversation);
+          renderChatList();
+        }
+        $('#panel-community').classList.add('hidden');
+        openChat(g.id);
+      });
+      li.appendChild(btn);
+      if (admin) {
+        const x = el('button', 'icon-btn member-more', '⋯');
+        x.type = 'button';
+        x.setAttribute('aria-label', `Actions for ${g.name}`);
+        x.addEventListener('click', () => { if (confirm(`Take "${g.name}" out of the community? It stays a group.`)) comCall('community:group', { id: c.id, unlink: g.id }); });
+        li.appendChild(x);
+      }
+      ul.appendChild(li);
+    }
+    groups.appendChild(ul);
+    if (admin) {
+      const add = el('button', 'link', '+ New group in this community');
+      add.type = 'button';
+      add.addEventListener('click', () => dialog({
+        title: 'New group', text: 'Community members can join it. You can add people from the community now.', submit: 'Create',
+        fields: [{ name: 'name', label: 'Group name', type: 'text', maxLength: 50 }],
+        async onSubmit(v) {
+          const res = await emit('community:group', { id: c.id, create: { name: v.name } });
+          applyCommunity(res.community);
+          state.conversations.set(res.conversation.id, res.conversation);
+          renderChatList();
+        },
+      }));
+      const link = el('button', 'link', '+ Add a group I already own');
+      link.type = 'button';
+      link.addEventListener('click', () => {
+        const mine = [...state.conversations.values()].filter((g) => g.type === 'group' && g.owner === me && !g.communityId);
+        if (!mine.length) return toast('You do not own any group that is outside a community');
+        dialog({
+          title: 'Add a group', text: 'Its members become members of the community.', submit: 'Add',
+          fields: [{ name: 'convId', label: 'Group', options: mine.map((g) => [g.id, g.name]), value: mine[0].id }],
+          async onSubmit(v) { const res = await emit('community:group', { id: c.id, link: v.convId }); applyCommunity(res.community); },
+        });
+      });
+      groups.append(add, link);
+    }
+    body.appendChild(groups);
+
+    if (admin) {
+      const invite = el('section', 'info-card info-action');
+      const ibody = el('div', 'grow');
+      ibody.append(el('div', '', 'Invite link'), el('div', 'muted small-note', c.inviteCode ? 'Anyone with the link can join the community' : 'Off'));
+      const btn = el('button', 'link', c.inviteCode ? 'Share or reset' : 'Create');
+      btn.type = 'button';
+      btn.addEventListener('click', async () => {
+        const res = await comCall('community:invite', { id: c.id });
+        if (!res) return;
+        const url = res.url && !/^https?:/.test(res.url) ? location.origin + res.url : res.url;
+        dialog({
+          title: 'Community invite link', text: `${url}\n\nAnyone with this link can join the community and see its announcements and groups. Share it only with people you trust.`, submit: 'Do it',
+          fields: [{ name: 'action', label: 'What to do', options: [['copy', 'Copy the link'], ['reset', 'Make a new link (the old one stops working)'], ['off', 'Switch the link off']], value: 'copy' }],
+          async onSubmit(v) {
+            if (v.action === 'copy') { try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { prompt('Copy this link:', url); } return; }
+            const next = await emit('community:invite', { id: c.id, ...(v.action === 'reset' ? { reset: true } : { off: true }) });
+            toast(v.action === 'reset' ? 'New link made' : 'Invite link is off');
+            if (next.url && v.action === 'reset') navigator.clipboard?.writeText(next.url.startsWith('http') ? next.url : location.origin + next.url).catch(() => {});
+          },
+        });
+      });
+      invite.append(ibody, btn);
+      body.appendChild(invite);
+    }
+
+    const members = el('section', 'info-card');
+    members.appendChild(el('div', 'info-label', `${c.members.length} members`));
+    if (admin) {
+      const add = el('button', 'link', '+ Add people');
+      add.type = 'button';
+      add.addEventListener('click', () => {
+        state.groupAddTo = null;
+        state.communityAddTo = c.id;
+        state.groupMembers.clear();
+        $('#group-name').classList.add('hidden');
+        $('#group-panel-title').textContent = 'Add people to the community';
+        $('#btn-create-group').textContent = 'Add to community';
+        $('#group-search').value = '';
+        $('#group-error').textContent = '';
+        openPanel('#panel-new-group');
+        renderGroupChips();
+        renderGroupResults('');
+      });
+      members.appendChild(add);
+    }
+    const mul = el('ul', 'list member-list');
+    for (const m of c.members) {
+      const u = state.users[m] || { username: m, displayName: m };
+      const li = el('li');
+      li.appendChild(avatar(u.displayName, m, { online: u.online }));
+      const b = el('div', 'body');
+      const row = el('div', 'row');
+      row.appendChild(el('span', 'name', m === me ? 'You' : u.displayName));
+      if (c.owner === m) row.appendChild(el('span', 'admin-tag owner-tag', 'Owner'));
+      else if (c.admins.includes(m)) row.appendChild(el('span', 'admin-tag', 'Admin'));
+      b.append(row, el('div', 'sub', `@${m}`));
+      li.appendChild(b);
+      if (admin && m !== me && m !== c.owner && (!c.admins.includes(m) || c.owner === me)) {
+        const more = el('button', 'icon-btn member-more', '⋯');
+        more.type = 'button';
+        more.addEventListener('click', (e) => {
+          closeMessageMenu();
+          const menu = el('div', 'msg-menu');
+          const item = (label, fn) => { const bt = el('button', 'msg-menu-item', label); bt.type = 'button'; bt.addEventListener('click', () => { closeMessageMenu(); fn(); }); menu.appendChild(bt); };
+          if (!c.admins.includes(m)) item('Make admin', () => comCall('community:admin', { id: c.id, username: m, admin: true }));
+          else if (c.owner === me) item('Remove admin rights', () => comCall('community:admin', { id: c.id, username: m, admin: false }));
+          item(`Remove ${u.displayName}`, () => { if (confirm(`Remove ${u.displayName} from the community and all its groups?`)) comCall('community:remove', { id: c.id, username: m }); });
+          document.body.appendChild(menu);
+          const r = menu.getBoundingClientRect();
+          menu.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - r.width - 8))}px`;
+          menu.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - r.height - 8))}px`;
+        });
+        li.appendChild(more);
+      }
+      mul.appendChild(li);
+    }
+    members.appendChild(mul);
+    body.appendChild(members);
+
+    const leave = el('button', 'danger-link wide-link', 'Leave community');
+    leave.type = 'button';
+    leave.addEventListener('click', async () => {
+      if (!confirm(`Leave "${c.name}"? You leave its announcements and all its groups.`)) return;
+      const res = await comCall('community:leave', { id: c.id });
+      if (res) { forgetCommunity(c.id); toast('You left the community'); }
+    });
+    body.appendChild(leave);
+  }
+
+  $('#btn-communities').addEventListener('click', openCommunities);
+  $('#btn-new-community').addEventListener('click', () => dialog({
+    title: 'New community',
+    text: 'A community has an Announcements group (only admins write) and groups that its members can join. Only members can see it.',
+    submit: 'Create',
+    fields: [{ name: 'name', label: 'Name', type: 'text', maxLength: 50 }, { name: 'description', label: 'Description (optional)', type: 'textarea', required: false, maxLength: 500, rows: 3 }],
+    async onSubmit(v) {
+      const res = await emit('community:create', { name: v.name, description: v.description });
+      applyCommunity(res.community);
+      openCommunity(res.community.id);
+    },
+  }));
+
+  // ---------- group admin tools ----------
+
+  const iAmGroupAdmin = (c) => !!c?.admins?.includes(state.me.username);
+  const canEditGroupInfo = (c) => c.type === 'group' && (c.editInfo !== 'admins' || iAmGroupAdmin(c));
+  const canAddToGroup = (c) => c.type === 'group' && (c.addMembers === 'all' || iAmGroupAdmin(c));
+  const canSendIn = (c) => !c || c.type !== 'group' || c.sendMode !== 'admins' || iAmGroupAdmin(c);
+
+  /** Take a changed group (from an answer or an event) into the app and repaint what shows it. */
+  function applyGroupUpdate(conversation, users) {
+    if (users) Object.assign(state.users, users);
+    const conv = state.conversations.get(conversation.id);
+    if (!conv) { state.conversations.set(conversation.id, conversation); renderChatList(); return; }
+    for (const k of ['description', 'sendMode', 'editInfo', 'addMembers', 'approval', 'inviteCode', 'requestCount']) if (!(k in conversation)) delete conv[k];
+    Object.assign(conv, conversation);
+    renderChatList();
+    if (conversation.id === state.activeId) { renderHeader(); paintSendNote(); }
+    refreshContactInfo();
+  }
+
+  function paintSendNote() {
+    const conv = state.conversations.get(state.activeId);
+    const blocked = !canSendIn(conv);
+    $('#send-note').classList.toggle('hidden', !blocked);
+  }
+
+  function editGroupDialog(conv) {
+    return dialog({
+      title: 'Group name and description',
+      submit: 'Save',
+      fields: [
+        { name: 'name', label: 'Name', type: 'text', maxLength: 50, value: conv.name },
+        { name: 'description', label: 'Description (optional)', type: 'textarea', required: false, maxLength: 500, rows: 4, value: conv.description || '' },
+      ],
+      async onSubmit(v) {
+        const res = await emit('group:edit', { convId: conv.id, name: v.name, description: v.description });
+        applyGroupUpdate(res.conversation);
+      },
+    });
+  }
+
+  function openAddPeople(conv) {
+    state.communityAddTo = null;
+    state.groupAddTo = conv.id;
+    state.groupMembers.clear();
+    $('#group-name').classList.add('hidden');
+    $('#group-panel-title').textContent = 'Add people';
+    $('#btn-create-group').textContent = 'Add to group';
+    $('#group-search').value = '';
+    $('#group-error').textContent = '';
+    openPanel('#panel-new-group');
+    renderGroupChips();
+    renderGroupResults('');
+  }
+
+  function memberMenu(conv, username, x, y) {
+    closeMessageMenu();
+    const menu = el('div', 'msg-menu');
+    menu.setAttribute('role', 'menu');
+    const isAdmin = conv.admins.includes(username);
+    const iAmOwner = conv.owner === state.me.username;
+    const item = (label, fn) => {
+      const b = el('button', 'msg-menu-item', label);
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      b.addEventListener('click', async () => { closeMessageMenu(); try { await fn(); } catch (err) { toast(err.message); } });
+      menu.appendChild(b);
+    };
+    const name = displayName(username);
+    if (!isAdmin) item('Make admin', async () => applyGroupUpdate((await emit('group:admin', { convId: conv.id, username, admin: true })).conversation));
+    if (isAdmin && iAmOwner && username !== conv.owner) item('Remove admin rights', async () => applyGroupUpdate((await emit('group:admin', { convId: conv.id, username, admin: false })).conversation));
+    if (iAmOwner && username !== conv.owner) {
+      item('Make owner', async () => {
+        if (confirm(`Hand this group to ${name}? You stay an admin.`)) applyGroupUpdate((await emit('group:transfer', { convId: conv.id, to: username })).conversation);
+      });
+    }
+    if (username !== conv.owner && (!isAdmin || iAmOwner)) {
+      item(`Remove ${name}`, async () => {
+        if (confirm(`Remove ${name} from the group?`)) applyGroupUpdate((await emit('group:remove', { convId: conv.id, username })).conversation);
+      });
+    }
+    if (!menu.children.length) return;
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - r.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - r.height - 8))}px`;
+  }
+
+  async function leaveGroup(conv) {
+    if (!confirm(`Leave "${conv.name}"? You will no longer get its messages.`)) return;
+    try {
+      await emit('group:leave', { convId: conv.id });
+      forgetConversation(conv.id);
+      toast('You left the group');
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  /** The chat is gone for me (I left, was removed, or it was deleted): out of the list, and closed if open. */
+  function forgetConversation(convId) {
+    state.conversations.delete(convId);
+    state.messages.delete(convId);
+    state.cache?.remove?.(convId);
+    if (state.activeId === convId) {
+      state.activeId = null;
+      $('#chat-view').classList.add('hidden');
+      $('#empty-state').classList.remove('hidden');
+      $('#app').classList.remove('chat-open');
+      $('#panel-contact').classList.add('hidden');
+    }
+    renderChatList();
+  }
+
+  /** The cards only admins see in the group info: settings, invite link, waiting list. */
+  function groupAdminCards(conv) {
+    const box = el('div', 'group-admin');
+    if (!iAmGroupAdmin(conv)) {
+      if (conv.sendMode === 'admins') box.appendChild(el('p', 'muted small-note info-card', 'Only admins can send messages in this group.'));
+      return box;
+    }
+    const settings = el('section', 'info-card info-action');
+    const sbody = el('div', 'grow');
+    const label = { all: 'Everyone', admins: 'Only admins' };
+    sbody.append(el('div', '', 'Group settings'), el('div', 'muted small-note',
+      `Send messages: ${label[conv.sendMode || 'all']} · Edit info: ${label[conv.editInfo || 'all']} · Add people: ${label[conv.addMembers || 'admins']} · Approve new members: ${conv.approval ? 'yes' : 'no'}`));
+    const change = el('button', 'link', 'Change');
+    change.type = 'button';
+    change.addEventListener('click', () => groupSettingsDialog(conv));
+    settings.append(sbody, change);
+    box.appendChild(settings);
+
+    const invite = el('section', 'info-card info-action');
+    const ibody = el('div', 'grow');
+    ibody.append(el('div', '', 'Invite link'), el('div', 'muted small-note', conv.inviteCode ? 'Anyone with the link can join' + (conv.approval ? ' (after an admin approves)' : '') : 'Off'));
+    const open = el('button', 'link', conv.inviteCode ? 'Share or reset' : 'Create');
+    open.type = 'button';
+    open.addEventListener('click', () => inviteDialog(conv));
+    invite.append(ibody, open);
+    box.appendChild(invite);
+
+    if (conv.approval || conv.requestCount) {
+      const req = el('section', 'info-card info-action');
+      const rbody = el('div', 'grow');
+      rbody.append(el('div', '', 'Waiting to join'), el('div', 'muted small-note', conv.requestCount ? `${conv.requestCount} waiting` : 'Nobody is waiting'));
+      const show = el('button', 'link', 'Review');
+      show.type = 'button';
+      show.addEventListener('click', () => requestsDialog(conv));
+      req.append(rbody, show);
+      box.appendChild(req);
+    }
+    return box;
+  }
+
+  function groupSettingsDialog(conv) {
+    const who = [['all', 'Everyone'], ['admins', 'Only admins']];
+    return dialog({
+      title: 'Group settings',
+      text: 'Admins can always do all of these.',
+      submit: 'Save',
+      fields: [
+        { name: 'sendMode', label: 'Who can send messages', options: who, value: conv.sendMode || 'all' },
+        { name: 'editInfo', label: 'Who can change the name and description', options: who, value: conv.editInfo || 'all' },
+        { name: 'addMembers', label: 'Who can add people', options: [['admins', 'Only admins'], ['all', 'Everyone']], value: conv.addMembers || 'admins' },
+        { name: 'approval', label: 'New members who use the invite link must be approved by an admin', type: 'checkbox', required: false, checked: !!conv.approval },
+      ],
+      async onSubmit(v) {
+        const res = await emit('group:settings', { convId: conv.id, sendMode: v.sendMode, editInfo: v.editInfo, addMembers: v.addMembers, approval: v.approval === 'on' });
+        applyGroupUpdate(res.conversation);
+      },
+    });
+  }
+
+  async function inviteDialog(conv) {
+    let res;
+    try { res = await emit('group:invite', { convId: conv.id }); } catch (err) { return toast(err.message); }
+    const full = (u) => (u && !/^https?:/.test(u) ? location.origin + u : u);
+    res.url = full(res.url);
+    const copy = async (text) => { try { await navigator.clipboard.writeText(text); toast('Link copied'); } catch { prompt('Copy this link:', text); } };
+    return dialog({
+      title: 'Invite link',
+      text: `${res.url}\n\nAnyone with this link can ask to join. Share it only with people you trust.`,
+      submit: 'Copy link',
+      fields: [
+        { name: 'action', label: 'What to do', options: [['copy', 'Copy the link'], ['share', 'Share (if this device can)'], ['reset', 'Make a new link (the old one stops working)'], ['off', 'Switch the link off']], value: 'copy' },
+      ],
+      async onSubmit(v) {
+        if (v.action === 'copy') return copy(res.url);
+        if (v.action === 'share') return navigator.share ? navigator.share({ title: conv.name, url: res.url }).catch(() => {}) : copy(res.url);
+        const next = await emit('group:invite', { convId: conv.id, ...(v.action === 'reset' ? { reset: true } : { off: true }) });
+        toast(v.action === 'reset' ? 'New link made' : 'Invite link is off');
+        if (next.url && v.action === 'reset') copy(full(next.url));
+      },
+    });
+  }
+
+  async function requestsDialog(conv) {
+    let res;
+    try { res = await emit('group:requests', { convId: conv.id }); } catch (err) { return toast(err.message); }
+    if (!res.requests.length) return toast('Nobody is waiting to join');
+    const decide = async (username, approve) => {
+      await emit('group:decide', { convId: conv.id, username, approve });
+      toast(approve ? 'Added' : 'Declined');
+      setTimeout(() => requestsDialog(conv), 300);
+    };
+    const first = res.requests[0];
+    return dialog({
+      title: `${res.requests.length} waiting to join`,
+      text: `${first.user?.displayName || first.username} (@${first.username}) asked to join.`,
+      submit: 'Done',
+      fields: [{ name: 'decision', label: 'Your decision', options: [['approve', 'Let them in'], ['decline', 'Decline']], value: 'approve' }],
+      async onSubmit(v) { await decide(first.username, v.decision === 'approve'); },
+    });
+  }
+
+  // Joining with an invite link: the link opens the app at /#join=CODE.
+  async function handleJoinLink() {
+    const m = location.hash.match(/^#join=([A-Za-z0-9_-]{10,64})$/);
+    if (!m) return;
+    history.replaceState(null, '', location.pathname + location.search);
+    let info;
+    try { info = (await emit('group:invite-info', { code: m[1] })).group; } catch (err) { return toast(err.message); }
+    dialog({
+      title: `Join ${info.kind === 'community' ? 'the community ' : ''}"${info.name}"?`,
+      text: `${info.description ? `${info.description}\n\n` : ''}${info.members} ${info.members === 1 ? 'member' : 'members'}.${info.approval ? ' An admin has to approve you first.' : ' You will see only messages sent after you join.'}`,
+      submit: 'Join group',
+      fields: [],
+      async onSubmit() {
+        const res = await emit('group:join', { code: m[1] });
+        if (res.community) { applyCommunity(res.community); openPanel('#panel-community'); state.communityOpen = res.community.id; renderCommunity(); return; }
+        if (res.status === 'pending') return toast('Request sent. An admin will let you in.');
+        if (res.conversation) { state.conversations.set(res.conversation.id, res.conversation); renderChatList(); openChat(res.conversation.id); }
+      },
+    });
+  }
+
   function renderContactInfo(conv) {
     const body = $('#contact-body');
     body.textContent = '';
@@ -4836,6 +5380,13 @@
     const name = el('h2', 'info-name', convTitle(conv));
     if (user && !group) name.append(...userBadges(user));
     top.append(av, name, el('p', 'muted', group ? `Group · ${conv.members.length} members` : `@${peer}`));
+    if (group && conv.description) top.appendChild(el('p', 'group-desc', conv.description));
+    if (group && canEditGroupInfo(conv)) {
+      const edit = el('button', 'link', 'Edit name and description');
+      edit.type = 'button';
+      edit.addEventListener('click', () => editGroupDialog(conv));
+      top.appendChild(edit);
+    }
     if (user && !group) top.appendChild(el('p', 'muted', user.online ? 'online' : lastSeenText(peer) || ''));
     body.appendChild(top);
 
@@ -4893,9 +5444,16 @@
       body.appendChild(hideCard);
     }
 
+    if (group) body.appendChild(groupAdminCards(conv));
     if (group) {
       const members = el('section', 'info-card');
       members.appendChild(el('div', 'info-label', `${conv.members.length} members`));
+      if (canAddToGroup(conv)) {
+        const add = el('button', 'link', '+ Add people');
+        add.type = 'button';
+        add.addEventListener('click', () => openAddPeople(conv));
+        members.appendChild(add);
+      }
       const ul = el('ul', 'list member-list');
       for (const m of conv.members) {
         const u = state.users[m] || { username: m, displayName: m };
@@ -4908,15 +5466,27 @@
         if (conv.admins?.includes(m)) row.appendChild(el('span', 'admin-tag', 'Admin'));
         b.append(row, el('div', 'sub', u.business ? u.business.category : `@${m}`));
         li.appendChild(b);
+        if (conv.owner === m) row.appendChild(el('span', 'admin-tag owner-tag', 'Owner'));
         if (m !== state.me.username) {
           li.classList.add('tappable');
           li.title = 'View profile';
           li.addEventListener('click', () => showProfile(m));
+          if (iAmGroupAdmin(conv)) {
+            const more = el('button', 'icon-btn member-more', '⋯');
+            more.type = 'button';
+            more.setAttribute('aria-label', `Actions for ${u.displayName}`);
+            more.addEventListener('click', (e) => { e.stopPropagation(); memberMenu(conv, m, e.clientX, e.clientY); });
+            li.appendChild(more);
+          }
         }
         ul.appendChild(li);
       }
       members.appendChild(ul);
       body.appendChild(members);
+      const leave = el('button', 'danger-link wide-link', 'Leave group');
+      leave.type = 'button';
+      leave.addEventListener('click', () => leaveGroup(conv));
+      body.appendChild(leave);
     }
   }
 

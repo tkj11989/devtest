@@ -19,7 +19,7 @@ class Store {
     this.premiumForAll = process.env.PREMIUM_FOR_ALL === '1';
     this.forcedOff = String(process.env.DISABLE_FEATURES || '').split(',').map((x) => x.trim()).filter((id) => IDS.includes(id));
     this.file = file === undefined && !persistence ? path.join(__dirname, '..', 'data', 'db.json') : (file || null);
-    this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, campaigns: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
+    this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, campaigns: {}, communities: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...(initialData || {}) };
     // Voice-message audio lives next to the data file, in `mediaDir`, or in memory without either.
     this.mediaDir = mediaDir || (this.file ? path.join(path.dirname(this.file), 'media') : null);
     this.memoryMedia = new Map(); // id -> Buffer (when there is no data file)
@@ -47,7 +47,7 @@ class Store {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, campaigns: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
+      this.data = { users: {}, archivedUsers: {}, sessions: {}, conversations: {}, messages: {}, media: {}, statuses: {}, apiKeys: {}, webhooks: {}, campaigns: {}, communities: {}, channels: {}, channelPosts: {}, reports: [], admins: {}, audit: [], settings: null, ...parsed };
       this._convIdx = null;
       this._contactIdx = null;
     } catch (err) {
@@ -360,7 +360,7 @@ class Store {
       if (conv.type === 'group') {
         conv.members = conv.members.filter((m) => m !== username);
         conv.admins = (conv.admins || []).filter((a) => a !== username);
-        if (conv.members.length < 2) {
+        if (conv.members.length < 2 && !(conv.communityId && conv.members.length)) {
           for (const m of list) { if (m.voice) this.deleteMedia(m.voice.mediaId); if (m.media) this.deleteMedia(m.media.mediaId); }
           delete this.data.conversations[conv.id];
           delete this.data.messages[conv.id];
@@ -371,6 +371,10 @@ class Store {
       }
     }
     this._convIdx = null;
+    for (const c of Object.values(this.data.communities || {}).filter((x) => x.members.includes(username))) {
+      this._communityDrop(c, username);
+      if (!c.members.length) { for (const gid of c.groups) { const g = this.data.conversations[gid]; if (g) delete g.communityId; } delete this.data.communities[c.id]; }
+    }
 
     for (const other of Object.values(this.data.users)) {
       if (other.username === username) continue;
@@ -2921,12 +2925,12 @@ class Store {
     return this.data.conversations[id];
   }
 
-  createGroup(owner, name, members) {
+  createGroup(owner, name, members, { allowAlone = false } = {}) {
     name = String(name || '').trim().slice(0, 50);
     if (!name) throw new Error('Group name is required');
     const set = new Set([owner, ...(members || []).map((m) => String(m).toLowerCase())]);
     for (const m of set) if (!this.data.users[m]) throw new Error(`User not found: ${m}`);
-    if (set.size < 2) throw new Error('Add at least one other member');
+    if (set.size < 2 && !allowAlone) throw new Error('Add at least one other member');
     const id = 'grp:' + crypto.randomBytes(8).toString('hex');
     this.data.conversations[id] = {
       id,
@@ -2942,6 +2946,428 @@ class Store {
     this._indexConv(this.data.conversations[id]);
     this._save();
     return this.data.conversations[id];
+  }
+
+  // ---------- group management: members, roles, settings, invite link, join requests ----------
+
+  static GROUP_SETTINGS = { sendMode: ['all', 'admins'], editInfo: ['all', 'admins'], addMembers: ['all', 'admins'] };
+  static MAX_JOIN_REQUESTS = 100;
+
+  static gerr(status, code, message) { return Object.assign(new Error(message), { status, code }); }
+
+  /** The group, checked: `username` must be a member (and an admin when `admin`). */
+  _group(convId, username, { admin = false } = {}) {
+    const conv = this.getConversation(convId);
+    if (!conv || conv.type !== 'group' || !conv.members.includes(username)) throw Store.gerr(404, 'not_found', 'Group not found');
+    if (admin && !(conv.admins || []).includes(username)) throw Store.gerr(403, 'forbidden', 'Only a group admin can do this');
+    return conv;
+  }
+
+  /** Can this person send in this chat? (Groups can be set so that only admins write.) */
+  static canPost(conv, username) {
+    return conv.type !== 'group' || conv.sendMode !== 'admins' || (conv.admins || []).includes(username);
+  }
+
+  /** Put `username` in the group: they see only what is sent from now on. */
+  _addMember(conv, username, now = Date.now()) {
+    if (conv.members.includes(username)) return;
+    const list = this.data.messages[conv.id] || [];
+    for (const m of list) {
+      if (!m.hiddenFor) m.hiddenFor = [];
+      if (!m.hiddenFor.includes(username)) { m.hiddenFor.push(username); this._touchMsg(conv.id, m); }
+    }
+    conv.members = [...conv.members, username];
+    conv.joinedAt = { ...(conv.joinedAt || {}), [username]: now };
+    if (conv.requests) conv.requests = conv.requests.filter((r) => r.username !== username);
+    this._convIdx = null;
+  }
+
+  /** Take `username` out. The owner role passes to the oldest admin (or member) first. An empty group is deleted. Returns true if deleted. */
+  _removeMember(conv, username) {
+    conv.members = conv.members.filter((m) => m !== username);
+    conv.admins = (conv.admins || []).filter((a) => a !== username);
+    if (conv.requests) conv.requests = conv.requests.filter((r) => r.username !== username);
+    this._convIdx = null;
+    if (!conv.members.length) {
+      for (const m of this.data.messages[conv.id] || []) { if (m.voice) this.deleteMedia(m.voice.mediaId); if (m.media) this.deleteMedia(m.media.mediaId); }
+      delete this.data.conversations[conv.id];
+      delete this.data.messages[conv.id];
+      return true;
+    }
+    if (conv.owner === username) {
+      conv.owner = conv.admins[0] || conv.members[0];
+      if (!conv.admins.includes(conv.owner)) conv.admins = [...conv.admins, conv.owner];
+    }
+    if (!conv.admins.length) conv.admins = [conv.owner];
+    return false;
+  }
+
+  /** Name and description. Everyone, or only admins when the group is set so. */
+  groupEdit(by, convId, { name, description } = {}) {
+    const conv = this._group(convId, by);
+    if (conv.editInfo === 'admins' && !(conv.admins || []).includes(by)) throw Store.gerr(403, 'forbidden', 'Only admins can change the group info');
+    const changes = [];
+    if (name !== undefined) {
+      const n = String(name).trim().slice(0, 50);
+      if (!n) throw Store.gerr(400, 'invalid_request', 'Group name is required');
+      if (n !== conv.name) { conv.name = n; changes.push('name'); }
+    }
+    if (description !== undefined) {
+      const d = String(description).trim().slice(0, 500);
+      if (d !== (conv.description || '')) { if (d) conv.description = d; else delete conv.description; changes.push('description'); }
+    }
+    if (changes.length) this._save();
+    return { conv, changes };
+  }
+
+  groupSettings(by, convId, patch = {}) {
+    const conv = this._group(convId, by, { admin: true });
+    for (const [k, allowed] of Object.entries(Store.GROUP_SETTINGS)) {
+      if (patch[k] === undefined) continue;
+      if (!allowed.includes(patch[k])) throw Store.gerr(400, 'invalid_request', `${k} must be one of: ${allowed.join(', ')}`);
+      const dflt = k === 'addMembers' ? 'admins' : 'all'; // what an unset group does
+      if (patch[k] === dflt) delete conv[k]; else conv[k] = patch[k];
+    }
+    if (patch.approval !== undefined) { if (patch.approval === true) conv.approval = true; else delete conv.approval; }
+    this._save();
+    return conv;
+  }
+
+  /** Add people (admins, or any member when the group allows it). The caller has checked each person may be added. Returns the names added. */
+  groupAdd(by, convId, usernames, { maxMembers = 256 } = {}) {
+    const conv = this._group(convId, by);
+    if (conv.addMembers !== 'all' && !(conv.admins || []).includes(by)) throw Store.gerr(403, 'forbidden', 'Only admins can add people');
+    const want = [...new Set((usernames || []).map((u) => String(u).toLowerCase()))].filter((u) => !conv.members.includes(u));
+    for (const u of want) if (!this.data.users[u] || this.isClosed(u)) throw Store.gerr(404, 'not_found', `User not found: ${u}`);
+    if (!want.length) throw Store.gerr(400, 'invalid_request', 'Choose people who are not in the group yet');
+    if (conv.members.length + want.length > maxMembers) throw Store.gerr(400, 'group_too_large', `A group can have at most ${maxMembers} members`);
+    if (conv.communityId) { const com = this.data.communities?.[conv.communityId]; for (const u of want) if (com && !com.members.includes(u)) throw Store.gerr(400, 'invalid_request', `${u} has to join the community first`); }
+    for (const u of want) this._addMember(conv, u);
+    this._save();
+    return { conv, added: want };
+  }
+
+  /** Remove someone (admins; only the owner removes an admin). */
+  groupRemove(by, convId, username) {
+    const conv = this._group(convId, by, { admin: true });
+    username = String(username || '').toLowerCase();
+    if (conv.announcements) throw Store.gerr(400, 'invalid_request', 'Remove people from the community instead');
+    if (username === by) throw Store.gerr(400, 'invalid_request', 'Use "leave" to leave the group');
+    if (!conv.members.includes(username)) throw Store.gerr(404, 'not_found', 'That person is not in the group');
+    if (username === conv.owner) throw Store.gerr(403, 'forbidden', 'The group owner cannot be removed');
+    if (conv.admins.includes(username) && conv.owner !== by) throw Store.gerr(403, 'forbidden', 'Only the owner can remove an admin');
+    this._removeMember(conv, username);
+    this._save();
+    return conv;
+  }
+
+  /** Leave a group. Returns { conv, deleted }. */
+  groupLeave(username, convId) {
+    const conv = this._group(convId, username);
+    if (conv.announcements) throw Store.gerr(400, 'invalid_request', 'Leave the community instead');
+    const deleted = this._removeMember(conv, username);
+    if (deleted && conv.communityId && this.data.communities?.[conv.communityId]) this.data.communities[conv.communityId].groups = this.data.communities[conv.communityId].groups.filter((g) => g !== conv.id);
+    this._save();
+    return { conv, deleted };
+  }
+
+  /** Make someone an admin (any admin) or take it away (only the owner; the owner stays an admin). */
+  groupSetAdmin(by, convId, username, admin) {
+    const conv = this._group(convId, by, { admin: true });
+    username = String(username || '').toLowerCase();
+    if (!conv.members.includes(username)) throw Store.gerr(404, 'not_found', 'That person is not in the group');
+    if (admin) {
+      if (!conv.admins.includes(username)) { if (conv.admins.length >= 20) throw Store.gerr(409, 'conflict', 'A group can have at most 20 admins'); conv.admins = [...conv.admins, username]; }
+    } else {
+      if (conv.owner !== by) throw Store.gerr(403, 'forbidden', 'Only the owner can take admin rights away');
+      if (username === conv.owner) throw Store.gerr(400, 'invalid_request', 'The owner stays an admin. Transfer ownership first.');
+      conv.admins = conv.admins.filter((a) => a !== username);
+    }
+    this._save();
+    return conv;
+  }
+
+  groupTransfer(by, convId, to) {
+    const conv = this._group(convId, by);
+    to = String(to || '').toLowerCase();
+    if (conv.owner !== by) throw Store.gerr(403, 'forbidden', 'Only the owner can hand over the group');
+    if (!conv.members.includes(to) || to === by) throw Store.gerr(400, 'invalid_request', 'Choose another member');
+    conv.owner = to;
+    if (!conv.admins.includes(to)) conv.admins = [...conv.admins, to];
+    this._save();
+    return conv;
+  }
+
+  /** Make, replace (`reset`) or switch off (`off`) the invite link. Returns the code or null. */
+  groupInvite(by, convId, { reset = false, off = false } = {}) {
+    const conv = this._group(convId, by, { admin: true });
+    if (conv.announcements) throw Store.gerr(400, 'invalid_request', 'Use the community invite link');
+    if (off) delete conv.invite;
+    else if (reset || !conv.invite) conv.invite = { code: crypto.randomBytes(12).toString('base64url'), by, at: Date.now() };
+    this._save();
+    return conv.invite?.code || null;
+  }
+
+  _byInvite(code) {
+    code = String(code || '');
+    if (code.length < 10) return null;
+    return Object.values(this.data.conversations).find((c) => c.type === 'group' && c.invite?.code === code) || null;
+  }
+
+  /** What a link points at, for the page that asks "Join this group?". */
+  groupInfoByInvite(code) {
+    const com = this._communityByInvite(code);
+    if (com) return { kind: 'community', name: com.name, description: com.description || '', members: com.members.length, approval: false };
+    const c = this._byInvite(code);
+    if (!c) throw Store.gerr(404, 'not_found', 'This invite link is not valid any more');
+    return { name: c.name, description: c.description || '', members: c.members.length, approval: !!c.approval };
+  }
+
+  /** Join with a link: straight in, or onto the waiting list when the group wants approval. Returns { conv, status }. */
+  groupJoin(username, code, { maxMembers = 256 } = {}) {
+    const conv = this._byInvite(code);
+    if (!conv) throw Store.gerr(404, 'not_found', 'This invite link is not valid any more');
+    if (conv.members.includes(username)) return { conv, status: 'member' };
+    if (conv.approval) {
+      conv.requests = conv.requests || [];
+      if (!conv.requests.some((r) => r.username === username)) {
+        if (conv.requests.length >= Store.MAX_JOIN_REQUESTS) throw Store.gerr(429, 'rate_limited', 'Too many people are waiting to join this group');
+        conv.requests = [...conv.requests, { username, ts: Date.now() }];
+        this._save();
+      }
+      return { conv, status: 'pending' };
+    }
+    if (conv.communityId && !this.data.communities?.[conv.communityId]?.members.includes(username)) throw Store.gerr(403, 'forbidden', 'Join the community to join this group');
+    if (conv.members.length >= maxMembers) throw Store.gerr(400, 'group_too_large', `A group can have at most ${maxMembers} members`);
+    this._addMember(conv, username);
+    this._save();
+    return { conv, status: 'joined' };
+  }
+
+  groupRequests(by, convId) {
+    return (this._group(convId, by, { admin: true }).requests || []).map((r) => ({ ...r }));
+  }
+
+  groupDecide(by, convId, username, approve, { maxMembers = 256 } = {}) {
+    const conv = this._group(convId, by, { admin: true });
+    username = String(username || '').toLowerCase();
+    if (!(conv.requests || []).some((r) => r.username === username)) throw Store.gerr(404, 'not_found', 'There is no request from that person');
+    if (approve) {
+      if (conv.members.length >= maxMembers) throw Store.gerr(400, 'group_too_large', `A group can have at most ${maxMembers} members`);
+      if (this.data.users[username] && !this.isClosed(username)) this._addMember(conv, username);
+    }
+    conv.requests = conv.requests.filter((r) => r.username !== username);
+    if (!conv.requests.length) delete conv.requests;
+    this._save();
+    return { conv, approved: !!approve };
+  }
+
+  // ---------- communities: a place with an announcements group and linked groups ----------
+
+  static MAX_COMMUNITY_GROUPS = 20;
+  static MAX_COMMUNITY_MEMBERS = 2000;
+
+  _community(id, username, { admin = false } = {}) {
+    const c = this.data.communities?.[id];
+    if (!c || !c.members.includes(username)) throw Store.gerr(404, 'not_found', 'Community not found');
+    if (admin && !c.admins.includes(username)) throw Store.gerr(403, 'forbidden', 'Only a community admin can do this');
+    return c;
+  }
+
+  communitiesOf(username) {
+    return Object.values(this.data.communities || {}).filter((c) => c.members.includes(username));
+  }
+
+  /** What a member sees: the community, its announcements chat and its groups (with whether they are in each). Admins also get the invite code. */
+  communityView(c, username) {
+    const groups = c.groups.map((id) => this.data.conversations[id]).filter(Boolean)
+      .map((g) => ({ id: g.id, name: g.name, description: g.description || '', members: g.members.length, joined: g.members.includes(username) }));
+    const admin = c.admins.includes(username);
+    return {
+      id: c.id, name: c.name, description: c.description || '', owner: c.owner, admins: c.admins, members: c.members, createdAt: c.createdAt,
+      announceId: c.announceId, groups, ...(admin && c.invite ? { inviteCode: c.invite.code } : {}),
+    };
+  }
+
+  /** Make a community; its announcements group (only admins write) is made at the same time. Returns { community, announce }. */
+  communityCreate(owner, { name, description } = {}) {
+    name = String(name || '').trim().slice(0, 50);
+    if (!name) throw Store.gerr(400, 'invalid_request', 'Community name is required');
+    const id = 'com:' + crypto.randomBytes(8).toString('hex');
+    const announce = this.createGroup(owner, 'Announcements', [], { allowAlone: true });
+    announce.name = `${name} · Announcements`.slice(0, 80);
+    announce.sendMode = 'admins';
+    announce.communityId = id;
+    announce.announcements = true;
+    this.data.communities ||= {};
+    this.data.communities[id] = { id, name, ...(String(description || '').trim() ? { description: String(description).trim().slice(0, 500) } : {}), owner, admins: [owner], members: [owner], announceId: announce.id, groups: [], createdAt: Date.now() };
+    this._save();
+    return { community: this.data.communities[id], announce };
+  }
+
+  communityEdit(by, id, { name, description } = {}) {
+    const c = this._community(id, by, { admin: true });
+    if (name !== undefined) {
+      const n = String(name).trim().slice(0, 50);
+      if (!n) throw Store.gerr(400, 'invalid_request', 'Community name is required');
+      c.name = n;
+      const announce = this.data.conversations[c.announceId];
+      if (announce) announce.name = `${n} · Announcements`.slice(0, 80);
+    }
+    if (description !== undefined) { const d = String(description).trim().slice(0, 500); if (d) c.description = d; else delete c.description; }
+    this._save();
+    return c;
+  }
+
+  /** Put people in the community (and its announcements group). Returns the names added. */
+  communityAdd(by, id, usernames) {
+    const c = this._community(id, by, { admin: true });
+    const want = [...new Set((usernames || []).map((u) => String(u).toLowerCase()))].filter((u) => !c.members.includes(u));
+    for (const u of want) if (!this.data.users[u] || this.isClosed(u)) throw Store.gerr(404, 'not_found', `User not found: ${u}`);
+    if (!want.length) throw Store.gerr(400, 'invalid_request', 'Choose people who are not in the community yet');
+    if (c.members.length + want.length > Store.MAX_COMMUNITY_MEMBERS) throw Store.gerr(400, 'too_large', `A community can have at most ${Store.MAX_COMMUNITY_MEMBERS} members`);
+    for (const u of want) this._communityAddMember(c, u);
+    this._save();
+    return { community: c, added: want };
+  }
+
+  _communityAddMember(c, username) {
+    if (c.members.includes(username)) return;
+    c.members = [...c.members, username];
+    const announce = this.data.conversations[c.announceId];
+    if (announce) this._addMember(announce, username);
+  }
+
+  /** Take someone out of the community and every group in it. Returns the groups they were taken out of (and ones deleted). */
+  _communityDrop(c, username) {
+    c.members = c.members.filter((m) => m !== username);
+    c.admins = c.admins.filter((a) => a !== username);
+    const left = [];
+    for (const gid of [c.announceId, ...c.groups]) {
+      const g = this.data.conversations[gid];
+      if (g?.members.includes(username)) { const gone = this._removeMember(g, username); left.push({ id: gid, deleted: gone }); }
+    }
+    if (c.owner === username && c.members.length) {
+      c.owner = c.admins[0] || c.members[0];
+      if (!c.admins.includes(c.owner)) c.admins = [...c.admins, c.owner];
+      const announce = this.data.conversations[c.announceId];
+      if (announce && !announce.admins.includes(c.owner)) announce.admins = [...announce.admins, c.owner];
+    }
+    if (!c.admins.length && c.members.length) c.admins = [c.owner];
+    return left;
+  }
+
+  communityRemove(by, id, username) {
+    const c = this._community(id, by, { admin: true });
+    username = String(username || '').toLowerCase();
+    if (username === by) throw Store.gerr(400, 'invalid_request', 'Use "leave" to leave the community');
+    if (!c.members.includes(username)) throw Store.gerr(404, 'not_found', 'That person is not in the community');
+    if (username === c.owner) throw Store.gerr(403, 'forbidden', 'The owner cannot be removed');
+    if (c.admins.includes(username) && c.owner !== by) throw Store.gerr(403, 'forbidden', 'Only the owner can remove an admin');
+    const left = this._communityDrop(c, username);
+    this._save();
+    return { community: c, left };
+  }
+
+  /** Leave. The last person leaving ends the community; its groups stay as ordinary groups. Returns { community, left, ended }. */
+  communityLeave(username, id) {
+    const c = this._community(id, username);
+    const left = this._communityDrop(c, username);
+    let ended = false;
+    if (!c.members.length) {
+      for (const gid of c.groups) { const g = this.data.conversations[gid]; if (g) delete g.communityId; }
+      delete this.data.communities[id];
+      ended = true;
+    }
+    this._save();
+    return { community: c, left, ended };
+  }
+
+  communitySetAdmin(by, id, username, admin) {
+    const c = this._community(id, by, { admin: true });
+    username = String(username || '').toLowerCase();
+    if (!c.members.includes(username)) throw Store.gerr(404, 'not_found', 'That person is not in the community');
+    const announce = this.data.conversations[c.announceId];
+    if (admin) {
+      if (!c.admins.includes(username)) c.admins = [...c.admins, username];
+      if (announce && !announce.admins.includes(username)) announce.admins = [...announce.admins, username];
+    } else {
+      if (c.owner !== by) throw Store.gerr(403, 'forbidden', 'Only the owner can take admin rights away');
+      if (username === c.owner) throw Store.gerr(400, 'invalid_request', 'The owner stays an admin');
+      c.admins = c.admins.filter((a) => a !== username);
+      if (announce) announce.admins = announce.admins.filter((a) => a !== username);
+    }
+    this._save();
+    return c;
+  }
+
+  /**
+   * Put a group into the community: a new one (`create: { name, members }`, made by the admin) or an existing one the admin
+   * owns (`link`). `unlink` takes one out (it stays a group). Community members can then join it.
+   */
+  communityGroup(by, id, { create, link, unlink } = {}) {
+    const c = this._community(id, by, { admin: true });
+    if (unlink) {
+      if (!c.groups.includes(unlink)) throw Store.gerr(404, 'not_found', 'That group is not in this community');
+      c.groups = c.groups.filter((g) => g !== unlink);
+      const g = this.data.conversations[unlink];
+      if (g) delete g.communityId;
+      this._save();
+      return { community: c, group: g || null };
+    }
+    if (c.groups.length >= Store.MAX_COMMUNITY_GROUPS) throw Store.gerr(409, 'conflict', `A community can have at most ${Store.MAX_COMMUNITY_GROUPS} groups`);
+    let g;
+    if (create) {
+      const members = [...new Set((create.members || []).map((m) => String(m).toLowerCase()))].filter((m) => m !== by);
+      for (const m of members) if (!c.members.includes(m)) throw Store.gerr(400, 'invalid_request', `${m} is not in the community`);
+      g = this.createGroup(by, create.name, members, { allowAlone: true });
+    } else if (link) {
+      g = this.data.conversations[link];
+      if (!g || g.type !== 'group' || g.owner !== by) throw Store.gerr(403, 'forbidden', 'You can only add groups you own');
+      if (g.communityId) throw Store.gerr(409, 'conflict', 'That group already belongs to a community');
+      const outsiders = g.members.filter((m) => !c.members.includes(m));
+      for (const m of outsiders) this._communityAddMember(c, m); // its members become community members
+    } else throw Store.gerr(400, 'invalid_request', 'Create a group or choose one to add');
+    g.communityId = id;
+    c.groups = [...c.groups, g.id];
+    this._save();
+    return { community: c, group: g };
+  }
+
+  /** A community member joins one of its groups. Returns { community, group, joined }. */
+  communityJoinGroup(username, id, convId) {
+    const c = this._community(id, username);
+    const g = this.data.conversations[convId];
+    if (!g || !c.groups.includes(convId)) throw Store.gerr(404, 'not_found', 'Group not found in this community');
+    if (g.members.includes(username)) return { community: c, group: g, joined: false };
+    this._addMember(g, username);
+    this._save();
+    return { community: c, group: g, joined: true };
+  }
+
+  communityInvite(by, id, { reset = false, off = false } = {}) {
+    const c = this._community(id, by, { admin: true });
+    if (off) delete c.invite;
+    else if (reset || !c.invite) c.invite = { code: crypto.randomBytes(12).toString('base64url'), by, at: Date.now() };
+    this._save();
+    return c.invite?.code || null;
+  }
+
+  /** Join a community with its invite link. Returns { community, joined }. */
+  communityJoin(username, code) {
+    const c = this._communityByInvite(code);
+    if (!c) throw Store.gerr(404, 'not_found', 'This invite link is not valid any more');
+    if (c.members.includes(username)) return { community: c, joined: false };
+    if (c.members.length >= Store.MAX_COMMUNITY_MEMBERS) throw Store.gerr(400, 'too_large', 'This community is full');
+    this._communityAddMember(c, username);
+    this._save();
+    return { community: c, joined: true };
+  }
+
+  _communityByInvite(code) {
+    code = String(code || '');
+    if (code.length < 10) return null;
+    return Object.values(this.data.communities || {}).find((c) => c.invite?.code === code) || null;
   }
 
   getConversation(id) {
@@ -3042,8 +3468,12 @@ class Store {
     const msgs = (this.data.messages[conv.id] || []).filter((m) => Store.visibleTo(m, username));
     const unread = msgs.filter((m) => m.from !== username && !m.readBy.includes(username)).length;
     const last = msgs[msgs.length - 1];
+    const admin = conv.type === 'group' && (conv.admins || []).includes(username);
+    const { invite, requests, ...pub } = conv;
     return {
-      ...conv,
+      ...pub,
+      ...(admin && invite ? { inviteCode: invite.code } : {}),
+      ...(admin && requests?.length ? { requestCount: requests.length } : {}),
       lastMessage: last ? this.viewFor(last, username) : null,
       unread,
       ...(conv.type === 'group' && msgs.some((m) => m.from !== username && !m.readBy.includes(username) && m.mentions?.includes(username)) ? { mentioned: true } : {}),

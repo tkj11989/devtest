@@ -16,6 +16,9 @@ const ok = (schema, description = 'OK') => ({ description, content: { 'applicati
 const noContent = { description: 'Done (no body)' };
 const errors = (...codes) => Object.fromEntries(codes.map((c) => [c, { $ref: `#/components/responses/E${c}` }]));
 const idParam = (name, description) => ({ name, in: 'path', required: true, schema: { type: 'string' }, description });
+const COM_ID = idParam('id', 'Community id (starts with `com:`; URL-encode it)');
+const GID_PARAM = idParam('id', 'Group id (starts with `grp:`; URL-encode it)');
+const CONV_OK = ok(obj({ conversation: ref('Conversation') }));
 const CONV_ID = idParam('id', 'Conversation id. URL-encode it: direct chat ids contain colons, e.g. `dm%3Aalice%3Abob`.');
 
 function op(tag, summary, { description, params, body, responses, auth = true }) {
@@ -239,6 +242,13 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       participants: arrayOf({ type: 'string' }),
       startedBy: { type: 'string' },
     }),
+    Community: obj({
+      id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, owner: { type: 'string' },
+      admins: arrayOf({ type: 'string' }), members: arrayOf({ type: 'string' }), createdAt: { type: 'integer' },
+      announceId: { type: 'string', description: 'the Announcements group (only admins write)' },
+      groups: arrayOf(obj({ id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, members: { type: 'integer' }, joined: { type: 'boolean', description: 'you are in this group' } })),
+      inviteCode: { type: 'string', description: 'admins only' },
+    }),
     Conversation: obj({
       id: { type: 'string', example: 'dm:alice:bob' },
       type: { type: 'string', enum: ['direct', 'group'] },
@@ -256,6 +266,14 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       locked: { type: 'boolean', description: 'you locked this chat with your secret code (or it is hidden and not yet revealed)' },
       unlocked: { type: 'boolean', description: 'locked chats only: unlocked in this session' },
       hidden: { type: 'boolean', description: 'the chat is hidden (left out of `GET /conversations`; `locked` is true until revealed)' },
+      description: { type: 'string', description: 'groups only' },
+      sendMode: { type: 'string', enum: ['admins'], description: 'groups only: present when only admins may write' },
+      editInfo: { type: 'string', enum: ['admins'], description: 'groups only: present when only admins may change name and description' },
+      addMembers: { type: 'string', enum: ['all'], description: 'groups only: present when every member may add people (otherwise only admins)' },
+      approval: { type: 'boolean', description: 'groups only: joining by link needs an admin\'s approval' },
+      inviteCode: { type: 'string', description: 'groups, admins only: the code in the invite link' },
+      requestCount: { type: 'integer', description: 'groups, admins only: people waiting to join' },
+      communityId: { type: 'string', description: 'the community this group belongs to' },
     }, ['id', 'type', 'members']),
     ChatLock: obj({
       hasCode: { type: 'boolean', description: 'a secret code has been set' },
@@ -1288,6 +1306,156 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
         responses: { 200: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 423) },
       }),
     },
+    '/communities': {
+      get: op(T.conv, 'My communities', { responses: { 200: ok(obj({ communities: arrayOf(ref('Community')) })), ...errors(401) } }),
+      post: op(T.conv, 'Create a community', {
+        description: 'A community is a place with an **Announcements** group (only admins write; everyone in the community is in it) and up to 20 linked groups that community members can join. Only members see it.',
+        body: jsonBody(obj({ name: { type: 'string', maxLength: 50 }, description: { type: 'string', maxLength: 500 } }, ['name']), { name: 'Green Park Society' }),
+        responses: { 201: ok(obj({ community: ref('Community') })), ...errors(400, 401, 403) },
+      }),
+    },
+    '/communities/{id}': {
+      get: op(T.conv, 'Get a community', { params: [COM_ID], responses: { 200: ok(obj({ community: ref('Community') })), ...errors(401, 404) } }),
+      patch: op(T.conv, 'Change a community\'s name or description (admins)', {
+        params: [COM_ID],
+        body: jsonBody(obj({ name: { type: 'string' }, description: { type: 'string' } }), { description: 'Notices for residents' }),
+        responses: { 200: ok(obj({ community: ref('Community') })), ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/communities/{id}/members': {
+      post: op(T.conv, 'Add people to a community (admins)', {
+        description: 'They join the Announcements group too. To be in one of its groups they join that group themselves.',
+        params: [COM_ID],
+        body: jsonBody(obj({ usernames: arrayOf({ type: 'string' }) }, ['usernames']), { usernames: ['carol'] }),
+        responses: { 201: ok(obj({ community: ref('Community'), added: arrayOf({ type: 'string' }) })), ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/communities/{id}/members/{username}': {
+      delete: op(T.conv, 'Remove someone from a community (admins)', {
+        description: 'They are taken out of the Announcements group and every group in the community.',
+        params: [COM_ID, idParam('username')],
+        responses: { 200: ok(obj({ community: ref('Community') })), ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/communities/{id}/members/{username}/admin': {
+      put: op(T.conv, 'Make someone a community admin, or take it away', {
+        description: 'Any admin can make an admin; only the owner takes it away.',
+        params: [COM_ID, idParam('username')],
+        body: jsonBody(obj({ admin: { type: 'boolean' } }, ['admin']), { admin: true }),
+        responses: { 200: ok(obj({ community: ref('Community') })), ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/communities/{id}/leave': {
+      post: op(T.conv, 'Leave a community', {
+        description: 'You leave its Announcements group and all its groups. When the last person leaves, the community ends and its groups become ordinary groups.',
+        params: [COM_ID],
+        responses: { 200: ok(obj({ left: { type: 'boolean' } })), ...errors(401, 404) },
+      }),
+    },
+    '/communities/{id}/groups': {
+      post: op(T.conv, 'Add a group to a community, or take one out (admins)', {
+        description: 'Send one of: `create` (`{ name, members }`: a new group; members must already be in the community), `link` (the id of a group you own: its members join the community) or `unlink` (the id of a group to take out; it stays a group). At most 20 groups.',
+        params: [COM_ID],
+        body: jsonBody(obj({ create: obj({ name: { type: 'string' }, members: arrayOf({ type: 'string' }) }, ['name']), link: { type: 'string' }, unlink: { type: 'string' } }), { create: { name: 'Parking' } }),
+        responses: { 201: ok(obj({ community: ref('Community'), conversation: ref('Conversation') })), ...errors(400, 401, 403, 404, 409) },
+      }),
+    },
+    '/communities/{id}/groups/{convId}/join': {
+      post: op(T.conv, 'Join one of a community\'s groups', {
+        description: 'Any community member can. You see only messages sent after you join.',
+        params: [COM_ID, idParam('convId', 'Group id (URL-encode it)')],
+        responses: { 200: ok(obj({ community: ref('Community'), conversation: ref('Conversation') })), ...errors(401, 404) },
+      }),
+    },
+    '/communities/{id}/invite': {
+      post: op(T.conv, 'Get, replace or switch off the community invite link (admins)', {
+        description: 'The link opens the web app and asks "Join this community?". `POST /groups/join` with its code joins.',
+        params: [COM_ID],
+        body: jsonBody(obj({ reset: { type: 'boolean' }, off: { type: 'boolean' } }), { reset: true }),
+        responses: { 200: ok(obj({ code: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } })), ...errors(401, 403, 404) },
+      }),
+    },
+    '/groups/invite/{code}': {
+      get: op(T.conv, 'What an invite link is for', {
+        description: 'Name, description and member count of the group an invite link points at, so the app can ask "Join this group?". `404` when the link was reset or switched off.',
+        params: [idParam('code', 'The code at the end of the invite link')],
+        responses: { 200: ok(obj({ group: obj({ name: { type: 'string' }, description: { type: 'string' }, members: { type: 'integer' }, approval: { type: 'boolean', description: 'an admin has to approve joining' } }) })), ...errors(401, 404) },
+      }),
+    },
+    '/groups/join': {
+      post: op(T.conv, 'Join a group with an invite link', {
+        description: '`status`: `joined` (you are in; a conversation is returned), `pending` (an admin has to approve you) or `member` (already in). Without the history: new members see only messages sent after they joined.',
+        body: jsonBody(obj({ code: { type: 'string' } }, ['code']), { code: 'k3J9...' }),
+        responses: { 200: ok(obj({ status: { type: 'string', enum: ['joined', 'pending', 'member'] }, conversation: ref('Conversation'), name: { type: 'string' } }, ['status'])), ...errors(400, 401, 404, 429) },
+      }),
+    },
+    '/groups/{id}': {
+      patch: op(T.conv, 'Change a group', {
+        description: '`name`, `description` (up to 500 characters; everyone, or only admins when `editInfo` is `admins`) and the settings (admins only): `sendMode` (`all` or `admins`: who may write), `editInfo` (`all` or `admins`), `addMembers` (`admins` by default, or `all`) and `approval` (joining by link needs an admin\'s yes). Everyone in the group sees a notice in the chat.',
+        params: [GID_PARAM],
+        body: jsonBody(obj({ name: { type: 'string', maxLength: 50 }, description: { type: 'string', maxLength: 500 }, sendMode: { type: 'string', enum: ['all', 'admins'] }, editInfo: { type: 'string', enum: ['all', 'admins'] }, addMembers: { type: 'string', enum: ['all', 'admins'] }, approval: { type: 'boolean' } }), { sendMode: 'admins' }),
+        responses: { 200: CONV_OK, ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/groups/{id}/members': {
+      post: op(T.conv, 'Add people to a group', {
+        description: 'Admins (or any member when `addMembers` is `all`). New members see only messages sent from now on. `400 group_too_large` over the member limit.',
+        params: [GID_PARAM],
+        body: jsonBody(obj({ usernames: arrayOf({ type: 'string' }) }, ['usernames']), { usernames: ['carol'] }),
+        responses: { 201: ok(obj({ conversation: ref('Conversation'), added: arrayOf({ type: 'string' }) })), ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/groups/{id}/members/{username}': {
+      delete: op(T.conv, 'Remove someone from a group', {
+        description: 'Admins can remove members; only the owner removes an admin; the owner cannot be removed. The person is told they were removed and the chat leaves their list.',
+        params: [GID_PARAM, idParam('username')],
+        responses: { 200: CONV_OK, ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/groups/{id}/members/{username}/admin': {
+      put: op(T.conv, 'Make someone an admin, or take it away', {
+        description: 'Any admin can make an admin (at most 20); only the owner takes admin rights away.',
+        params: [GID_PARAM, idParam('username')],
+        body: jsonBody(obj({ admin: { type: 'boolean' } }, ['admin']), { admin: true }),
+        responses: { 200: CONV_OK, ...errors(400, 401, 403, 404, 409) },
+      }),
+    },
+    '/groups/{id}/leave': {
+      post: op(T.conv, 'Leave a group', {
+        description: 'If the owner leaves, the oldest admin becomes owner. The last person leaving deletes the group.',
+        params: [GID_PARAM],
+        responses: { 200: ok(obj({ left: { type: 'boolean' } })), ...errors(401, 404) },
+      }),
+    },
+    '/groups/{id}/transfer': {
+      post: op(T.conv, 'Hand the group to another member (owner only)', {
+        params: [GID_PARAM],
+        body: jsonBody(obj({ to: { type: 'string' } }, ['to']), { to: 'bob' }),
+        responses: { 200: CONV_OK, ...errors(400, 401, 403, 404) },
+      }),
+    },
+    '/groups/{id}/invite': {
+      post: op(T.conv, 'Get, replace or switch off the invite link (admins)', {
+        description: 'Makes a link if there is none. `reset: true` replaces it (the old one stops working); `off: true` removes it (`code` and `url` are then `null`). The link opens the web app and asks "Join this group?".',
+        params: [GID_PARAM],
+        body: jsonBody(obj({ reset: { type: 'boolean' }, off: { type: 'boolean' } }), { reset: true }),
+        responses: { 200: ok(obj({ code: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } })), ...errors(401, 403, 404) },
+      }),
+    },
+    '/groups/{id}/requests': {
+      get: op(T.conv, 'People waiting to join (admins)', {
+        description: 'Only groups with `approval` on have a waiting list (up to 100).',
+        params: [GID_PARAM],
+        responses: { 200: ok(obj({ requests: arrayOf(obj({ username: { type: 'string' }, ts: { type: 'integer' }, user: ref('User') })) })), ...errors(401, 403, 404) },
+      }),
+    },
+    '/groups/{id}/requests/{username}': {
+      post: op(T.conv, 'Approve or refuse a join request (admins)', {
+        params: [GID_PARAM, idParam('username')],
+        body: jsonBody(obj({ approve: { type: 'boolean' } }, ['approve']), { approve: true }),
+        responses: { 200: ok(obj({ approved: { type: 'boolean' }, requests: { type: 'integer', description: 'still waiting' } })), ...errors(400, 401, 403, 404) },
+      }),
+    },
     '/messages/{id}/report': {
       post: op(T.msg, 'Report a message', {
         description: 'Tell the people who run the service about a message that is spam, abuse, a scam or worse. `reason`: `spam`, `harassment`, `scam`, `inappropriate`, `violence`, `child_safety` or `other`. In a chat the server can read, it keeps the message and up to 5 before it as evidence. In an encrypted chat it cannot read them, so the app may send the decrypted ones it chose as `evidence` (kept as unverified, up to 6, 500 characters each). `block: true` also blocks the sender. 20 reports a day; reporting the same message twice is `409`; many different people reporting one account limits that account\'s new chats until a person has looked.',
@@ -1617,6 +1785,28 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
     'put /messages/{id}': 'editMessage',
     'put /messages/{id}/pin': 'pinMessage',
     'post /messages/{id}/report': 'reportMessage',
+    'get /communities': 'listCommunities',
+    'post /communities': 'createCommunity',
+    'get /communities/{id}': 'getCommunity',
+    'patch /communities/{id}': 'updateCommunity',
+    'post /communities/{id}/members': 'addCommunityMembers',
+    'delete /communities/{id}/members/{username}': 'removeCommunityMember',
+    'put /communities/{id}/members/{username}/admin': 'setCommunityAdmin',
+    'post /communities/{id}/leave': 'leaveCommunity',
+    'post /communities/{id}/groups': 'communityGroups',
+    'post /communities/{id}/groups/{convId}/join': 'joinCommunityGroup',
+    'post /communities/{id}/invite': 'communityInviteLink',
+    'get /groups/invite/{code}': 'groupInviteInfo',
+    'post /groups/join': 'joinGroup',
+    'patch /groups/{id}': 'updateGroup',
+    'post /groups/{id}/members': 'addGroupMembers',
+    'delete /groups/{id}/members/{username}': 'removeGroupMember',
+    'put /groups/{id}/members/{username}/admin': 'setGroupAdmin',
+    'post /groups/{id}/leave': 'leaveGroup',
+    'post /groups/{id}/transfer': 'transferGroup',
+    'post /groups/{id}/invite': 'groupInviteLink',
+    'get /groups/{id}/requests': 'groupJoinRequests',
+    'post /groups/{id}/requests/{username}': 'decideGroupRequest',
     'post /users/{username}/report': 'reportUser',
     'get /conversations/{id}/pins': 'listPinnedMessages',
     'put /messages/{id}/reaction': 'reactToMessage',

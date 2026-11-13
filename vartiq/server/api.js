@@ -445,6 +445,40 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
 
   router.post('/messages/:id/report', ...authed, json2m, run((req) => actions.reportSafety(req.user, { msgId: p(req, 'id'), reason: req.body?.reason, detail: req.body?.detail, evidence: req.body?.evidence, block: req.body?.block }, req.ctx), 201));
   router.post('/users/:username/report', ...authed, json, run((req) => actions.reportSafety(req.user, { username: p(req, 'username'), reason: req.body?.reason, detail: req.body?.detail, block: req.body?.block }, req.ctx), 201));
+  // ----- communities -----
+  const c = (req, extra = {}) => ({ id: p(req, 'id'), ...extra });
+  router.get('/communities', ...authed, run((req) => actions.communities(req.user)));
+  router.post('/communities', ...authed, json, run((req) => actions.communityCreate(req.user, { name: req.body?.name, description: req.body?.description }, req.ctx), 201));
+  router.get('/communities/:id', ...authed, run((req) => actions.communityGet(req.user, c(req))));
+  router.patch('/communities/:id', ...authed, json, run((req) => actions.communityEdit(req.user, c(req, { name: req.body?.name, description: req.body?.description }))));
+  router.post('/communities/:id/members', ...authed, json, run((req) => actions.communityAdd(req.user, c(req, { usernames: req.body?.usernames })), 201));
+  router.delete('/communities/:id/members/:username', ...authed, run((req) => actions.communityRemove(req.user, c(req, { username: p(req, 'username') }))));
+  router.put('/communities/:id/members/:username/admin', ...authed, json, run((req) => actions.communityAdmin(req.user, c(req, { username: p(req, 'username'), admin: req.body?.admin }))));
+  router.post('/communities/:id/leave', ...authed, run((req) => actions.communityLeave(req.user, c(req))));
+  router.post('/communities/:id/groups', ...authed, json, run((req) => actions.communityGroup(req.user, c(req, { create: req.body?.create, link: req.body?.link, unlink: req.body?.unlink })), 201));
+  router.post('/communities/:id/groups/:convId/join', ...authed, run((req) => actions.communityJoinGroup(req.user, c(req, { convId: p(req, 'convId') }), req.ctx)));
+  router.post('/communities/:id/invite', ...authed, json, run((req) => actions.communityInvite(req.user, c(req, { reset: req.body?.reset, off: req.body?.off }))));
+
+  // ----- groups -----
+  const g = (req, extra = {}) => ({ convId: p(req, 'id'), ...extra });
+  router.get('/groups/invite/:code', ...authed, run((req) => actions.groupInviteInfo(req.user, { code: p(req, 'code') })));
+  router.post('/groups/join', ...authed, json, run((req) => actions.groupJoin(req.user, { code: req.body?.code }, req.ctx)));
+  router.patch('/groups/:id', ...authed, json, run((req) => {
+    const { name, description, sendMode, editInfo, addMembers, approval } = req.body || {};
+    let out;
+    if (name !== undefined || description !== undefined) out = actions.groupEdit(req.user, g(req, { name, description }), req.ctx);
+    if ([sendMode, editInfo, addMembers, approval].some((v) => v !== undefined)) out = actions.groupSettings(req.user, g(req, { sendMode, editInfo, addMembers, approval }), req.ctx);
+    if (!out) throw new ApiError(400, 'invalid_request', 'Send name, description or a setting to change');
+    return out;
+  }));
+  router.post('/groups/:id/members', ...authed, json, run((req) => actions.groupAdd(req.user, g(req, { usernames: req.body?.usernames }), req.ctx), 201));
+  router.delete('/groups/:id/members/:username', ...authed, run((req) => actions.groupRemove(req.user, g(req, { username: p(req, 'username') }), req.ctx)));
+  router.put('/groups/:id/members/:username/admin', ...authed, json, run((req) => actions.groupAdmin(req.user, g(req, { username: p(req, 'username'), admin: req.body?.admin }), req.ctx)));
+  router.post('/groups/:id/leave', ...authed, run((req) => actions.groupLeave(req.user, g(req), req.ctx)));
+  router.post('/groups/:id/transfer', ...authed, json, run((req) => actions.groupTransfer(req.user, g(req, { to: req.body?.to }), req.ctx)));
+  router.post('/groups/:id/invite', ...authed, json, run((req) => actions.groupInvite(req.user, g(req, { reset: req.body?.reset, off: req.body?.off }), req.ctx)));
+  router.get('/groups/:id/requests', ...authed, run((req) => actions.groupRequests(req.user, g(req), req.ctx)));
+  router.post('/groups/:id/requests/:username', ...authed, json, run((req) => actions.groupDecide(req.user, g(req, { username: p(req, 'username'), approve: req.body?.approve }), req.ctx)));
   router.post('/link-preview', ...authed, json, run((req) => actions.linkPreview(req.user, { url: req.body?.url }, req.ctx)));
   router.post('/contacts/match', ...authed, json2m, run((req) => actions.contactsMatch(req.user, { hashes: req.body?.hashes }, req.ctx)));
   router.put('/me/privacy/findable', ...authed, json, run((req) => actions.setFindable(req.user, { byPhone: req.body?.byPhone }, req.ctx)));
