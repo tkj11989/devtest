@@ -28,7 +28,7 @@ export const LANDMARKS = [
 ].map(([name, country, lat, lon, emoji, d]) => ({ name, country, lat, lon, emoji, d }));
 const tol = [0, 18, 14, 11, 9, 7];
 const shuf = (r, a) => r.shuffle(a);
-function others(list, item, key, n, r) { return shuf(r, list.filter((x) => x[key] !== item[key])).slice(0, n); }
+function others(list, item, key, n, r) { const seen = new Set([item[key]]); return shuf(r, list).filter((x) => !seen.has(x[key]) && seen.add(x[key])).slice(0, n); }
 
 export const gen = {
   country(d, r) { // map identification

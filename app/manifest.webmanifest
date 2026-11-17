@@ -1,0 +1,3 @@
+{ "name": "KnowledgeVerse", "short_name": "KnowledgeVerse", "description": "One Game. Multiple Learning Worlds.",
+  "start_url": "./index.html", "display": "standalone", "orientation": "portrait", "background_color": "#2e1065", "theme_color": "#5b21b6",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }] }

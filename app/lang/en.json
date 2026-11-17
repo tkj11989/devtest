@@ -1,0 +1,9 @@
+{
+  "app.name": "KnowledgeVerse", "app.tag": "One Game. Multiple Learning Worlds.",
+  "nav.home": "Home", "nav.map": "Worlds", "nav.daily": "Daily", "nav.rank": "Rank", "nav.me": "Me",
+  "common.back": "Back", "common.next": "Next", "common.continue": "Continue", "common.start": "Start", "common.close": "Close", "common.cancel": "Cancel", "common.ok": "OK", "common.save": "Save",
+  "common.check": "Check", "common.hint": "Hint", "common.retry": "Try again", "common.locked": "Locked",
+  "home.continue": "Continue playing", "home.daily": "Daily mission", "home.recommended": "Recommended for you", "home.recent": "Recently completed", "home.ach": "Achievements", "home.kc": "Knowledge Challenge",
+  "play.correct": "Correct!", "play.wrong": "Not quite", "results.title": "Mission results",
+  "settings.title": "Settings", "help.title": "Help & Support"
+}
