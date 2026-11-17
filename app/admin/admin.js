@@ -256,7 +256,7 @@ function editor(q, done) {
     } catch (e) { return err('Invalid JSON: ' + e.message); }
     if (o.q.length < 5) return err('Question text is too short.'); if (!o.explain || o.explain.length < 8) return err('Please add an explanation (min 8 characters).');
     const chk = validateQuestion(realise({ ...o, id: 'tmp' }, makeRng(3))); if (!chk.ok) return err('Invalid: ' + chk.errors.join(', '));
-    const id = q?.id || qId(o.world, o); const key = qKey(o); if (allBank().some((x) => x.id !== id && qKey(x) === key)) return err('A question with the same text and answer already exists.');
+    const id = q?.id || qId(o.world, o); const key = qKey(o); if (allBank().some((x) => (isNew || x.id !== id) && qKey(x) === key)) return err('A question with the same text and answer already exists.');
     Object.keys(o).forEach((k) => o[k] === undefined && delete o[k]);
     if (isNew || !q.builtin) commit((c) => { const i = c.custom.findIndex((x) => x.id === id); const rec = { ...o, id, enabled: true }; i >= 0 ? (c.custom[i] = rec) : c.custom.push(rec); });
     else commit((c) => { c.edits[id] = o; c.reviewed[id] = { by: session.name, at: Date.now() }; });

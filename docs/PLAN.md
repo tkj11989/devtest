@@ -20,7 +20,7 @@ numbers: every statistic shown is measured from real play on the device, and rev
 
 ## 1. Requirements analysis (summary)
 
-Eight worlds × (5 difficulty tiers × 2 missions + 1 boss) = 88 missions; 14 interaction mechanics; XP / coins /
+Eight worlds × (5 difficulty tiers × 2 missions + 1 boss) = 88 missions; 11 interactive renderers covering the 14 requested mechanics (image/map/timed/logic are variants); XP / coins /
 stars / achievements / streaks; daily challenge (4 slots); Knowledge Challenge (mixed); optional competition;
 adaptive difficulty; content management; admin dashboard; AdMob with strict ethics; child safety & privacy;
 accessibility; sounds; i18n; offline/reliability.

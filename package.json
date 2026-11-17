@@ -1,0 +1,23 @@
+{
+  "name": "knowledgeverse",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KnowledgeVerse – One Game. Multiple Learning Worlds.",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8123 --directory app",
+    "test": "node tests/run.mjs",
+    "test:browser": "node tests/browser_smoke.mjs && node tests/admin_smoke.mjs && node tests/ads_flow.mjs",
+    "cap:add": "npx cap add android && npx cap add ios",
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
+    "cap:ios": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor-community/admob": "^6.0.0"
+  },
+  "devDependencies": { "@capacitor/cli": "^6.0.0", "playwright": "^1.45.0" }
+}
