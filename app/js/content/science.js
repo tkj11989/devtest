@@ -1,0 +1,80 @@
+import { M, O, P, S, L } from './helpers.js';
+export const cats = [
+  { id: 'body', name: 'Human Body', emoji: '🫀' }, { id: 'life', name: 'Animals & Plants', emoji: '🌿' },
+  { id: 'physics', name: 'Physics', emoji: '🧲' }, { id: 'chem', name: 'Chemistry', emoji: '⚗️' },
+  { id: 'env', name: 'Environment', emoji: '🌍' }, { id: 'energy', name: 'Energy', emoji: '⚡' },
+  { id: 'disc', name: 'Discoveries', emoji: '🔭' }, { id: 'daily', name: 'Everyday Science', emoji: '🏠' },
+];
+export const bank = [
+  M('body', 1, 'Which organ pumps blood around your body?', 'Heart', ['Lungs', 'Stomach', 'Brain'], 'The heart is a muscle that pumps blood.', { img: '🫀' }),
+  M('body', 1, 'What do we use to see?', 'Eyes', ['Ears', 'Nose', 'Skin'], 'Eyes detect light.', { img: '👁️' }),
+  M('body', 2, 'Which organ do we use to breathe in oxygen?', 'Lungs', ['Liver', 'Kidneys', 'Heart'], 'Oxygen enters the blood through the lungs.', { img: '🫁' }),
+  M('body', 2, 'How many bones does a typical adult human have?', '206', ['106', '306', '412'], 'Babies have around 270–300; many fuse so adults typically have 206.'),
+  M('body', 3, 'Which part of the blood fights infection?', 'White blood cells', ['Red blood cells', 'Platelets', 'Plasma only'], 'White blood cells are part of the immune system.'),
+  M('body', 3, 'Which organ filters waste from the blood to make urine?', 'Kidneys', ['Liver', 'Pancreas', 'Intestine'], 'Kidneys filter blood and make urine.'),
+  M('body', 4, 'What is the main job of red blood cells?', 'Carry oxygen', ['Fight germs', 'Digest food', 'Make hormones'], 'Haemoglobin in red blood cells carries oxygen.'),
+  M('body', 5, 'Which vitamin is made in the skin with the help of sunlight?', 'Vitamin D', ['Vitamin C', 'Vitamin A', 'Vitamin K'], 'Sunlight (UVB) helps skin produce vitamin D.'),
+  O('body', 3, 'Put the path of food in the correct order.', ['Mouth', 'Food pipe (oesophagus)', 'Stomach', 'Small intestine', 'Large intestine'], 'Food travels mouth → oesophagus → stomach → small intestine → large intestine.'),
+  M('life', 1, 'Which animal is a mammal?', 'Dolphin', ['Shark', 'Trout', 'Octopus'], 'Dolphins breathe air and feed milk to their young.', { img: '🐬' }),
+  M('life', 1, 'What do plants need from sunlight to make food?', 'Energy', ['Water only', 'Soil', 'Salt'], 'Photosynthesis uses light energy.', { img: '🌱' }),
+  M('life', 2, 'What gas do plants take in for photosynthesis?', 'Carbon dioxide', ['Oxygen', 'Nitrogen', 'Hydrogen'], 'Plants take in CO₂ and release oxygen.'),
+  M('life', 2, 'Which is the life cycle of a butterfly?', 'Egg, caterpillar, pupa, adult', ['Egg, adult, pupa, caterpillar', 'Seed, caterpillar, adult', 'Egg, pupa, caterpillar, adult'], 'Complete metamorphosis has four stages.'),
+  M('life', 3, 'What do we call animals that eat only plants?', 'Herbivores', ['Carnivores', 'Omnivores', 'Decomposers'], 'Herbivores eat plants.'),
+  M('life', 3, 'Which part of a plant absorbs water from the soil?', 'Roots', ['Leaves', 'Flowers', 'Stem'], 'Roots absorb water and minerals.'),
+  M('life', 4, 'In a food chain, what is the role of grass?', 'Producer', ['Consumer', 'Decomposer', 'Predator'], 'Plants make their own food, so they are producers.'),
+  M('life', 5, 'Which structure in plant cells is the site of photosynthesis?', 'Chloroplast', ['Mitochondrion', 'Nucleus', 'Ribosome'], 'Chloroplasts contain chlorophyll.'),
+  S('life', 2, 'Drag each animal into the right group.', ['Mammal', 'Bird', 'Fish'], [['Whale', 0], ['Eagle', 1], ['Salmon', 2], ['Bat', 0], ['Penguin', 1], ['Shark', 2]], 'Whales and bats are mammals, eagles and penguins are birds, salmon and sharks are fish.'),
+  M('physics', 1, 'What force pulls objects toward the Earth?', 'Gravity', ['Magnetism', 'Friction', 'Wind'], 'Gravity attracts objects with mass.', { img: '🍎' }),
+  M('physics', 2, 'What do we call the bouncing back of light from a surface?', 'Reflection', ['Refraction', 'Absorption', 'Dispersion'], 'Mirrors work by reflection.', { img: '🪞' }),
+  M('physics', 2, 'Which is the fastest: sound or light?', 'Light', ['Sound', 'They are equal', 'It depends on the day'], 'Light travels about 300,000 km/s; sound only about 343 m/s in air.'),
+  M('physics', 3, 'What unit is used to measure force?', 'Newton', ['Joule', 'Watt', 'Volt'], 'Force is measured in newtons (N).'),
+  M('physics', 3, 'Which material is a good conductor of electricity?', 'Copper', ['Rubber', 'Wood', 'Glass'], 'Metals like copper have free electrons.'),
+  M('physics', 4, 'A rainbow forms mainly because of…', 'Dispersion of light in water drops', ['Reflection from clouds only', 'Sound waves', 'Magnetic fields'], 'Water droplets refract and split sunlight into colours.'),
+  M('physics', 5, 'What is the SI unit of electrical resistance?', 'Ohm', ['Ampere', 'Volt', 'Tesla'], 'Resistance is measured in ohms (Ω).'),
+  P('physics', 3, 'Match each device to what it mainly uses or does.', [['Magnet', 'Attracts iron'], ['Thermometer', 'Measures temperature'], ['Battery', 'Stores chemical energy'], ['Lens', 'Bends light']], 'Each device has a specific scientific function.'),
+  M('chem', 1, 'What is water’s chemical formula?', 'H₂O', ['CO₂', 'O₂', 'NaCl'], 'Two hydrogen atoms and one oxygen atom.', { img: '💧' }),
+  M('chem', 2, 'Which state of matter has a fixed shape?', 'Solid', ['Liquid', 'Gas', 'Plasma only'], 'Particles in solids are tightly held.'),
+  M('chem', 2, 'What happens to water at 100 °C at sea level?', 'It boils', ['It freezes', 'It turns into ice', 'Nothing'], 'Water boils at 100 °C at normal sea-level pressure.'),
+  M('chem', 3, 'Table salt is made of which two elements?', 'Sodium and chlorine', ['Sulphur and calcium', 'Sodium and carbon', 'Potassium and iron'], 'NaCl: sodium chloride.'),
+  M('chem', 3, 'Which gas makes up most of Earth’s atmosphere?', 'Nitrogen', ['Oxygen', 'Carbon dioxide', 'Hydrogen'], 'About 78% nitrogen, 21% oxygen.'),
+  M('chem', 4, 'On the pH scale, a value of 3 is…', 'Acidic', ['Neutral', 'Alkaline', 'Impossible'], 'Below 7 is acidic.'),
+  M('chem', 5, 'Which element has the atomic number 6?', 'Carbon', ['Nitrogen', 'Oxygen', 'Boron'], 'Carbon has 6 protons.'),
+  S('chem', 3, 'Sort these into solid, liquid and gas at room temperature.', ['Solid', 'Liquid', 'Gas'], [['Iron nail', 0], ['Milk', 1], ['Oxygen', 2], ['Ice cube', 0], ['Orange juice', 1], ['Helium', 2]], 'Room temperature is about 20–25 °C.'),
+  M('env', 1, 'Which of these can be recycled?', 'Glass bottle', ['Banana peel', 'Used tissue', 'Food leftovers'], 'Glass is widely recyclable.', { img: '♻️' }),
+  M('env', 2, 'What is the main cause of global warming?', 'Greenhouse gases from burning fossil fuels', ['The Moon', 'Volcanoes only', 'Plastic bags'], 'Human emissions of CO₂ and methane are the main cause of recent warming.'),
+  M('env', 3, 'Which layer of the atmosphere protects us from most harmful UV rays?', 'Ozone layer', ['Troposphere only', 'Ionosphere', 'Exosphere'], 'The ozone layer is in the stratosphere.'),
+  M('env', 4, 'What does “biodiversity” mean?', 'The variety of life in an area', ['The weight of animals', 'Number of trees only', 'A type of rock'], 'Biodiversity covers species, genes and ecosystems.'),
+  M('env', 5, 'Which is a renewable energy source?', 'Wind', ['Coal', 'Natural gas', 'Oil'], 'Wind is naturally replenished.'),
+  M('energy', 1, 'What gives us light and heat during the day?', 'The Sun', ['The Moon', 'Stars at night', 'Clouds'], 'The Sun is our main energy source.', { img: '☀️' }),
+  M('energy', 2, 'A battery stores which kind of energy?', 'Chemical energy', ['Sound energy', 'Nuclear energy', 'Wind energy'], 'Batteries convert stored chemical energy into electrical.'),
+  M('energy', 3, 'Solar panels convert sunlight into…', 'Electricity', ['Sound', 'Wind', 'Gravity'], 'Photovoltaic cells produce electric current.'),
+  M('energy', 4, 'Energy cannot be created or destroyed, only changed. This is the law of…', 'Conservation of energy', ['Gravitation', 'Relativity', 'Inertia'], 'The first law of thermodynamics.'),
+  O('energy', 3, 'Order the energy changes when you turn on a lamp powered by a hydro-dam.', ['Water flows downhill', 'Turbine spins', 'Generator makes electricity', 'Bulb gives light'], 'Gravitational → kinetic → electrical → light.'),
+  M('disc', 2, 'Who is known for the law of gravity and laws of motion?', 'Isaac Newton', ['Albert Einstein', 'Galileo Galilei', 'Charles Darwin'], 'Newton published them in the Principia (1687).'),
+  M('disc', 3, 'Who developed the theory of evolution by natural selection?', 'Charles Darwin', ['Gregor Mendel', 'Louis Pasteur', 'Isaac Newton'], 'Darwin’s On the Origin of Species appeared in 1859.'),
+  M('disc', 3, 'Which Indian physicist won the 1930 Nobel Prize for work on light scattering?', 'C. V. Raman', ['Homi Bhabha', 'S. Chandrasekhar', 'J. C. Bose'], 'The Raman effect.'),
+  M('disc', 4, 'Who discovered penicillin in 1928?', 'Alexander Fleming', ['Louis Pasteur', 'Marie Curie', 'Joseph Lister'], 'Fleming noticed mould killing bacteria.'),
+  M('disc', 5, 'Who proposed the theory of general relativity?', 'Albert Einstein', ['Niels Bohr', 'Max Planck', 'Stephen Hawking'], 'Published in 1915.'),
+  M('daily', 1, 'Why do we wear jackets in cold weather?', 'They trap warm air near our body', ['They make us colder', 'They create heat from nothing', 'They block gravity'], 'Insulation slows heat loss.'),
+  M('daily', 2, 'Why does ice float on water?', 'Ice is less dense than water', ['Ice is heavier', 'Water is magnetic', 'Ice is hollow'], 'Water expands when it freezes.'),
+  M('daily', 3, 'What makes a balloon stick to a wall after rubbing it on hair?', 'Static electricity', ['Magnetism', 'Gravity', 'Glue in rubber'], 'Rubbing transfers charge.'),
+  M('daily', 4, 'Why does a metal spoon in hot soup get hot?', 'Heat conduction', ['Convection only', 'Radiation only', 'Evaporation'], 'Metals conduct heat well.'),
+  L('physics', 2, 'Lab Challenge: float or sink?', 'You drop objects in a tank of water. Predict what happens.', [
+    { label: 'Wooden block', options: ['Floats', 'Sinks'], answer: 0 }, { label: 'Iron nail', options: ['Floats', 'Sinks'], answer: 1 }, { label: 'Plastic duck', options: ['Floats', 'Sinks'], answer: 0 }], 'Objects less dense than water float; denser ones sink.'),
+  L('chem', 3, 'Lab Challenge: acid or base?', 'Dip red and blue litmus paper to test the liquids.', [
+    { label: 'Lemon juice', options: ['Acid', 'Base'], answer: 0 }, { label: 'Soap solution', options: ['Acid', 'Base'], answer: 1 }, { label: 'Vinegar', options: ['Acid', 'Base'], answer: 0 }], 'Citrus and vinegar are acidic; soap is basic (alkaline).'),
+  L('energy', 3, 'Lab Challenge: build a circuit', 'Light the bulb! Choose the right part for each slot.', [
+    { label: 'Power source', options: ['Battery', 'Rubber band', 'Paper'], answer: 0 }, { label: 'Wires made of', options: ['Copper', 'Plastic only', 'Wood'], answer: 0 }, { label: 'Switch must be', options: ['Closed', 'Open'], answer: 0 }], 'A complete conducting loop with a power source lights the bulb.'),
+  L('life', 4, 'Lab Challenge: grow a plant', 'Choose the best conditions for a bean seedling.', [
+    { label: 'Water', options: ['Regular small amounts', 'None', 'Flooded'], answer: 0 }, { label: 'Light', options: ['Sunny window', 'Dark cupboard'], answer: 0 }, { label: 'Soil', options: ['Moist soil', 'Dry sand only'], answer: 0 }], 'Seedlings need water, light and soil nutrients to grow healthily.'),
+  L('physics', 5, 'Lab Challenge: ramp race', 'Predict the results of rolling a ball down a ramp.', [
+    { label: 'Steeper ramp makes the ball', options: ['Faster', 'Slower'], answer: 0 }, { label: 'Rough surface causes more', options: ['Friction', 'Light'], answer: 0 }, { label: 'At the top the ball has mostly', options: ['Potential energy', 'Sound energy'], answer: 0 }], 'Gravity speeds the ball, friction slows it, and height stores potential energy.'),
+  L('chem', 5, 'Lab Challenge: states of matter', 'Heat and cool water. Predict each change.', [
+    { label: 'Heating ice gives', options: ['Water', 'Steam straight away'], answer: 0 }, { label: 'Boiling water gives', options: ['Steam (water vapour)', 'Ice'], answer: 0 }, { label: 'Cooling steam gives', options: ['Condensation', 'Melting'], answer: 0 }], 'Melting, boiling and condensation are changes of state.'),
+  P('daily', 2, 'Match the object with its function.', [['Compass', 'Shows direction'], ['Microscope', 'Magnifies tiny things'], ['Telescope', 'Views distant objects'], ['Stethoscope', 'Listens to the heart']], 'Scientific tools each have a particular job.'),
+  P('body', 2, 'Match each sense organ with its sense.', [['Ear', 'Hearing'], ['Tongue', 'Taste'], ['Skin', 'Touch'], ['Nose', 'Smell']], 'Each organ detects a different kind of stimulus.'),
+];
+export const gen = {};
+export const alt = {};
+export const boss = { title: 'The Mad Scientist’s Lab', desc: 'Complete a series of experiments to power up the planet!', count: 5, minD: 3, cats: ['physics', 'chem', 'energy', 'life'], types: ['lab', 'sort', 'mcq'] };
+export const titles = ['Landing Pad', 'Body Bay', 'Bio Dome', 'Force Field', 'Chemistry Core', 'Eco Garden', 'Power Station', 'Discovery Dock', 'Home Lab', 'Experiment Zone'];
