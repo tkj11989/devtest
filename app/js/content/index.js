@@ -13,7 +13,7 @@ export const TIERS = [
   { id: 'beginner', name: 'Beginner', stars: 1 }, { id: 'easy', name: 'Easy' }, { id: 'medium', name: 'Medium' },
   { id: 'hard', name: 'Hard' }, { id: 'expert', name: 'Expert' },
 ];
-const W = (id, name, tagline, emoji, c, unlockLevel, mod, extra = {}) => ({ id, name, tagline, emoji, colors: c, unlockLevel, mod, cats: mod.cats, ...extra });
+const W = (id, name, tagline, emoji, c, unlockLevel, mod, extra = {}) => ({ id, name, tagline, emoji, colors: c, unlockLevel, mod, cats: mod.cats, base: { name, tagline }, ...extra });
 export const WORLDS = [
   W('math', 'Math Kingdom', 'Open castle gates with the power of numbers', '🏰', ['#6d28d9', '#a855f7', '#fbbf24'], 1, math, { mascot: '🧙', quest: 'Break the number spell' }),
   W('word', 'Word Kingdom', 'Restore the enchanted library and its magic books', '📚', ['#15803d', '#4ade80', '#fcd34d'], 1, words, { mascot: '🦉', quest: 'Restore the library' }),
@@ -25,13 +25,18 @@ export const WORLDS = [
   W('money', 'Money City', 'Budget, shop and save in a colourful city', '🏙️', ['#c2410c', '#14b8a6', '#fde68a'], 6, money, { mascot: '🦊', quest: 'Master your money' }),
 ];
 export const worldById = (id) => WORLDS.find((w) => w.id === id);
+// Admin overrides for world display text and extra categories (applied at load and when content changes).
+export function applyWorldMeta() {
+  const meta = getContent().worldMeta || {};
+  for (const w of WORLDS) { const m = meta[w.id] || {}; w.name = m.name || w.base.name; w.tagline = m.tagline || w.base.tagline; w.cats = [...w.mod.cats, ...(m.catsExtra || [])]; }
+}
 
 // ---- Question building -------------------------------------------------------------------
 export const qKey = (b) => `${b.type}|${b.q}|${b.a ?? b.answer ?? (b.pairs ? JSON.stringify(b.pairs) : b.items ? b.items.join('>') : '')}`.toLowerCase();
 export const qId = (world, b) => `${world}-${hashStr(qKey(b)).toString(36)}`;
 
 let bankCache = null;
-export function invalidateBank() { bankCache = null; }
+export function invalidateBank() { bankCache = null; applyWorldMeta(); }
 export function allBank() {
   if (bankCache) return bankCache;
   const c = getContent(); const out = [];

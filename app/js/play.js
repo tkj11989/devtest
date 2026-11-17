@@ -26,7 +26,8 @@ function begin(r) {
   run = { ...r, id: r.id || uid(), idx: 0, answers: [], elapsed: 0, timeLeft: r.time || 0 };
   persist(); track('session', {}); go('/play');
 }
-const persist = () => { store.state.session = { ...run }; store.save(); };
+// Save the run; a question that is already answered counts as done so a resume never re-asks it.
+const persist = () => { const idx = run.idx + (answered && run.answers[run.idx] ? 1 : 0); store.state.session = { ...run, idx }; store.save(); };
 export function startMission(mid) {
   const m = missionById(mid); const s = store.state; const qs = G.buildQuestions(s, m);
   begin({ kind: 'mission', missionId: mid, world: m.world, title: m.title, qs, time: m.time, boss: m.boss });
@@ -89,7 +90,7 @@ async function onHint() {
 function onAnswered(q, res) {
   if (answered) return; answered = true; const ms = Date.now() - qStart; const ok = !!res.correct;
   run.answers[run.idx] = ans(q, ok, ms, res.given); ok ? sound.correct() : sound.wrong(); haptic(ok ? 15 : 40);
-  persistAfter();
+  persist();
   const last = run.idx === run.qs.length - 1; const cert = q.certainty === 'debated';
   const canRetry = !ok && !run.time && !retried && ['mcq', 'input'].includes(q.type) && adsAllowedByParent() && getContent().ads.rewardedEnabled && (bannerVisible());
   $('#hint').disabled = true;
@@ -104,7 +105,6 @@ function onAnswered(q, res) {
     retried = true; answered = false; $('#fb').innerHTML = ''; $('#hint').disabled = true; qStart = Date.now(); mountQ(q); toast('Second chance!');
   });
 }
-function persistAfter() { const s = { ...run, idx: run.idx + (answered ? 1 : 0) }; store.state.session = s; store.save(); }
 function next() { run.idx++; persist(); if (run.idx >= run.qs.length) return finish(); playScreen(); }
 async function report(q) {
   const p = modal(`<h2>⚑ Report this question</h2><p class="muted small">Tell us what’s wrong (outdated, incorrect, unclear). Please don’t include personal details.</p><label class="field"><span>What’s wrong?</span><input id="rr" type="text" maxlength="160"></label><div class="row"><button class="btn ghost grow" data-close="">Cancel</button><button class="btn grow" id="rs">Send</button></div>`);
