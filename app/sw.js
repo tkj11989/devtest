@@ -1,6 +1,6 @@
 // Offline-first service worker: cache the app shell + content modules.
 const CACHE = 'kv-shell-v1';
-const ASSETS = ['./', './index.html', './css/style.css', './manifest.webmanifest', './icons/icon.svg', './lang/en.json'];
+const ASSETS = ['./', './index.html', './css/style.css', './manifest.webmanifest', './icons/icon.svg', './lang/en.json', './content-overrides.json'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {
