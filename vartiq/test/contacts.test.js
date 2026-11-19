@@ -58,7 +58,7 @@ test('privacy: people who opt out, are blocked either way, deleted, or kept from
   const names = async () => (await call(people.meg.s, 'contacts:match', { hashes: all })).matches.map((m) => m.user.username).sort();
   assert.deepStrictEqual(await names(), ['asha', 'foe', 'gone', 'kid', 'mina', 'ravi']);
 
-  assert.deepStrictEqual((await call(people.asha.s, 'privacy:findable', { byPhone: false })), { ok: true, findableByPhone: false });
+  assert.deepStrictEqual((await call(people.asha.s, 'privacy:findable', { byPhone: false })), { ok: true, findableByPhone: false, findableByUsername: true });
   assert.strictEqual((await call(people.asha.s, 'me', {})).privacy.findableByPhone, false);
   assert.ok(!(await names()).includes('asha'), 'turned off');
 

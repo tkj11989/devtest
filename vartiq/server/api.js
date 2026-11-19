@@ -524,7 +524,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
   router.post('/groups/:id/requests/:username', ...authed, json, run((req) => actions.groupDecide(req.user, g(req, { username: p(req, 'username'), approve: req.body?.approve }), req.ctx)));
   router.post('/link-preview', ...authed, json, run((req) => actions.linkPreview(req.user, { url: req.body?.url }, req.ctx)));
   router.post('/contacts/match', ...authed, json2m, run((req) => actions.contactsMatch(req.user, { hashes: req.body?.hashes }, req.ctx)));
-  router.put('/me/privacy/findable', ...authed, json, run((req) => actions.setFindable(req.user, { byPhone: req.body?.byPhone }, req.ctx)));
+  router.put('/me/privacy/findable', ...authed, json, run((req) => actions.setFindable(req.user, { byPhone: req.body?.byPhone, byUsername: req.body?.byUsername }, req.ctx)));
 
   // ---------- business assistant (bot) ----------
 

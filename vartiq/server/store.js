@@ -209,6 +209,7 @@ class Store {
         blockedPeople: u.blocked || [],
         profileViewsEnabled: this.profileViewsEnabled(username),
         findableByPhone: this.findableByPhone(username),
+        findableByUsername: this.findableByUsername(username),
         chatPreferences: u.chatPrefs || {},
         lockedChats: u.lockedChats || [],
         hiddenChats: u.hiddenChats || [],
@@ -1543,6 +1544,18 @@ class Store {
     const u = this.data.users[username];
     if (!u) throw new Error('No such user');
     u.findableByPhone = !!on;
+    this._save();
+  }
+
+  /** May other people find this account by typing its username (user ID) or name in search? On unless the person turned it off. */
+  findableByUsername(username) {
+    return this.data.users[username]?.findableByUsername !== false;
+  }
+
+  setFindableByUsername(username, on) {
+    const u = this.data.users[username];
+    if (!u) throw new Error('No such user');
+    u.findableByUsername = !!on;
     this._save();
   }
 
@@ -2897,6 +2910,8 @@ class Store {
     return Object.values(this.data.users)
       .filter((u) => u.username !== exclude && !u.deletedAt && !u.deletion)
       .filter((u) => !u.guardian || this.canStartChat(exclude, u.username)) // a child kept from new people is not found by them
+      // Someone who turned off search by username is only found by people they already chat with (and by number, if that is on).
+      .filter((u) => u.findableByUsername !== false || this.hasDirect(exclude, u.username) || (phone && u.phone === phone && this.findableByPhone(u.username)))
       .filter((u) => !q || u.username.includes(q) || u.displayName.toLowerCase().includes(q)
         || (u.business && u.business.category.toLowerCase().includes(q))
         || (phone && u.phone === phone))

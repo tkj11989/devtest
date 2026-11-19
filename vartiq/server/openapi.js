@@ -1002,10 +1002,10 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       }),
     },
     '/me/privacy/findable': {
-      put: op(T.me, 'Let people who have my number find me', {
-        description: 'On by default. Off: nobody can find this account by matching their contacts (searching for the full number still works for people who know it, as before).',
-        body: jsonBody(obj({ byPhone: { type: 'boolean' } }, ['byPhone']), { byPhone: false }),
-        responses: { 200: ok(obj({ findableByPhone: { type: 'boolean' } })), ...errors(400, 401) },
+      put: op(T.me, 'Choose how people can find me', {
+        description: 'Send `byPhone` and/or `byUsername` (both on by default). `byPhone` off: nobody can find this account by matching their contacts (searching for the full number still works for people who know it, as before). `byUsername` off: this account does not show up when someone searches by its username (user ID) or name, except for people who already chat with it; people can still reach it through a link or group you share. Either change applies at once.',
+        body: jsonBody(obj({ byPhone: { type: 'boolean' }, byUsername: { type: 'boolean' } }), { byUsername: false }),
+        responses: { 200: ok(obj({ findableByPhone: { type: 'boolean' }, findableByUsername: { type: 'boolean' } })), ...errors(400, 401) },
       }),
     },
     '/me/business/bot': {

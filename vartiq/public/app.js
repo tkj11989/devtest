@@ -4483,7 +4483,7 @@
       const { users } = await emit('users:search', { q });
       users.forEach((u) => (state.users[u.username] = { ...(state.users[u.username] || {}), ...u }));
       target.textContent = '';
-      if (!users.length) target.appendChild(el('p', 'muted pad', 'No people found.'));
+      if (!users.length) target.appendChild(el('p', 'muted pad', q && q.trim() ? 'No people found. Some people turn off search by username; ask them for a chat link.' : 'No people found.'));
       users.forEach((u) => { const row = render(u); if (row) target.appendChild(row); });
     } catch (err) {
       console.error(err);
@@ -6865,13 +6865,24 @@
 
   $('#btn-views').addEventListener('click', openViews);
   // "Let people who have my number find me"
-  const paintFindable = () => { $('#findable-toggle').checked = state.privacy?.findableByPhone !== false; };
+  const paintFindable = () => { $('#findable-toggle').checked = state.privacy?.findableByPhone !== false; $('#findable-username-toggle').checked = state.privacy?.findableByUsername !== false; };
+  $('#findable-username-toggle').addEventListener('change', async (e) => {
+    const byUsername = e.target.checked;
+    try {
+      const res = await emit('privacy:findable', { byUsername });
+      state.privacy = { ...state.privacy, findableByPhone: res.findableByPhone, findableByUsername: res.findableByUsername };
+      toast(byUsername ? 'People can find you by username' : 'You no longer show up in search');
+    } catch (err) {
+      e.target.checked = !byUsername;
+      toast(err.message);
+    }
+  });
   $('#btn-profile').addEventListener('click', paintFindable);
   $('#findable-toggle').addEventListener('change', async (e) => {
     const byPhone = e.target.checked;
     try {
       const res = await emit('privacy:findable', { byPhone });
-      state.privacy = { ...state.privacy, findableByPhone: res.findableByPhone };
+      state.privacy = { ...state.privacy, findableByPhone: res.findableByPhone, findableByUsername: res.findableByUsername };
     } catch (err) {
       e.target.checked = !byPhone;
       toast(err.message);

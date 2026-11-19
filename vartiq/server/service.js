@@ -806,7 +806,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
         defaultDisappear: store.defaultDisappear(me),
         business: store.getBusiness(me),
         contact: { ...store.contactOf(me), ...(store.numberChangedAt(me) ? { numberChangedAt: store.numberChangedAt(me) } : {}) },
-        privacy: { profileViews: store.profileViewsEnabled(me), findableByPhone: store.findableByPhone(me) },
+        privacy: { profileViews: store.profileViewsEnabled(me), findableByPhone: store.findableByPhone(me), findableByUsername: store.findableByUsername(me) },
         guardian: guardianView(me),
         consent: { version: legal.VERSION, upToDate: store.consentUpToDate(me, legal.VERSION), optional: Object.fromEntries(legal.CONSENTS.filter((x) => !x.required).map((x) => [x.id, store.hasOptionalConsent(me, x.id)])) },
         appearance: appearance.effective(store.prefsOf(me), store.isPremium(me)),
@@ -1346,10 +1346,12 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     },
 
     /** Let people who have my number find me (on by default). */
-    setFindable(me, { byPhone } = {}) {
-      if (typeof byPhone !== 'boolean') throw new ApiError(400, 'invalid_request', 'byPhone must be true or false');
-      store.setFindableByPhone(me, byPhone);
-      return { findableByPhone: byPhone };
+    setFindable(me, { byPhone, byUsername } = {}) {
+      if (byPhone === undefined && byUsername === undefined) throw new ApiError(400, 'invalid_request', 'Send byPhone and/or byUsername (true or false)');
+      for (const v of [byPhone, byUsername]) if (v !== undefined && typeof v !== 'boolean') throw new ApiError(400, 'invalid_request', 'byPhone and byUsername must be true or false');
+      if (byPhone !== undefined) store.setFindableByPhone(me, byPhone);
+      if (byUsername !== undefined) store.setFindableByUsername(me, byUsername);
+      return { findableByPhone: store.findableByPhone(me), findableByUsername: store.findableByUsername(me) };
     },
 
     // ----- business profile -----
