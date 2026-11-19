@@ -1,0 +1,5 @@
+{ "indexes": [
+  { "collectionGroup": "pools", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "appId", "order": "ASCENDING" }, { "fieldPath": "state", "order": "ASCENDING" }] },
+  { "collectionGroup": "pools", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "state", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
+  { "collectionGroup": "poolMembers", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] }
+], "fieldOverrides": [] }

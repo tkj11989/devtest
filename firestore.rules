@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Balances, pool slots, reputation and status are backend-only (Cloud Functions use the Admin SDK).
+    match /users/{uid} { allow read: if isOwner(uid); allow write: if false; }
+
+    // Public app info for browsing. The checklist is written by functions only; owners edit descriptive fields.
+    match /apps/{appId} {
+      allow read: if signedIn();
+      allow create: if isOwner(request.resource.data.ownerUid)
+        && request.resource.data.checklist == {'groupAdded': false, 'buildReleased': false, 'linkPasted': false};
+      allow update: if isOwner(resource.data.ownerUid)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.checklist == resource.data.checklist;
+      allow delete: if false;
+    }
+    // Opt-in links: owner only. Testers receive the link from joinPool.
+    match /appSecrets/{appId} {
+      allow read, write: if signedIn()
+        && get(/databases/$(db)/documents/apps/$(appId)).data.ownerUid == request.auth.uid;
+    }
+
+    match /pools/{poolId} { allow read: if signedIn(); allow write: if false; }
+    match /poolMembers/{id} {
+      allow read: if signedIn() && (resource.data.uid == request.auth.uid
+        || get(/databases/$(db)/documents/pools/$(resource.data.poolId)).data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+    match /checkIns/{id} { allow read: if signedIn() && resource.data.uid == request.auth.uid; allow write: if false; }
+    match /feedback/{id} {
+      allow read: if signedIn() && (resource.data.uid == request.auth.uid
+        || get(/databases/$(db)/documents/pools/$(resource.data.poolId)).data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+    match /creditLedger/{id} { allow read: if signedIn() && resource.data.uid == request.auth.uid; allow write: if false; }
+    match /reports/{id} { allow read, write: if false; }
+    match /config/{doc} { allow read: if signedIn(); allow write: if false; }
+    match /{other=**} { allow read, write: if false; }
+  }
+}
