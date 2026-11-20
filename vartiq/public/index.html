@@ -90,7 +90,9 @@
           <input name="displayName" maxlength="40" autocomplete="name" />
         </label>
         <label class="register-only hidden">Date of birth
-          <input name="birthDate" type="date" autocomplete="bday" />
+          <span class="dob-row"><input name="birthDate" type="text" inputmode="numeric" autocomplete="bday" placeholder="DD/MM/YYYY" maxlength="10" />
+          <button type="button" class="icon-btn" id="dob-pick" title="Pick from calendar" aria-label="Pick the date from a calendar">📅</button>
+          <input type="date" id="dob-native" class="dob-native" tabindex="-1" aria-hidden="true" /></span>
         </label>
         <div class="guardian-box hidden" id="guardian-box" role="group" aria-labelledby="guardian-title">
           <strong id="guardian-title">Your parent or guardian</strong>

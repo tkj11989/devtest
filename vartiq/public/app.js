@@ -418,8 +418,31 @@
   // Age: below the minimum there is no account; under 18 a parent or guardian is mandatory.
   const ADULT_AGE = () => state.config?.limits?.adultAge || 18;
   const MIN_AGE = () => state.config?.limits?.minAge || 8;
+  /** The date typed as DD/MM/YYYY (or picked, as YYYY-MM-DD) as YYYY-MM-DD, or '' when it is not a real date. */
+  function birthISO() {
+    const v = authForm.birthDate.value.trim();
+    let y, mo, d;
+    let m = /^(\d{1,2})[/.\-\s](\d{1,2})[/.\-\s](\d{4})$/.exec(v);
+    if (m) [d, mo, y] = [+m[1], +m[2], +m[3]];
+    else if ((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v))) [y, mo, d] = [+m[1], +m[2], +m[3]];
+    else return '';
+    const t = new Date(Date.UTC(y, mo - 1, d));
+    if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return '';
+    return `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  // Type digits and the slashes appear; the calendar button fills the same field.
+  authForm.birthDate.addEventListener('input', (e) => {
+    if (e.inputType && e.inputType.startsWith('delete')) return;
+    const d = e.target.value.replace(/\D/g, '').slice(0, 8);
+    e.target.value = d.length > 4 ? `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}` : d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
+  });
+  $('#dob-pick').addEventListener('click', () => { const n = $('#dob-native'); n.value = birthISO(); n.max = new Date().toISOString().slice(0, 10); try { n.showPicker(); } catch { n.focus(); n.click(); } });
+  $('#dob-native').addEventListener('change', (e) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(e.target.value);
+    if (m) { authForm.birthDate.value = `${m[3]}/${m[2]}/${m[1]}`; authForm.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
   function ageFromInput() {
-    const v = authForm.birthDate.value;
+    const v = birthISO();
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
     if (!m) return null;
     const born = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
@@ -439,7 +462,7 @@
   /** What is wrong with the age (or the guardian's details), as { text, field }, or null. */
   function checkAgeAndGuardian() {
     const age = ageFromInput();
-    if (age === null) return { text: 'Enter your date of birth', field: authForm.birthDate };
+    if (age === null) return { text: 'Enter your date of birth as DD/MM/YYYY', field: authForm.birthDate };
     if (age < MIN_AGE()) return { text: `VartiQ is for people aged ${MIN_AGE()} and over.`, field: authForm.birthDate };
     if (age >= ADULT_AGE()) return null;
     if (auth.type === 'business') return { text: 'A business account must be opened by an adult (18 or over)', field: authForm.birthDate };
@@ -586,7 +609,7 @@
           phone: fullPhone(authForm),
           phoneOtp: phoneField.proof(),
           consent: { terms: true, version: state.legal.version, lang: state.legal.language },
-          birthDate: authForm.birthDate.value,
+          birthDate: birthISO(),
           ...(paintGuardianBox() ? {
             guardian: {
               name: authForm.gName.value.trim(),
