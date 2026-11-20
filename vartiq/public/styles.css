@@ -1750,3 +1750,9 @@ body {
 .album-tile .media-visual img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .album-grid.n3 .album-tile:first-child { grid-column: span 2; aspect-ratio: 2 / 1; }
 .album-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, .5); color: #fff; font-size: 28px; font-weight: 600; pointer-events: none; }
+
+/* The voice button is the same size as the other buttons in the message bar. */
+.mic { width: 40px; height: 40px; }
+.mic img { width: 26px; height: 26px; }
+.composer .send { width: 40px; height: 40px; }
+.composer .send svg { width: 22px; height: 22px; }
