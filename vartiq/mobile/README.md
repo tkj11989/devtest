@@ -74,3 +74,9 @@ The code that talks to the shell is `public/native.js` (notifications, Back butt
 Not set up. `npm i @capacitor/ios && npx cap add ios` creates the project, but it needs a Mac with Xcode, an Apple Developer account, an APNs key
 uploaded to Firebase, and Apple is stricter about apps that are mostly a website: plan for native additions (notifications, sharing, a share
 extension) before applying.
+
+## Permissions
+
+The app asks for a permission only at the moment you use the feature that needs it, never at install or start-up: microphone and camera (voice notes, calls, photos), location (sharing a location), contacts (Find friends, **read only**) and notifications (when you turn them on). Nothing is read before you say yes.
+
+The contacts plugin declares both read and write access, and Android refuses to use it unless both are in the manifest. VartiQ never writes contacts, so `scripts/patch-contacts.js` (run by `npm install` as a postinstall step) narrows the plugin to `READ_CONTACTS` only. If a future plugin version changes that line, the script says so.
