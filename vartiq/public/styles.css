@@ -1703,3 +1703,10 @@ label.agree span { flex: 1; min-width: 0; line-height: 1.4; }
 .dob-row{display:flex;gap:6px;align-items:center;position:relative}
 .dob-row input[name=birthDate]{flex:1}
 .dob-native{position:absolute;right:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none}
+
+/* Phones draw the app edge to edge: keep it clear of the status bar, camera cut-out and gesture bar. */
+body {
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  background: var(--panel); /* the system bars use dark icons, so keep this strip light */
+}
