@@ -217,6 +217,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       order: ref('Order'),
       checkin: obj({ kind: { type: 'string', enum: ['home', 'safe', 'late', 'help', 'request'] }, note: { type: 'string' } }),
       sticker: { type: 'boolean' },
+      album: obj({ id: { type: 'string' }, n: { type: 'integer' }, i: { type: 'integer' } }),
       preview: ref('LinkPreview'),
       reactions: { type: 'object', additionalProperties: { type: 'string' }, description: 'username -> the emoji they chose (one each)' },
       media: obj({
@@ -969,7 +970,7 @@ function buildOpenApiSpec({ serverUrl, webhookEvents }) {
       post: op(T.msg, 'Send a photo, video or document, step 2: send the message', {
         description: 'Sends the uploaded file. `name` (a document\'s file name, never a program or web page), `w`, `h`, `duration`, `thumb` (a small JPEG data URL up to 24 KB) and `caption` (up to 1000 characters) are stored readable; in an encrypted chat they go inside `e2ee` instead and the server keeps only the kind and size. Retrying with the same `Idempotency-Key` returns the message already sent.',
         params: [CONV_ID, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 64 } }],
-        body: jsonBody(obj({ uploadId: { type: 'string' }, caption: { type: 'string', maxLength: 1000 }, name: { type: 'string' }, w: { type: 'integer' }, h: { type: 'integer' }, duration: { type: 'integer' }, thumb: { type: 'string' }, e2ee: { $ref: '#/components/schemas/Envelope' }, replyTo: { type: 'string' }, forwarded: { type: 'boolean' } }, ['uploadId']), { uploadId: 'abc123', caption: 'Our new shop', name: 'shop.jpg', w: 1200, h: 800 }),
+        body: jsonBody(obj({ uploadId: { type: 'string' }, album: obj({ id: { type: 'string', description: '6 to 32 letters, digits, - or _; the same for every item of the batch' }, n: { type: 'integer', minimum: 2, maximum: 10, description: 'how many items the batch has' }, i: { type: 'integer', description: 'the item place in the batch, from 0' } }, ['id', 'n', 'i']), caption: { type: 'string', maxLength: 1000 }, name: { type: 'string' }, w: { type: 'integer' }, h: { type: 'integer' }, duration: { type: 'integer' }, thumb: { type: 'string' }, e2ee: { $ref: '#/components/schemas/Envelope' }, replyTo: { type: 'string' }, forwarded: { type: 'boolean' } }, ['uploadId']), { uploadId: 'abc123', caption: 'Our new shop', name: 'shop.jpg', w: 1200, h: 800 }),
         responses: { 201: ok(obj({ message: ref('Message') })), ...errors(400, 401, 403, 404, 409, 415, 423) },
       }),
     },

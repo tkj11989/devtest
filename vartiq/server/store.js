@@ -4171,7 +4171,7 @@ class Store {
    * `statusReply`: `{ statusId, owner, type, preview }` when replying to a status update.
    * `place`: a location message, `{ live: seconds | 0, location?: { lat, lon, acc } }` (`location` only when not encrypted).
    */
-  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker, order, checkin } = {}) {
+  addMessage(convId, from, text, { masked = false, clientId, voice, statusReply, auto, e2ee, place, poll, event, campaign, media, replyTo, forwarded, mentions, preview, sticker, order, checkin, album } = {}) {
     const conv = this.getConversation(convId);
     if (!conv || !conv.members.includes(from)) throw new Error('Not a member of this chat');
     const existing = this.findByClientId(convId, from, clientId);
@@ -4214,6 +4214,7 @@ class Store {
     if (forwarded) msg.forwarded = true;
     if (order) { msg.type = 'order'; msg.order = order; }
     if (checkin) { msg.type = 'checkin'; msg.checkin = checkin; }
+    if (album) msg.album = album; // { id, n, i }: sent together with other pictures and videos
     if (sticker) msg.sticker = true; // a sticker: `text` is one large emoji (inside the encrypted part in encrypted chats)
     if (preview) msg.preview = preview; // { url, title, description?, site?, image? } of a link in the text (plain messages only)
     if (mentions?.length) msg.mentions = mentions; // usernames tagged with @ in a group (metadata: the text may be encrypted)

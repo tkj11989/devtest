@@ -145,3 +145,25 @@ test('the switch: administrators can turn attachments off; a chat lock and a del
   assert.ok(!store.data.media[mediaId], 'the file is gone from the store');
   assert.strictEqual(store.data.messages[dm.id][0].media, undefined);
 });
+
+test('an album: pictures and videos sent together carry the batch, and bad tags are dropped', async (t) => {
+  const { ann, dm, call, upload } = await setup(t);
+  const send = async (kind, bytes, type, album) => {
+    const up = await upload(ann.token, kind, bytes, type);
+    return (await call(ann.token, 'POST', `/conversations/${dm.id}/media`, { body: { uploadId: up.body.uploadId, name: 'x', ...(album ? { album } : {}) } })).body.message;
+  };
+  const id = 'batch12345';
+  const a = await send('image', PNG, 'image/png', { id, n: 3, i: 0 });
+  const b = await send('image', JPEG, 'image/jpeg', { id, n: 3, i: 1 });
+  const c = await send('video', MP4, 'video/mp4', { id, n: 3, i: 2 });
+  assert.deepStrictEqual([a.album, b.album, c.album], [{ id, n: 3, i: 0 }, { id, n: 3, i: 1 }, { id, n: 3, i: 2 }]);
+  // Not a valid tag, not an album of one, and never on a document.
+  assert.strictEqual((await send('image', PNG, 'image/png', { id: 'x', n: 3, i: 0 })).album, undefined);
+  assert.strictEqual((await send('image', PNG, 'image/png', { id, n: 1, i: 0 })).album, undefined);
+  assert.strictEqual((await send('image', PNG, 'image/png', { id, n: 3, i: 3 })).album, undefined);
+  assert.strictEqual((await send('image', PNG, 'image/png', { id: '<script>abc', n: 3, i: 0 })).album, undefined);
+  assert.strictEqual((await send('file', PDF, 'application/pdf', { id, n: 3, i: 1 })).album, undefined);
+  // The other person's history shows the tag too.
+  const hist = await call(ann.token, 'GET', `/conversations/${dm.id}/messages`);
+  assert.strictEqual(hist.body.messages.filter((m) => m.album?.id === id).length, 3);
+});

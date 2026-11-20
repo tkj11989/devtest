@@ -661,6 +661,8 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
     if (announce) groupChanged(announce);
     communityChanged(community);
   };
+  /** Pictures and videos sent together carry `{ id, n, i }` (the batch, how many, which one) so the chat can show them as one album. */
+  const cleanAlbum = (a, kind) => (a && kind !== 'file' && typeof a.id === 'string' && /^[A-Za-z0-9_-]{6,32}$/.test(a.id) && Number.isInteger(a.n) && a.n >= 2 && a.n <= 10 && Number.isInteger(a.i) && a.i >= 0 && a.i < a.n ? { id: a.id, n: a.n, i: a.i } : undefined);
   const previewLog = new Map(); // username -> times of recent link previews
 
   /** Who a message tags with @ (groups only): members other than the sender, at most 10, no repeats; anything else is dropped. */
@@ -1848,7 +1850,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
      * `caption` are stored readable. With `e2ee` all of those are inside the encrypted envelope and the server keeps only the kind
      * and size. A retried clientId returns the message already sent.
      */
-    sendMedia(me, { convId, uploadId, caption, name, w, h, duration, thumb, clientId, e2ee, replyTo, forwarded }, ctx) {
+    sendMedia(me, { convId, uploadId, caption, name, w, h, duration, thumb, clientId, e2ee, replyTo, forwarded, album }, ctx) {
       const conv = member(me, convId);
       requireUnlocked(me, convId, ctx);
       const dup = store.findByClientId(convId, me, clientId);
@@ -1875,7 +1877,7 @@ function createService({ store, linkPreviewer, io, isOnline, linking, webhooks, 
       if (media.name) store.data.media[uploadId].name = media.name;
       store.claimUpload(uploadId);
       try {
-        return { message: sendMessage(me, convId, text, { clientId, media, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded }) };
+        return { message: sendMessage(me, convId, text, { clientId, media, e2ee: env, replyTo: resolveReply(convId, replyTo, { plain: !env }), forwarded: !!forwarded, album: cleanAlbum(album, media.kind) }) };
       } catch (err) {
         store.data.media[uploadId].pending = { by: me, at: Date.now() }; // not sent: it can be tried again
         store._pendingIndex().set(uploadId, { by: me, at: Date.now() });

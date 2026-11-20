@@ -2377,6 +2377,32 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
   });
   $('#btn-join-call').addEventListener('click', () => startCall(state.conversations.get(state.activeId)?.activeCall?.kind || 'audio'));
 
+  const isAlbumItem = (x) => x.type === 'media' && x.media && x.media.kind !== 'file' && x.album && !x.deleted && !x.undecryptable;
+  /** The run of messages (from the one at `i`) that were sent together as pictures and videos, or null when it is a single one. */
+  function albumGroup(msgs, i) {
+    const m = msgs[i];
+    if (!isAlbumItem(m)) return null;
+    const out = [m];
+    for (let j = i + 1; j < msgs.length; j++) {
+      const x = msgs[j];
+      if (isAlbumItem(x) && x.album.id === m.album.id && x.from === m.from) out.push(x); else break;
+    }
+    return out.length > 1 ? out : null;
+  }
+
+  /** Up to four tiles in one grid; the last shows how many more there are. Tapping a tile opens that picture or video. */
+  function albumGrid(group) {
+    const shown = group.slice(0, 4);
+    const grid = el('div', `album-grid n${shown.length}`);
+    shown.forEach((x, i) => {
+      const tile = el('div', 'album-tile');
+      tile.appendChild(attachments.view(x));
+      if (group.length > 4 && i === 3) tile.appendChild(el('span', 'album-more', `+${group.length - 3}`));
+      grid.appendChild(tile);
+    });
+    return grid;
+  }
+
   function renderMessages(scrollToEnd = false) {
     const box = $('#messages');
     const conv = state.conversations.get(state.activeId);
@@ -2392,7 +2418,10 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
     }
     const chatEncrypted = msgs.some((x) => x.encrypted);
     let prev = null;
-    for (const m of msgs) {
+    const inAlbum = new Set(); // later items of an album are drawn inside the first one's bubble
+    for (let mi = 0; mi < msgs.length; mi++) {
+      const m = msgs[mi];
+      if (inAlbum.has(m.id)) continue;
       if (!prev || !sameDay(prev.ts, m.ts)) box.appendChild(el('div', 'day', dayLabel(m.ts)));
       const mine = m.from === state.me.username;
       const first = !prev || prev.from !== m.from || !sameDay(prev.ts, m.ts);
@@ -2408,7 +2437,9 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
         prev = { ...m, from: null }; // keeps the day separator; the next bubble starts a new group
         continue;
       }
-      const status = mine && !m.deleted ? statusOf(m, conv) : null;
+      const album = albumGroup(msgs, mi);
+      if (album) album.slice(1).forEach((x) => inAlbum.add(x.id));
+      const status = mine && !m.deleted ? statusOf(album ? album[album.length - 1] : m, conv) : null;
       const covered = m.masked && !m.deleted && !mine && !state.revealed.has(m.id);
       const bubble = el('div', `msg${mine ? ' out' : ''}${first ? ' first' : ''}${m.deleted ? ' deleted' : ''}${status === 'failed' ? ' failed' : ''}${m.type === 'voice' && !m.deleted ? ' voice' : ''}${(m.type === 'poll' || m.type === 'event') && !m.deleted ? ' plan' : ''}${m.type === 'location' && !m.deleted ? ` place${m.live && window.Place.liveActive(m.live) ? ' live-on' : ''}` : ''}`);
       bubble.dataset.id = m.id;
@@ -2425,7 +2456,7 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
         text.append(icon('deleted', 'inline-icon'), 'This message was deleted');
         bubble.appendChild(text);
       } else if (m.type === 'media' && m.media && !m.undecryptable) {
-        bubble.appendChild(attachments.view(m));
+        bubble.appendChild(album ? albumGrid(album) : attachments.view(m));
         if (m.text) bubble.appendChild(el('span', 'text caption', m.text));
       } else if (m.type === 'voice') {
         bubble.appendChild(voicePlayer(m));
@@ -2796,7 +2827,7 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
     } catch {
       return fail('Could not upload the file');
     }
-    const payload = { convId: msg.convId, clientId: msg.id, uploadId, ...(msg.replyTo ? { replyTo: msg.replyTo.id } : {}), ...(msg.forwarded ? { forwarded: true } : {}), ...(envelope ? { e2ee: envelope } : { caption: msg.text, name: info.name, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb }) };
+    const payload = { convId: msg.convId, clientId: msg.id, uploadId, ...(msg.album ? { album: msg.album } : {}), ...(msg.replyTo ? { replyTo: msg.replyTo.id } : {}), ...(msg.forwarded ? { forwarded: true } : {}), ...(envelope ? { e2ee: envelope } : { caption: msg.text, name: info.name, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb }) };
     state.socket.timeout(VOICE_TIMEOUT_MS).emit('message:media', payload, (err, res) => {
       if (err) return fail('No response from the server');
       if (!res?.ok) {
@@ -3779,10 +3810,14 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
     if (!v) { forget(); return; }
     const caption = String(v.caption || '').trim();
     const reply = takeReply(convId);
-    items.forEach(({ info, url }, i) => {
+    const visuals = items.filter((it) => it.info.kind !== 'file');
+    const albumId = visuals.length > 1 ? `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}` : null; // pictures and videos sent together show as one album
+    items.forEach((it, i) => {
+      const { info, url } = it;
+      const album = albumId && info.kind !== 'file' ? { id: albumId, n: visuals.length, i: visuals.indexOf(it) } : undefined;
       const media = { kind: info.kind, name: info.name, mime: info.mime, size: info.size, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb, localUrl: url };
       Object.defineProperty(media, 'localBlob', { value: info.blob, enumerable: false }); // not saved or sent
-      sendNew(convId, i === 0 ? caption : '', false, { ...(i === 0 ? reply : {}), type: 'media', upload: info.blob, media });
+      sendNew(convId, i === 0 ? caption : '', false, { ...(i === 0 ? reply : {}), type: 'media', upload: info.blob, media, ...(album ? { album } : {}) });
     });
   }
 

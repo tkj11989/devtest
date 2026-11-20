@@ -344,6 +344,7 @@ function createApiRouter({ store, service, accounts, webhooks, rateLimit = {}, c
     e2ee: req.body?.e2ee,
     replyTo: req.body?.replyTo,
     forwarded: req.body?.forwarded,
+    album: req.body?.album,
     clientId: idempotency(req),
   }, req.ctx), 201));
   router.get('/search/messages', ...authed, run((req) => actions.searchMessages(req.user, { q: req.query.q, convId: req.query.conversation, limit: req.query.limit }, req.ctx)));
