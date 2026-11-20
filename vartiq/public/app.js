@@ -391,7 +391,7 @@
   const purpose = () => (auth.mode === 'login' ? 'login' : 'register');
   const phoneField = createOtpField(authForm.querySelector('[data-field=phone]'), {
     destination: () => fullPhone(authForm),
-    request: (phone) => apiPost('/auth/otp', { purpose: purpose(), phone, ...(auth.mode === 'login' ? { clientType: 'web' } : {}) }).catch((err) => {
+    request: (phone) => apiPost('/auth/otp', { purpose: purpose(), phone, ...(auth.mode === 'login' ? { clientType: native.isNative ? 'app' : 'web' } : {}) }).catch((err) => {
       // A browser cannot use an SMS code while the phone is signed in: ask for the passcode from the phone instead.
       if (err.code === 'passcode_required') {
         auth.passcode = true;
@@ -598,10 +598,10 @@
           authError('Enter your mobile number');
           return authForm.phone.focus();
         }
-        data = await apiPost('/auth/login', { phone: fullPhone(authForm), linkCode, clientType: 'web', deviceName: browserName(), ...(authForm.pin.value ? { pin: authForm.pin.value } : {}) });
+        data = await apiPost('/auth/login', { phone: fullPhone(authForm), linkCode, clientType: native.isNative ? 'app' : 'web', deviceName: browserName(), ...(authForm.pin.value ? { pin: authForm.pin.value } : {}) });
       } else if (!register) {
         const by = auth.loginBy === 'email' ? { email: authForm.email.value.trim() } : { phone: fullPhone(authForm) };
-        data = await apiPost('/auth/login', { ...by, ...(auth.loginBy === 'email' ? emailField : phoneField).proof(), clientType: 'web', deviceName: browserName(), ...(authForm.pin.value ? { pin: authForm.pin.value } : {}) });
+        data = await apiPost('/auth/login', { ...by, ...(auth.loginBy === 'email' ? emailField : phoneField).proof(), clientType: native.isNative ? 'app' : 'web', deviceName: browserName(), ...(authForm.pin.value ? { pin: authForm.pin.value } : {}) });
       } else {
         data = await apiPost('/auth/register', {
           accountType: auth.type,
@@ -7132,6 +7132,7 @@
 
   async function showSafetyNumber(conv) {
     const peer = convPeer(conv);
+    if (!window.isSecureContext || !state.e2ee?.ready) return toast('Encryption is not available here. VartiQ needs a secure (HTTPS) connection to use it.');
     try {
       const keys = await state.e2ee.keysFor(conv.id, { refresh: true });
       const mine = { username: state.me.username, devices: keys[state.me.username] || [] };
