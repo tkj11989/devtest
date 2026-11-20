@@ -3686,42 +3686,104 @@ if (window.matchMedia?.('(pointer: coarse)').matches) {
     nativeSave: (blob, name) => native.saveFile(blob, name),
   });
   $('#attach-input').accept = attachments.ACCEPT;
-  $('#btn-attach').addEventListener('click', () => $('#attach-input').click());
-  $('#attach-input').addEventListener('change', (e) => { sendFiles([...e.target.files]); e.target.value = ''; });
+  const MAX_SEND = 10;
+  // The paperclip offers the gallery (photos and videos, several at once) or a document.
+  $('#btn-attach').addEventListener('click', (e) => {
+    e.stopPropagation(); // the page closes menus on any other tap
+    closeMessageMenu();
+    const menu = el('div', 'msg-menu');
+    menu.setAttribute('role', 'menu');
+    const item = (label, input) => {
+      const b = el('button', 'msg-menu-item', label);
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      b.addEventListener('click', () => { closeMessageMenu(); $(input).click(); });
+      menu.appendChild(b);
+    };
+    item('🖼️ Photos & videos', '#attach-media');
+    item('📄 Document', '#attach-input');
+    document.body.appendChild(menu);
+    const r = e.currentTarget.getBoundingClientRect();
+    const m = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - m.width - 8))}px`;
+    menu.style.top = `${Math.max(8, r.top - m.height - 8)}px`;
+  });
+  for (const id of ['#attach-input', '#attach-media']) $(id).addEventListener('change', (e) => { sendFiles([...e.target.files]); e.target.value = ''; });
 
-  /** Check each chosen file, show it with a caption box, and send it to the open chat. */
+  /** Check every chosen file, show them together (remove any, one caption), then send them to the open chat in order. */
   async function sendFiles(files) {
     const convId = state.activeId;
     if (!convId || !files.length) return;
-    for (const file of files.slice(0, 10)) {
-      let info;
+    if (files.length > MAX_SEND) toast(`You can send up to ${MAX_SEND} files at once. The first ${MAX_SEND} were kept.`);
+    const items = [];
+    for (const file of files.slice(0, MAX_SEND)) {
       try {
-        info = await attachments.prepare(file);
+        const info = await attachments.prepare(file);
+        // A file from the phone's gallery can stop being readable later, so read it now (big videos are only checked).
+        if (info.blob.size <= 16 * 1024 * 1024) info.blob = new Blob([await info.blob.arrayBuffer()], { type: info.blob.type || info.mime });
+        else await info.blob.slice(0, 1).arrayBuffer();
+        items.push({ info, url: URL.createObjectURL(info.blob) });
       } catch (err) {
-        toast(`${file.name}: ${err.message}`);
-        continue;
+        toast(`${file.name}: ${err.name === 'NotReadableError' || err.name === 'NotFoundError' ? 'this file could not be read' : err.message}`);
       }
-      const url = URL.createObjectURL(info.blob);
-      const asked = dialog({
-        title: info.kind === 'image' ? 'Send photo' : info.kind === 'video' ? 'Send video' : 'Send document',
-        text: `${info.name} · ${attachments.sizeLabel(info.size)}`,
-        submit: 'Send',
-        fields: [{ name: 'caption', label: 'Caption (optional)', type: 'text', required: false, maxLength: 1000 }],
-        onSubmit: (v) => v,
-      });
-      if (info.kind === 'image' || info.thumb) {
-        const pic = el('img', 'attach-preview');
-        pic.alt = '';
-        pic.src = info.kind === 'image' ? url : info.thumb;
-        $('#modal-fields').prepend(pic);
+    }
+    if (!items.length) return;
+    const forget = () => items.forEach((i) => URL.revokeObjectURL(i.url));
+
+    const grid = el('div', 'attach-grid');
+    const title = $('#modal-title');
+    const paint = () => {
+      grid.textContent = '';
+      for (const it of items) {
+        const tile = el('div', 'attach-tile');
+        const k = it.info.kind;
+        if (k === 'image' || it.info.thumb) {
+          const pic = el('img');
+          pic.alt = '';
+          pic.src = k === 'image' ? it.url : it.info.thumb;
+          tile.appendChild(pic);
+        } else {
+          tile.appendChild(el('span', 'attach-icon', k === 'video' ? '🎬' : '📄'));
+        }
+        const label = k === 'video' && it.info.duration ? `🎬 ${fmtDuration(it.info.duration)}` : k === 'file' ? it.info.name : attachments.sizeLabel(it.info.size);
+        tile.appendChild(el('small', 'attach-label', label));
+        const x = el('button', 'attach-x', '✕');
+        x.type = 'button';
+        x.setAttribute('aria-label', `Remove ${it.info.name}`);
+        x.addEventListener('click', () => {
+          items.splice(items.indexOf(it), 1);
+          URL.revokeObjectURL(it.url);
+          if (!items.length) { $('#modal-cancel').click(); return; }
+          paint();
+        });
+        tile.appendChild(x);
+        grid.appendChild(tile);
       }
-      const v = await asked;
-      if (!v) { URL.revokeObjectURL(url); continue; }
-      const caption = String(v.caption || '').trim();
+      const pics = items.filter((i) => i.info.kind === 'image').length;
+      const vids = items.filter((i) => i.info.kind === 'video').length;
+      const docs = items.length - pics - vids;
+      const parts = [pics && `${pics} photo${pics > 1 ? 's' : ''}`, vids && `${vids} video${vids > 1 ? 's' : ''}`, docs && `${docs} document${docs > 1 ? 's' : ''}`].filter(Boolean);
+      title.textContent = `Send ${parts.join(', ')}`;
+    };
+
+    const asked = dialog({
+      title: 'Send',
+      text: items.length > 1 ? 'Tap ✕ to leave one out. The caption goes with the first one.' : `${items[0].info.name} · ${attachments.sizeLabel(items[0].info.size)}`,
+      submit: 'Send',
+      fields: [{ name: 'caption', label: 'Caption (optional)', type: 'text', required: false, maxLength: 1000 }],
+      onSubmit: (v) => v,
+    });
+    $('#modal-fields').prepend(grid);
+    paint();
+    const v = await asked;
+    if (!v) { forget(); return; }
+    const caption = String(v.caption || '').trim();
+    const reply = takeReply(convId);
+    items.forEach(({ info, url }, i) => {
       const media = { kind: info.kind, name: info.name, mime: info.mime, size: info.size, w: info.w, h: info.h, duration: info.duration, thumb: info.thumb, localUrl: url };
       Object.defineProperty(media, 'localBlob', { value: info.blob, enumerable: false }); // not saved or sent
-      sendNew(convId, caption, false, { ...takeReply(convId), type: 'media', upload: info.blob, media });
-    }
+      sendNew(convId, i === 0 ? caption : '', false, { ...(i === 0 ? reply : {}), type: 'media', upload: info.blob, media });
+    });
   }
 
   // Pasting a picture into the message box, or dropping files on the chat, sends them the same way.
