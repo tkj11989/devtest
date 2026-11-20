@@ -1713,3 +1713,9 @@ body {
 
 .link-row.compact{padding:8px 16px;min-height:0}
 .link-row.compact img{flex:none}
+
+/* Every header uses the same blue bar; text and icons inside it are light. */
+.bar.green .chat-title .name, .bar.green .chat-title-btn { color: #fff; }
+.bar.green .chat-title .sub { color: rgba(255, 255, 255, .78); }
+.bar.green .chat-title .sub.typing { color: #fff; }
+.bar.green .icon-btn svg { fill: currentColor; }
