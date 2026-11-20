@@ -1,6 +1,17 @@
 /* global io */
 'use strict';
 
+// On a touch screen the keyboard opens only when the person taps a text box. Screens that used to focus a field by
+// themselves (opening a chat, a search, a dialog) no longer pop the keyboard up; a field that needs attention scrolls into view.
+if (window.matchMedia?.('(pointer: coarse)').matches) {
+  const focus = HTMLElement.prototype.focus;
+  const typing = 'input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range]):not([type=file]), textarea, [contenteditable=""], [contenteditable=true]';
+  HTMLElement.prototype.focus = function guardedFocus(...args) {
+    if (this.matches?.(typing)) { try { this.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* ignore */ } return undefined; }
+    return focus.apply(this, args);
+  };
+}
+
 (() => {
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, cls, text) => {
