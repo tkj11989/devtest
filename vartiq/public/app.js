@@ -628,6 +628,31 @@
   });
   paintAuth();
 
+  // Reading the Terms or Privacy Notice can reload this page (the Android app opens links in the same window).
+  // Keep what was typed for the length of the visit, and put it back.
+  const AUTH_KEEP = 'chat.auth.draft';
+  const authKeepFields = () => [...authForm.querySelectorAll('input, select')].filter((f) => f.name && !/code|pin/i.test(f.name));
+  document.querySelectorAll('#auth a[href^="/legal/"]').forEach((a) => a.addEventListener('click', () => {
+    try {
+      const values = {};
+      for (const f of authKeepFields()) values[f.name] = f.type === 'checkbox' ? f.checked : f.value;
+      sessionStorage.setItem(AUTH_KEEP, JSON.stringify({ auth: { mode: auth.mode, type: auth.type, loginBy: auth.loginBy }, values }));
+    } catch { /* storage unavailable */ }
+  }));
+  function restoreAuthDraft() {
+    let saved;
+    try { saved = JSON.parse(sessionStorage.getItem(AUTH_KEEP) || 'null'); sessionStorage.removeItem(AUTH_KEEP); } catch { return; }
+    if (!saved) return;
+    Object.assign(auth, saved.auth || {});
+    paintAuth();
+    for (const f of authKeepFields()) {
+      if (!(f.name in saved.values)) continue;
+      if (f.type === 'checkbox') f.checked = !!saved.values[f.name]; else f.value = saved.values[f.name];
+      if (f.tagName === 'SELECT') f.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    authForm.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
   function showAuth() {
     $('#app').classList.add('hidden');
     $('#auth').classList.remove('hidden');
@@ -7408,5 +7433,5 @@
   // ---------- boot ----------
   const saved = storage.get('chat.token');
   if (saved) start(saved);
-  else showAuth();
+  else { showAuth(); restoreAuthDraft(); }
 })();
