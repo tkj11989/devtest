@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PraYukTech – Products that make learning simple</title>
+<meta name="description" content="PraYukTech builds its own apps and platforms. Explore ExamSuit, our learning and testing platform, and our Android apps KnowledgeVerse and WordQuest.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header><div class="wrap nav">
+  <a href="#home" class="logo"><i aria-hidden="true"></i>PraYukTech</a>
+  <nav aria-label="Main"><ul id="menu">
+    <li><a href="#platform">Platform</a></li>
+    <li><a href="#apps">Android apps</a></li>
+    <li><a href="#about">About</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ul></nav>
+  <button class="menu-btn" id="menuBtn" aria-label="Menu" aria-expanded="false">☰</button>
+</div></header>
+
+<main>
+<section class="hero" id="home"><div class="wrap">
+  <div class="hero-in">
+    <h1>We build products that make learning simple</h1>
+    <p class="lead">We design and develop our own platforms and mobile apps, then release them for everyone.</p>
+    <div class="actions">
+      <a class="btn marker" href="#platform">Explore ExamSuit</a>
+      <a class="btn line" href="#apps">See Android apps</a>
+    </div>
+  </div>
+
+  <div class="quiz hero-in d2" id="quiz" aria-label="Try a sample ExamSuit question">
+    <div class="quiz-top"><span id="qnum">Question 1 of 3</span><span class="timer">Time left <b id="tm">30</b>s</span></div>
+    <div class="bar" id="bar"><span></span></div>
+    <div id="quizBody">
+      <div class="q-text" id="qText"></div>
+      <div class="opts" id="opts"></div>
+      <div class="fb" id="fb" aria-live="polite"></div>
+      <div class="q-foot"><span class="score" id="score">Score 0</span><button class="btn cobalt" id="next" type="button" hidden>Next question</button></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="platform" class="platform"><div class="wrap">
+  <div class="p-head">
+    <div>
+      <h2 class="brandmark"><a href="https://examsuit.com" target="_blank" rel="noopener" aria-label="ExamSuit"><img src="assets/examsuit-logo-dark.png" alt="ExamSuit - Practice, Prepare, Perform" width="720" height="182"></a></h2>
+      <p class="sub"><strong>Your Exam Success Partner.</strong> ExamSuit is an online test platform for competitive and Academic exam preparation. Practice · Prepare · Perform.</p>
+    </div>
+    <a class="btn marker" href="https://examsuit.com" target="_blank" rel="noopener">Visit examsuit.com</a>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="ExamSuit features">
+    <button class="tab" role="tab" id="t1" aria-controls="p1" aria-selected="true">Mock tests</button>
+    <button class="tab" role="tab" id="t2" aria-controls="p2" aria-selected="false">Analysis</button>
+    <button class="tab" role="tab" id="t3" aria-controls="p3" aria-selected="false">Current affairs</button>
+    <button class="tab" role="tab" id="t4" aria-controls="p4" aria-selected="false">Certificates</button>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p1" aria-labelledby="t1">
+    <div><h3>Practice under real exam conditions</h3><p>Timed mock tests that simulate real exam conditions, including negative marking. Track your progress on a personal dashboard.</p></div>
+    <div class="viz"><small>Sample question palette</small><div class="pal" id="pal"></div>
+      <div class="legend"><span><i class="sw nv"></i>Not Visited</span><span><i class="sw na"></i>Not Answered</span><span><i class="sw a"></i>Answered</span><span><i class="sw m"></i>Marked</span><span><i class="sw am"></i>Answered &amp; Marked</span><span><i class="sw sk"></i>Skipped</span><span><i class="sw cur"></i>Current</span></div></div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p2" aria-labelledby="t2" hidden>
+    <div><h3>See exactly where marks were lost</h3><p>Instant scoring and performance analysis show your weak spots as soon as you submit.</p></div>
+    <div class="viz"><small>Sample report</small>
+      <div class="row"><div class="lbl"><span>Quantitative</span><span>78%</span></div><div class="track"><i class="g" data-w="78"></i><i class="r" data-w="22"></i></div></div>
+      <div class="row"><div class="lbl"><span>Reasoning</span><span>64%</span></div><div class="track"><i class="g" data-w="64"></i><i class="r" data-w="36"></i></div></div>
+      <div class="row" style="margin-bottom:0"><div class="lbl"><span>English</span><span>91%</span></div><div class="track"><i class="g" data-w="91"></i><i class="r" data-w="9"></i></div></div>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p3" aria-labelledby="t3" hidden>
+    <div><h3>A new quiz every day</h3><p>The daily current-affairs quiz is available only on its scheduled date, so come back each day to keep up.</p></div>
+    <div class="viz"><small>Your week</small><div class="week" id="week"></div></div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p4" aria-labelledby="t4" hidden>
+    <div><h3>Certificates, issued automatically</h3><p>Pass an eligible test and meet the passing marks to receive your certificate. Institutions can manage certificates from their own dashboard.</p></div>
+    <div class="viz"><div class="cert"><div class="t">Certificate of Achievement</div><p>Awarded to your name for passing the test</p><div class="line"></div><p>Sample</p></div></div>
+  </div>
+</div></section>
+
+<section id="who"><div class="wrap aud">
+  <div>
+    <h2>Built for everyone who prepares</h2>
+    <p class="sub">Create a free account and take free mock tests. A subscription unlocks the full test library, previous year papers and detailed analytics.</p>
+    <a class="price-link" href="https://examsuit.com/pricing" target="_blank" rel="noopener">See ExamSuit pricing</a>
+    <div class="exams"><h3>Exams covered</h3><ul><li>Academic</li><li>Competitive</li></ul></div>
+  </div>
+  <div>
+    <details open><summary>Students</summary><p>Practice with mock tests, review your analysis and build a daily habit with the current-affairs quiz.</p></details>
+    <details><summary>Institutions</summary><p>Schools and coaching institutes get their own dashboard to manage students, exams, results and certificates, with optional proctoring for institution exams.</p></details>
+    <details><summary>Faculty</summary><p>Register to build question banks, then create and sell your own exams, either free, included in the subscription, or at a price you set.</p></details>
+  </div>
+</div></section>
+
+<section id="apps" class="apps"><div class="wrap">
+  <h2>Android apps</h2>
+  <p class="sub">Simple, focused apps designed to be fun and useful every day.</p>
+  <div class="apps-grid">
+    <article class="app">
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px">
+        <img src="assets/knowledgeverse-logo.png" alt="KnowledgeVerse logo" width="56" height="56" style="width:56px;height:56px;border-radius:14px;display:block">
+        <h3 style="margin:0">KnowledgeVerse</h3>
+        <span class="tag" style="margin:0">Android</span>
+      </div>
+      <p>A learning adventure for curious minds of every age. Travel through 11 worlds, from Math, Science, History, Space and Geography to Sports, Money, Mind Lab and Tech &amp; Coding, with 1,000 levels in each. Enjoy daily challenges, rewards and a coin shop. Available in English and Hindi, and it works offline with no account needed.</p>
+      <!-- TODO: Play Store link -->
+      <a class="btn cobalt" href="#">Get it on Google Play</a>
+    </article>
+    <article class="app">
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px">
+        <img src="assets/wordquest-logo.png" alt="WordQuest logo" width="56" height="56" style="width:56px;height:56px;border-radius:14px;display:block">
+        <h3 style="margin:0">WordQuest</h3>
+        <span class="tag" style="margin:0">Android</span>
+      </div>
+      <p>A word puzzle adventure that teaches English. Unscramble the letters to find each word, then build a correct sentence with grammar blocks. Play 5,000 levels across 50 worlds and learn over 3,000 words, with daily challenges, hints, and coins to unlock themes, map designs and outfits for your mascot. The menus follow your phone&rsquo;s language, with 14 languages including Hindi, Marathi, Gujarati, Bengali, Tamil, Telugu, Spanish, French, German and Russian. It works offline and needs no account.</p>
+      <!-- TODO: Play Store link -->
+      <a class="btn cobalt" href="#">Get it on Google Play</a>
+    </article>
+  </div>
+</div></section>
+
+<section id="about" class="about"><div class="wrap">
+  <p class="big">We build for ourselves and release publicly. No client work, just products we believe in.</p>
+  <div class="pts">
+    <div><h3>Own products</h3><p>Every app and platform is designed, built and maintained in-house.</p></div>
+    <div><h3>Learning focused</h3><p>Education, knowledge and language are at the heart of what we make.</p></div>
+    <div><h3>Privacy respected</h3><p>One clear <a href="privacy-policy.html">privacy policy</a> covers all our apps.</p></div>
+  </div>
+</div></section>
+
+<section id="contact" class="contact"><div class="wrap">
+  <h2>Get in touch</h2>
+  <p>Questions, feedback or support for our apps? Write to us.</p>
+  <a class="btn marker" href="mailto:Info@prayuktech.com">Info@prayuktech.com</a>
+</div></section>
+</main>
+
+<footer><div class="wrap foot">
+  <div>© <span id="year"></span> PraYukTech. All rights reserved.</div>
+  <div><a href="privacy-policy.html">Privacy Policy</a></div>
+</div></footer>
+<script src="js/main.js"></script>
+</body>
+</html>
