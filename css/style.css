@@ -31,6 +31,10 @@ nav a:hover{background:var(--paper);color:var(--ink)}
 .btn.line:hover{background:rgba(255,255,255,.12)}
 .btn.cobalt{background:var(--cobalt);color:#fff}
 .btn.cobalt:hover{background:var(--cobalt-d);transform:translateY(-3px)}
+.btn.play{display:inline-flex;align-items:center;gap:10px;background:#fff;color:var(--ink)}
+.btn.play:hover{transform:translateY(-3px);box-shadow:0 8px 0 rgba(255,255,255,.25)}
+.btn.play svg{color:var(--ok)}
+.p-actions{display:flex;gap:12px;flex-wrap:wrap}
 
 /* hero */
 .hero{background:var(--cobalt);color:#fff;padding:84px 0 96px;overflow:hidden;
