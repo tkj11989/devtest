@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Brain Quiz</title>
+<style>
+:root{
+  --bg:#f3f5fb;--card:#fff;--ink:#2d3354;--muted:#7a809c;--line:#d5d9ea;
+  --accent:#2f6fed;--accent-soft:#cfe8ff;--good:#1f9d55;--bad:#d64545;--cream:#fbefc5;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12152a;--card:#1f2340;--ink:#eef0fb;--muted:#9aa0c3;--line:#363b63;--accent:#6b9bff;--accent-soft:#2a4a85;--good:#4cd08a;--bad:#ff7a7a}
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+#app{max-width:620px;margin:0 auto;padding:12px 16px 40px}
+button{font:inherit;color:inherit;cursor:pointer}
+h1,h2,p{margin:0}
+
+/* menu */
+.hero{text-align:center;padding:18px 0 8px}
+.hero h1{font-size:34px;letter-spacing:-.5px}
+.hero p{color:var(--muted);margin-top:4px}
+.seg{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
+.seg button{border:0;background:transparent;padding:7px 16px;border-radius:999px;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--accent);color:#fff}
+.modebar{display:flex;justify-content:center;align-items:center;gap:10px;margin:14px 0 18px;flex-wrap:wrap}
+.modebar small{color:var(--muted)}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:440px){.cards{grid-template-columns:1fr}}
+.gcard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;text-align:left;display:flex;flex-direction:column;gap:6px;transition:transform .12s}
+.gcard:active{transform:scale(.98)}
+.gcard .ic{font-size:30px}
+.gcard b{font-size:18px}
+.gcard span{color:var(--muted);font-size:14px}
+.gcard i{font-style:normal;font-size:12px;color:var(--accent);font-weight:600}
+
+/* shell */
+.bar{display:flex;align-items:center;gap:10px;padding:4px 0 10px}
+.bar h1{flex:1;font-size:22px;text-align:center}
+.bar .timer{min-width:52px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:var(--muted)}
+.icon{border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px}
+.stats{display:flex;justify-content:space-around;gap:8px;margin-bottom:10px}
+.stat{text-align:center}
+.stat small{display:block;color:var(--muted);font-size:12px}
+.stat b{font-size:20px;font-variant-numeric:tabular-nums}
+.game-body{display:flex;flex-direction:column;align-items:center;gap:12px}
+.controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:10px 18px;font-weight:600}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.45}
+.msg{min-height:22px;text-align:center;color:var(--muted);font-weight:600}
+.msg.bad{color:var(--bad)}
+.modal{position:fixed;inset:0;background:rgba(10,12,30,.55);display:grid;place-items:center;z-index:10;padding:20px}
+.sheet{background:var(--card);border-radius:20px;padding:24px;max-width:340px;width:100%;text-align:center;display:flex;flex-direction:column;gap:10px}
+.sheet h2{font-size:26px}
+.sheet p{color:var(--muted)}
+.sheet .row{display:flex;gap:10px;justify-content:center;margin-top:8px}
+
+/* 1. slide */
+.slide{--w:min(92vw,480px);width:var(--w);aspect-ratio:1;display:grid;grid-template-columns:repeat(var(--n),1fr);gap:calc(var(--w)/var(--n)*.05);padding:10px;background:linear-gradient(#b7681f,#8c4d14);border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+.tile{border:0;border-radius:10px;background:linear-gradient(#f8e0b4,#e8b877);color:#6b3e12;font-weight:800;font-size:calc(var(--w)/var(--n)*.42);box-shadow:0 3px 0 #a9712f,inset 0 1px 0 #fff8;padding:0}
+.tile.ok{background:linear-gradient(#fbe9c4,#f1c98a)}
+.tile.blank{background:rgba(40,20,0,.45);box-shadow:inset 0 3px 8px rgba(0,0,0,.5)}
+.tile.hint{outline:4px solid #4aa3ff;outline-offset:-2px}
+
+/* 2. match */
+.mgrid{display:grid;grid-template-columns:repeat(9,1fr);width:min(92vw,440px);max-height:56vh;overflow:auto;border:2px solid var(--line);border-radius:6px;background:var(--card)}
+.mc{aspect-ratio:1;border:1px solid var(--line);background:transparent;font-size:clamp(22px,7vw,34px);font-weight:500;padding:0}
+.mc.done{opacity:.22;pointer-events:none}
+.mc.sel,.mc.hint{background:var(--accent-soft)}
+.mc.hint{animation:pulse .6s 2}
+@keyframes pulse{50%{background:var(--accent)}}
+.help{color:var(--muted);font-size:14px;text-align:center;max-width:420px}
+.badge{position:relative}
+.badge em{position:absolute;top:-6px;right:-6px;background:var(--accent);color:#fff;font-style:normal;font-size:12px;font-weight:700;min-width:20px;height:20px;border-radius:10px;display:grid;place-items:center}
+
+/* 3. crossword */
+.cw{--W:min(94vw,520px);width:var(--W);display:grid;grid-template-columns:repeat(var(--cols),1fr);--cell:calc(var(--W)/var(--cols))}
+.cwc{position:relative;aspect-ratio:1;background:var(--card);border:1px solid var(--ink);display:grid;place-items:center;font-weight:700;font-size:calc(var(--cell)*.55);text-transform:uppercase;user-select:none;cursor:pointer}
+.cwc.void{background:transparent;border:0;cursor:default}
+.cwc.inword{background:var(--accent-soft)}
+.cwc.cur{background:#ffd95a;color:#222}
+.cwc.bad{color:var(--bad)}
+.cwc.ok{color:var(--good)}
+.cwc .n{position:absolute;top:1px;left:3px;font-size:calc(var(--cell)*.26);font-weight:600;color:var(--muted)}
+.cluebar{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;width:min(94vw,520px);text-align:center;font-weight:600}
+.cluebar small{color:var(--accent);margin-right:6px}
+.kb{display:flex;flex-direction:column;gap:6px;align-items:center;width:min(96vw,520px)}
+.kb div{display:flex;gap:5px;justify-content:center;width:100%}
+.kb button{flex:1;max-width:46px;height:44px;border:1px solid var(--line);background:var(--card);border-radius:8px;font-weight:700;font-size:16px;padding:0}
+.kb button.wide{max-width:70px}
+.clues{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:min(94vw,520px);font-size:14px}
+.clues h3{margin:0 0 4px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.clues button{display:block;width:100%;text-align:left;border:0;background:transparent;padding:4px 6px;border-radius:6px;line-height:1.3}
+.clues button.act{background:var(--accent-soft)}
+.clues button.solved{text-decoration:line-through;color:var(--muted)}
+
+/* 4. math crossword */
+.mx{--W:min(96vw,560px);width:var(--W);display:grid;grid-template-columns:repeat(9,1fr)}
+.mt{aspect-ratio:1;display:grid;place-items:center;background:var(--cream);border:1px solid #cdb96f;color:#5a4712;font-weight:700;font-size:calc(var(--W)/9*.4);padding:0;user-select:none}
+.mt.void{visibility:hidden}
+.mt.slot{background:#fff;color:#1f3a8a;cursor:pointer}
+.mt.sel{outline:3px solid var(--accent);outline-offset:-3px;background:#e8f1ff}
+.mt.bad{background:#ffd9d9;color:#a11}
+.mt.lock{background:#dff3e7;color:#146c3c}
+.tray{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:min(96vw,560px);padding:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;min-height:64px}
+.chip{min-width:48px;height:44px;padding:0 10px;border:2px solid #7bb59a;background:#e6f5ef;color:#1f7a55;font-weight:800;font-size:20px;border-radius:6px}
+.chip.gone{visibility:hidden}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+/* ---------- helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+function h(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
+  return e;
+}
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("bq_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("bq_" + k, JSON.stringify(v)); } catch {} }
+};
+const rand = n => Math.floor(Math.random() * n);
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rand(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const fmt = s => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+const btn = (label, fn, cls = "") => h("button", { class: "btn " + cls, onclick: fn }, label);
+
+const app = $("#app");
+let mode = store.get("mode", "numbers");      // "numbers" | "letters"
+let current = null;
+
+/* ---------- shell ---------- */
+function stopCurrent() {
+  if (current) current.stop();
+  current = null;
+}
+
+function showMenu() {
+  stopCurrent();
+  const modeSeg = h("div", { class: "seg" });
+  const drawSeg = () => {
+    modeSeg.replaceChildren(...[["numbers", "123 Numbers"], ["letters", "ABC Letters"]].map(([k, t]) =>
+      h("button", { class: mode === k ? "on" : "", onclick: () => { mode = k; store.set("mode", k); drawSeg(); drawCards(); } }, t)));
+  };
+  const cards = h("div", { class: "cards" });
+  const drawCards = () => {
+    cards.replaceChildren(...Object.entries(GAMES).map(([key, g]) => {
+      const best = store.get("best_" + g.bestKey(), null);
+      return h("button", { class: "gcard", onclick: () => openGame(key) },
+        h("div", { class: "ic" }, g.icon), h("b", {}, g.title), h("span", {}, g.desc),
+        g.uses === "mode" ? h("i", {}, mode === "letters" ? "Playing with letters" : "Playing with numbers") :
+          h("i", {}, g.uses === "letters" ? "Letters only" : "Numbers only"),
+        best != null ? h("span", {}, "Best: " + g.fmtBest(best)) : null);
+    }));
+  };
+  drawSeg(); drawCards();
+  app.replaceChildren(
+    h("div", { class: "hero" }, h("h1", {}, "🧠 Brain Quiz"), h("p", {}, "Four puzzle games for numbers and letters")),
+    h("div", { class: "modebar" }, h("small", {}, "Slide & Match games use:"), modeSeg),
+    cards
+  );
+}
+
+function openGame(key) {
+  stopCurrent();
+  const g = GAMES[key];
+  const timerEl = h("span", { class: "timer" }, "0:00");
+  const stats = h("div", { class: "stats" });
+  const body = h("div", { class: "game-body" });
+  const controls = h("div", { class: "controls" });
+  app.replaceChildren(
+    h("header", { class: "bar" }, h("button", { class: "icon", "aria-label": "Back", onclick: showMenu }, "←"), h("h1", {}, g.title), timerEl),
+    stats, body, controls);
+  let secs = 0, iv = null, modal = null;
+  const cleanups = [];
+  const statEls = {};
+  const ctx = {
+    body, controls, mode,
+    onStop: fn => cleanups.push(fn),
+    startTimer() { secs = 0; timerEl.textContent = "0:00"; clearInterval(iv); iv = setInterval(() => { secs++; timerEl.textContent = fmt(secs); }, 1000); },
+    stopTimer() { clearInterval(iv); return secs; },
+    stat(id, label, val) {
+      if (!statEls[id]) { statEls[id] = h("b", {}, ""); stats.append(h("div", { class: "stat" }, h("small", {}, label), statEls[id])); }
+      statEls[id].textContent = val;
+    },
+    clearStats() { stats.replaceChildren(); for (const k in statEls) delete statEls[k]; },
+    best(val, lowerIsBetter = true) {
+      const k = "best_" + g.bestKey();
+      const old = store.get(k, null);
+      const isNew = old == null || (lowerIsBetter ? val < old : val > old);
+      if (isNew) store.set(k, val);
+      return { best: isNew ? val : old, isNew };
+    },
+    win(title, lines, again) {
+      if (modal) modal.remove();
+      modal = h("div", { class: "modal" }, h("div", { class: "sheet" },
+        h("h2", {}, title), lines.map(l => h("p", {}, l)),
+        h("div", { class: "row" }, btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu))));
+      document.body.append(modal);
+    },
+    get modalOpen() { return !!modal && modal.isConnected; }
+  };
+  current = { stop() { clearInterval(iv); if (modal) modal.remove(); cleanups.forEach(f => f()); } };
+  g.run(ctx);
+}
+
+/* ======================================================================
+   1. NUMBER / LETTER SLIDE
+   ====================================================================== */
+function slideGame(ctx) {
+  const letters = ctx.mode === "letters";
+  const label = v => letters ? String.fromCharCode(64 + v) : String(v);
+  let n = store.get("slideN", 4), tiles = [], hist = [], moves = 0, hintIdx = -1, solved = false;
+  const board = h("div", { class: "slide" });
+  const sizeSeg = h("div", { class: "seg" });
+  ctx.body.append(board, h("p", { class: "help" }, `Slide the ${letters ? "letters into A, B, C…" : "numbers into order 1, 2, 3…"} Tap any tile in the blank's row or column.`));
+
+  const total = () => n * n;
+  const isSolved = () => tiles.every((v, i) => i === total() - 1 ? v === 0 : v === i + 1);
+  const draw = () => {
+    board.style.setProperty("--n", n);
+    board.replaceChildren(...tiles.map((v, i) => v
+      ? h("button", { class: "tile" + (v === i + 1 ? " ok" : "") + (i === hintIdx ? " hint" : ""), onclick: () => tap(i) }, label(v))
+      : h("div", { class: "tile blank" })));
+    ctx.stat("moves", "Moves", moves);
+  };
+  const slideTo = (arr, idx) => {
+    const b = arr.indexOf(0), r = Math.floor(idx / n), c = idx % n, br = Math.floor(b / n), bc = b % n;
+    if (r === br) { const d = Math.sign(c - bc); for (let k = bc; k !== c; k += d) arr[r * n + k] = arr[r * n + k + d]; }
+    else if (c === bc) { const d = Math.sign(r - br); for (let k = br; k !== r; k += d) arr[k * n + c] = arr[(k + d) * n + c]; }
+    else return false;
+    arr[idx] = 0; return true;
+  };
+  function tap(i) {
+    if (solved) return;
+    const before = tiles.slice();
+    if (!slideTo(tiles, i)) return;
+    hist.push(before); moves++; hintIdx = -1; draw();
+    if (isSolved()) {
+      solved = true;
+      const t = ctx.stopTimer(), r = ctx.best(moves);
+      ctx.win("Solved! 🎉", [`${moves} moves in ${fmt(t)}`, r.isNew ? "New best!" : `Best: ${r.best} moves`], newGame);
+    }
+  }
+  function undo() { if (solved || !hist.length) return; tiles = hist.pop(); moves++; hintIdx = -1; draw(); }
+  function hint() {
+    if (solved) return;
+    const b = tiles.indexOf(0), br = Math.floor(b / n), bc = b % n;
+    const dist = (v, i) => Math.abs(Math.floor((v - 1) / n) - Math.floor(i / n)) + Math.abs((v - 1) % n - i % n);
+    let best = null;
+    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const r = br + dr, c = bc + dc;
+      if (r < 0 || c < 0 || r >= n || c >= n) continue;
+      const j = r * n + c, gain = dist(tiles[j], j) - dist(tiles[j], b);
+      if (!best || gain > best.gain) best = { j, gain };
+    }
+    hintIdx = best.j; draw();
+    setTimeout(() => { hintIdx = -1; if (current) draw(); }, 1600);
+  }
+  function newGame() {
+    solved = false; moves = 0; hist = []; hintIdx = -1;
+    do {
+      tiles = Array.from({ length: total() }, (_, i) => (i + 1) % total());
+      let b = total() - 1, prev = -1;
+      for (let k = 0; k < n * n * 40; k++) {
+        const r = Math.floor(b / n), c = b % n, opts = [];
+        if (r > 0) opts.push(b - n); if (r < n - 1) opts.push(b + n);
+        if (c > 0) opts.push(b - 1); if (c < n - 1) opts.push(b + 1);
+        const pool = opts.filter(x => x !== prev), nb = pool[rand(pool.length)];
+        tiles[b] = tiles[nb]; tiles[nb] = 0; prev = b; b = nb;
+      }
+    } while (isSolved());
+    draw(); ctx.startTimer();
+  }
+  const drawSizes = () => sizeSeg.replaceChildren(...[3, 4, 5].map(s =>
+    h("button", { class: s === n ? "on" : "", onclick: () => { n = s; store.set("slideN", s); drawSizes(); newGame(); } }, `${s}×${s}`)));
+  drawSizes();
+  ctx.controls.append(sizeSeg, btn("↶ Undo", undo), btn("💡 Hint", hint), btn("⟳ New", newGame));
+  newGame();
+}
+
+/* ======================================================================
+   2. FIND PAIRS & SUMS OF 10  (Number Match)
+   ====================================================================== */
+function matchGame(ctx) {
+  const letters = ctx.mode === "letters";
+  const label = v => letters ? String.fromCharCode(64 + v) : String(v);
+  const COLS = 9;
+  let cells, sel, score, plusLeft, hintsLeft, hintPair, over;
+  const grid = h("div", { class: "mgrid" });
+  const msg = h("div", { class: "msg" });
+  const plusBtn = h("button", { class: "btn badge", onclick: () => plus() }, "＋ Add numbers", h("em", {}, ""));
+  const hintBtn = h("button", { class: "btn badge", onclick: () => hint() }, "💡 Hint", h("em", {}, ""));
+  ctx.body.append(h("p", { class: "help" }, letters
+    ? "Tap two letters that are the same, or that are partners (A+I, B+H, C+G, D+F, E+E — letters count A=1 … I=9). They must see each other along a row or column with nothing left between."
+    : "Tap two numbers that are equal or add up to 10. They must see each other along a row or column with nothing left between."),
+    grid, msg);
+
+  const connected = (i, j) => {
+    if (i > j) [i, j] = [j, i];
+    const free = step => { for (let k = i + step; k < j; k += step) if (!cells[k].done) return false; return true; };
+    if (i % COLS === j % COLS && free(COLS)) return true;
+    if (Math.floor(i / COLS) === Math.floor(j / COLS) && free(1)) return true;
+    return free(1);                       // wrap from end of one row to start of the next
+  };
+  const ok = (i, j) => { const a = cells[i].v, b = cells[j].v; return !cells[i].done && !cells[j].done && (a === b || a + b === 10) && connected(i, j); };
+  const findPair = () => {
+    const act = cells.map((c, i) => c.done ? -1 : i).filter(i => i >= 0);
+    for (let a = 0; a < act.length; a++) for (let b = a + 1; b < act.length; b++) if (ok(act[a], act[b])) return [act[a], act[b]];
+    return null;
+  };
+  const draw = () => {
+    grid.replaceChildren(...cells.map((c, i) => h("button", {
+      class: "mc" + (c.done ? " done" : "") + (i === sel ? " sel" : "") + (hintPair && hintPair.includes(i) ? " hint" : ""),
+      onclick: () => tap(i)
+    }, label(c.v))));
+    ctx.stat("score", "Score", score);
+    ctx.stat("left", "Left", cells.filter(c => !c.done).length);
+    plusBtn.lastChild.textContent = plusLeft; plusBtn.disabled = plusLeft <= 0 || over;
+    hintBtn.lastChild.textContent = hintsLeft; hintBtn.disabled = hintsLeft <= 0 || over;
+  };
+  const afterMove = () => {
+    // drop fully cleared rows
+    const rows = [];
+    for (let r = 0; r * COLS < cells.length; r++) rows.push(cells.slice(r * COLS, r * COLS + COLS));
+    cells = rows.filter(r => !r.every(c => c.done)).flat();
+    hintPair = null; sel = -1;
+    if (!cells.length) {
+      over = true; draw();
+      const t = ctx.stopTimer(), r = ctx.best(score, false);
+      ctx.win("Board cleared! 🎉", [`Score ${score} in ${fmt(t)}`, r.isNew ? "New best score!" : `Best: ${r.best}`], newGame);
+    } else if (!findPair() && plusLeft === 0) {
+      over = true; msg.textContent = "No more moves — tap New to try again."; msg.className = "msg bad"; draw(); ctx.stopTimer();
+    } else { msg.textContent = findPair() ? "" : "No pairs left — use ＋ to add numbers."; msg.className = "msg"; draw(); }
+  };
+  function tap(i) {
+    if (over || cells[i].done) return;
+    if (sel < 0) { sel = i; draw(); return; }
+    if (sel === i) { sel = -1; draw(); return; }
+    if (ok(sel, i)) { cells[sel].done = cells[i].done = true; score += 10; afterMove(); }
+    else { msg.textContent = "Not a valid pair"; msg.className = "msg bad"; setTimeout(() => { if (msg.textContent === "Not a valid pair") msg.textContent = ""; }, 900); sel = i; draw(); }
+  }
+  function plus() {
+    if (over || plusLeft <= 0) return;
+    plusLeft--; cells.push(...cells.filter(c => !c.done).map(c => ({ v: c.v, done: false })));
+    hintPair = null; msg.textContent = ""; draw(); grid.scrollTop = grid.scrollHeight;
+  }
+  function hint() {
+    if (over || hintsLeft <= 0) return;
+    const p = findPair(); if (!p) { msg.textContent = "No pairs available — try ＋"; return; }
+    hintsLeft--; hintPair = p; sel = -1; draw();
+  }
+  function newGame() {
+    cells = Array.from({ length: COLS * 5 }, () => ({ v: 1 + rand(9), done: false }));
+    sel = -1; score = 0; plusLeft = 4; hintsLeft = 5; hintPair = null; over = false; msg.textContent = "";
+    draw(); ctx.startTimer();
+  }
+  ctx.controls.append(plusBtn, hintBtn, btn("⟳ New", newGame));
+  newGame();
+}
+
+/* ======================================================================
+   3. WORD CROSSWORD  (letters)
+   ====================================================================== */
+const BANK = [
+  ["PLANET", "Earth is one"], ["OCEAN", "Large body of salt water"], ["PIANO", "Instrument with 88 keys"], ["TIGER", "Striped big cat"],
+  ["BREAD", "Baked from dough"], ["CLOUD", "Floats in the sky"], ["RIVER", "Flowing water"], ["APPLE", "Fruit a day keeps the doctor away"],
+  ["MONEY", "Cash"], ["CHAIR", "Seat with a back"], ["SUGAR", "Sweet crystals"], ["LEMON", "Sour yellow fruit"], ["EARTH", "Our home planet"],
+  ["HEART", "Pumps blood"], ["MUSIC", "Notes and rhythm"], ["GRAPE", "Wine starts as this"], ["ROBOT", "Mechanical helper"], ["STORM", "Thunder and lightning"],
+  ["BEACH", "Sandy shore"], ["TRAIN", "Runs on rails"], ["PAPER", "You write on it"], ["QUEEN", "Chess piece"], ["SMILE", "Happy face"],
+  ["WATER", "H2O"], ["SPACE", "Final frontier"], ["LIGHT", "Opposite of dark"], ["HORSE", "Gallops"], ["GLOBE", "Model of the Earth"],
+  ["CANDLE", "Wax light"], ["GARDEN", "Where flowers grow"], ["ORANGE", "Citrus fruit and a colour"], ["SUMMER", "Hottest season"], ["WINTER", "Coldest season"],
+  ["ROCKET", "Launched into space"], ["BRIDGE", "Spans a river"], ["FOREST", "Many trees"], ["DESERT", "Dry sandy land"], ["ISLAND", "Land surrounded by water"],
+  ["MIRROR", "Shows your reflection"], ["WINDOW", "Glass in a wall"], ["CASTLE", "Home of a king"], ["DRAGON", "Fire-breathing myth"], ["PENCIL", "Writes and can be erased"],
+  ["SILVER", "Metal with symbol Ag"], ["TEMPLE", "Place of worship"], ["JUNGLE", "Dense tropical forest"], ["MONKEY", "Banana lover"], ["PARROT", "Talking bird"],
+  ["TURTLE", "Slow shelled reptile"], ["COFFEE", "Morning brew"], ["MOON", "Night-sky satellite"], ["STAR", "Twinkles at night"], ["FISH", "Swims"],
+  ["BIRD", "Has wings"], ["RAIN", "Falls from clouds"], ["SNOW", "White winter flakes"], ["TREE", "Has leaves and a trunk"], ["BOOK", "You read it"],
+  ["KING", "Rules a kingdom"], ["GOLD", "Precious yellow metal"], ["WIND", "Moving air"], ["FIRE", "Hot and bright"], ["SEVEN", "Days in a week"], ["EIGHT", "Legs on a spider"]
+];
+
+function generateCrossword(target) {
+  const G = 17;
+  let best = null;
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const words = shuffle(BANK.slice());
+    const grid = Array.from({ length: G }, () => Array(G).fill(null));
+    const placed = [];
+    const inb = (r, c) => r >= 0 && c >= 0 && r < G && c < G;
+    const empty = (r, c) => !inb(r, c) || !grid[r][c];
+    const canPlace = (w, r, c, dir) => {
+      const dr = dir === "D" ? 1 : 0, dc = dir === "A" ? 1 : 0;
+      if (!inb(r, c) || !inb(r + dr * (w.length - 1), c + dc * (w.length - 1))) return false;
+      if (!empty(r - dr, c - dc) || !empty(r + dr * w.length, c + dc * w.length)) return false;
+      let cross = 0;
+      for (let i = 0; i < w.length; i++) {
+        const rr = r + dr * i, cc = c + dc * i, cell = grid[rr][cc];
+        if (cell) { if (cell.ch !== w[i] || cell[dir]) return false; cross++; }
+        else if (!empty(rr + dc, cc + dr) || !empty(rr - dc, cc - dr)) return false;
+      }
+      return cross >= 1;
+    };
+    const put = (w, clue, r, c, dir) => {
+      const dr = dir === "D" ? 1 : 0, dc = dir === "A" ? 1 : 0;
+      for (let i = 0; i < w.length; i++) {
+        const rr = r + dr * i, cc = c + dc * i;
+        const cell = grid[rr][cc] || (grid[rr][cc] = { ch: w[i], A: false, D: false });
+        cell[dir] = true;
+      }
+      placed.push({ word: w, clue, r, c, dir });
+    };
+    const first = words.find(x => x[0].length >= 6) || words[0];
+    put(first[0], first[1], Math.floor(G / 2), Math.floor((G - first[0].length) / 2), "A");
+    for (let pass = 0; pass < 3 && placed.length < target; pass++) {
+      for (const [w, clue] of words) {
+        if (placed.length >= target) break;
+        if (placed.some(p => p.word === w)) continue;
+        const cands = [];
+        for (let i = 0; i < w.length; i++) for (let r = 0; r < G; r++) for (let c = 0; c < G; c++) {
+          if (!grid[r][c] || grid[r][c].ch !== w[i]) continue;
+          for (const dir of ["A", "D"]) {
+            const r0 = dir === "D" ? r - i : r, c0 = dir === "A" ? c - i : c;
+            if (canPlace(w, r0, c0, dir)) cands.push([r0, c0, dir]);
+          }
+        }
+        if (cands.length) { const [r0, c0, dir] = cands[rand(cands.length)]; put(w, clue, r0, c0, dir); }
+      }
+    }
+    const score = placed.length * 100 - (Math.max(...placed.map(p => p.r + (p.dir === "D" ? p.word.length : 1))) - Math.min(...placed.map(p => p.r)))
+      - (Math.max(...placed.map(p => p.c + (p.dir === "A" ? p.word.length : 1))) - Math.min(...placed.map(p => p.c)));
+    if (!best || score > best.score) best = { placed, score };
+    if (placed.length >= target) break;
+  }
+  return best.placed;
+}
+
+function crossGame(ctx) {
+  let entries, cells, user, sel, dir, bad, hints, over, minR, minC, rows, cols;
+  const board = h("div", { class: "cw" });
+  const cluebar = h("div", { class: "cluebar" });
+  const kb = h("div", { class: "kb" });
+  const clues = h("div", { class: "clues" });
+  const msg = h("div", { class: "msg" });
+  ctx.body.append(board, cluebar, kb, msg, clues);
+
+  const key = (r, c) => r + "," + c;
+  const entryCells = e => Array.from({ length: e.word.length }, (_, i) => [e.r + (e.dir === "D" ? i : 0), e.c + (e.dir === "A" ? i : 0)]);
+  const curEntry = () => { const cell = cells.get(sel); return cell && cell[dir] != null ? entries[cell[dir]] : null; };
+  const entrySolved = e => entryCells(e).every(([r, c]) => user.get(key(r, c)) === cells.get(key(r, c)).ch);
+
+  function build() {
+    entries = generateCrossword(9);
+    minR = Math.min(...entries.map(e => e.r)); minC = Math.min(...entries.map(e => e.c));
+    const maxR = Math.max(...entries.map(e => e.r + (e.dir === "D" ? e.word.length - 1 : 0)));
+    const maxC = Math.max(...entries.map(e => e.c + (e.dir === "A" ? e.word.length - 1 : 0)));
+    rows = maxR - minR + 1; cols = maxC - minC + 1;
+    // numbering
+    entries.sort((a, b) => a.r - b.r || a.c - b.c || (a.dir < b.dir ? -1 : 1));
+    cells = new Map(); let num = 0, lastKey = "";
+    entries.forEach((e, idx) => {
+      const k = key(e.r, e.c);
+      if (k !== lastKey) { num++; lastKey = k; }
+      e.num = num;
+      entryCells(e).forEach(([r, c], i) => {
+        const kk = key(r, c);
+        if (!cells.has(kk)) cells.set(kk, { r, c, ch: e.word[i] });
+        cells.get(kk)[e.dir] = idx;
+        if (i === 0) cells.get(kk).num = num;
+      });
+    });
+    user = new Map(); bad = new Set(); hints = 3; over = false; msg.textContent = "";
+    const e0 = entries[0]; sel = key(e0.r, e0.c); dir = e0.dir;
+    draw(); ctx.startTimer();
+  }
+
+  function draw() {
+    board.style.setProperty("--cols", cols);
+    const ce = curEntry(), inWord = new Set(ce ? entryCells(ce).map(([r, c]) => key(r, c)) : []);
+    const out = [];
+    for (let r = minR; r < minR + rows; r++) for (let c = minC; c < minC + cols; c++) {
+      const k = key(r, c), cell = cells.get(k);
+      if (!cell) { out.push(h("div", { class: "cwc void" })); continue; }
+      const val = user.get(k) || "";
+      out.push(h("div", {
+        class: "cwc" + (inWord.has(k) ? " inword" : "") + (k === sel ? " cur" : "") + (bad.has(k) ? " bad" : ""),
+        onclick: () => clickCell(k)
+      }, cell.num ? h("span", { class: "n" }, cell.num) : null, val));
+    }
+    board.replaceChildren(...out);
+    cluebar.replaceChildren(ce ? h("span", {}, h("small", {}, ce.num + (ce.dir === "A" ? " ACROSS" : " DOWN")), ce.clue + ` (${ce.word.length})`) : "Tap a cell");
+    const list = d => h("div", {}, h("h3", {}, d === "A" ? "Across" : "Down"),
+      entries.filter(e => e.dir === d).map(e => h("button", {
+        class: (ce === e ? "act " : "") + (entrySolved(e) ? "solved" : ""),
+        onclick: () => { sel = key(e.r, e.c); dir = e.dir; draw(); }
+      }, `${e.num}. ${e.clue}`)));
+    clues.replaceChildren(list("A"), list("D"));
+    ctx.stat("solved", "Words", entries.filter(entrySolved).length + "/" + entries.length);
+    ctx.stat("hints", "Hints", hints);
+  }
+
+  function clickCell(k) {
+    const cell = cells.get(k);
+    if (k === sel && cell.A != null && cell.D != null) dir = dir === "A" ? "D" : "A";
+    else { sel = k; if (cell[dir] == null) dir = dir === "A" ? "D" : "A"; }
+    draw();
+  }
+  const step = (k, d) => { const [r, c] = k.split(",").map(Number); const nk = key(r + (dir === "D" ? d : 0), c + (dir === "A" ? d : 0)); const nc = cells.get(nk); return nc && nc[dir] != null && nc[dir] === cells.get(k)[dir] ? nk : null; };
+
+  function typeLetter(L) {
+    if (over) return;
+    bad.clear(); user.set(sel, L);
+    const nx = step(sel, 1); if (nx) sel = nx;
+    draw(); checkWin();
+  }
+  function backspace() {
+    if (over) return;
+    bad.clear();
+    if (user.get(sel)) user.delete(sel);
+    else { const pv = step(sel, -1); if (pv) { sel = pv; user.delete(pv); } }
+    draw();
+  }
+  function checkWin() {
+    if (![...cells.keys()].every(k => user.get(k) === cells.get(k).ch)) return;
+    over = true; const t = ctx.stopTimer(), r = ctx.best(t);
+    ctx.win("Crossword complete! 🎉", [`Solved in ${fmt(t)} using ${3 - hints} hint(s)`, r.isNew ? "New best time!" : `Best: ${fmt(r.best)}`], build);
+  }
+  function check() {
+    bad = new Set([...user].filter(([k, v]) => v !== cells.get(k).ch).map(([k]) => k));
+    msg.textContent = bad.size ? `${bad.size} wrong letter(s) in red` : "All letters so far are correct 👍"; msg.className = "msg" + (bad.size ? " bad" : "");
+    draw();
+  }
+  function hint() {
+    if (over || hints <= 0) return;
+    if (user.get(sel) === cells.get(sel).ch) return;
+    hints--; bad.clear(); user.set(sel, cells.get(sel).ch);
+    const nx = step(sel, 1); if (nx) sel = nx;
+    draw(); checkWin();
+  }
+  const onKey = e => {
+    if (ctx.modalOpen || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^[a-zA-Z]$/.test(e.key)) { typeLetter(e.key.toUpperCase()); e.preventDefault(); }
+    else if (e.key === "Backspace") { backspace(); e.preventDefault(); }
+    else if (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const [r, c] = sel.split(",").map(Number);
+      const dr = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0, dc = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      const nk = key(r + dr, c + dc);
+      if (cells.has(nk)) { sel = nk; if (cells.get(nk)[dir] == null) dir = dir === "A" ? "D" : "A"; draw(); e.preventDefault(); }
+    }
+  };
+  document.addEventListener("keydown", onKey); ctx.onStop(() => document.removeEventListener("keydown", onKey));
+
+  ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"].forEach((row, i) => {
+    const r = h("div", {}, [...row].map(L => h("button", { onclick: () => typeLetter(L) }, L)));
+    if (i === 2) r.append(h("button", { class: "wide", "aria-label": "Delete", onclick: backspace }, "⌫"));
+    kb.append(r);
+  });
+  ctx.controls.append(btn("✔ Check", check), btn("💡 Hint letter", hint), btn("⟳ New", build));
+  build();
+}
+
+/* ======================================================================
+   4. MATH CROSSWORD  (numbers)
+   ====================================================================== */
+const MOPS = { "+": (a, b) => a + b, "−": (a, b) => a - b, "×": (a, b) => a * b, "÷": (a, b) => b !== 0 && a % b === 0 ? a / b : NaN };
+const LEVELS = {
+  Easy: { ops: ["+", "−"], max: 20, hide: 5 },
+  Medium: { ops: ["+", "−", "×"], max: 40, hide: 7 },
+  Hard: { ops: ["+", "−", "×", "÷"], max: 60, hide: 9 }
+};
+
+function mathGame(ctx) {
+  let level = store.get("mathLevel", "Easy"), cellsMap, eqs, chips, sel, locked, bad, hints, over;
+  const board = h("div", { class: "mx" });
+  const tray = h("div", { class: "tray" });
+  const msg = h("div", { class: "msg" });
+  const levelSeg = h("div", { class: "seg" });
+  ctx.body.append(board, msg, tray, h("p", { class: "help" }, "Tap an empty box, then tap a number below to place it. Every row and column equation must be true. Tap a placed number to take it back."));
+
+  const key = (r, c) => r + "," + c;
+  function generate() {
+    const L = LEVELS[level];
+    // two squares sharing the middle column: 7 equations, 6 corner numbers, 7 middle numbers
+    const defs = [];
+    const rowEq = (r, c0) => defs.push(Array.from({ length: 5 }, (_, i) => [r, c0 + i]));
+    const colEq = c => defs.push(Array.from({ length: 5 }, (_, i) => [i, c]));
+    rowEq(0, 0); rowEq(0, 4); rowEq(4, 0); rowEq(4, 4); colEq(0); colEq(4); colEq(8);
+    for (let tries = 0; tries < 500; tries++) {
+      const vals = new Map(), ops = new Map();
+      for (const r of [0, 4]) for (const c of [0, 4, 8]) vals.set(key(r, c), 2 + rand(L.max - 1));
+      let ok = true;
+      for (const d of defs) {
+        const x = vals.get(key(...d[0])), z = vals.get(key(...d[4])), opts = [];
+        for (const op of L.ops) for (let y = 1; y <= L.max; y++) if (MOPS[op](x, y) === z) opts.push([op, y]);
+        if (!opts.length) { ok = false; break; }
+        // prefer variety: pick a random operator, then one of its options
+        const byOp = L.ops.filter(o => opts.some(p => p[0] === o)), op = byOp[rand(byOp.length)];
+        const pick = opts.filter(p => p[0] === op)[rand(opts.filter(p => p[0] === op).length)];
+        vals.set(key(...d[2]), pick[1]); ops.set(key(...d[1]), pick[0]);
+      }
+      if (!ok) continue;
+      const map = new Map();
+      defs.forEach(d => d.forEach(([r, c], i) => {
+        const k = key(r, c);
+        if (i === 3) map.set(k, { r, c, kind: "eq", text: "=" });
+        else if (i === 1) map.set(k, { r, c, kind: "op", text: ops.get(k) });
+        else if (!map.has(k)) map.set(k, { r, c, kind: "num", ans: vals.get(k), hidden: false, chip: null });
+      }));
+      const nums = [...map.values()].filter(c => c.kind === "num");
+      shuffle(nums).slice(0, L.hide).forEach(c => c.hidden = true);
+      return { map, defs };
+    }
+  }
+  function newGame() {
+    const g = generate(); cellsMap = g.map; eqs = g.defs;
+    chips = shuffle([...cellsMap.values()].filter(c => c.hidden).map(c => ({ v: c.ans, cell: null }))).sort((a, b) => a.v - b.v);
+    locked = new Set(); bad = new Set(); hints = 3; over = false; msg.textContent = "";
+    sel = firstEmpty();
+    draw(); ctx.startTimer();
+  }
+  const shown = c => c.kind !== "num" ? c.text : c.hidden ? (c.chip == null ? "" : chips[c.chip].v) : c.ans;
+  function draw() {
+    const out = [];
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 9; c++) {
+      const k = key(r, c), cell = cellsMap.get(k);
+      if (!cell) { out.push(h("div", { class: "mt void" })); continue; }
+      const slot = cell.kind === "num" && cell.hidden;
+      out.push(h(slot ? "button" : "div", {
+        class: "mt" + (slot ? " slot" : "") + (k === sel ? " sel" : "") + (bad.has(k) ? " bad" : "") + (locked.has(k) ? " lock" : ""),
+        onclick: slot ? () => tapCell(k) : () => { }
+      }, shown(cell)));
+    }
+    board.replaceChildren(...out);
+    tray.replaceChildren(...chips.map((ch, i) => h("button", { class: "chip" + (ch.cell != null ? " gone" : ""), onclick: () => tapChip(i) }, ch.v)));
+    ctx.stat("left", "To place", chips.filter(c => c.cell == null).length);
+    ctx.stat("hints", "Hints", hints);
+  }
+  const firstEmpty = () => { const c = [...cellsMap.values()].find(c => c.hidden && c.chip == null); return c ? key(c.r, c.c) : null; };
+  function free(cell) { if (cell.chip != null) { chips[cell.chip].cell = null; cell.chip = null; } }
+  function tapCell(k) {
+    if (over) return;
+    const cell = cellsMap.get(k);
+    bad.clear();
+    if (locked.has(k)) { draw(); return; }
+    if (cell.chip != null) { free(cell); sel = k; } else sel = k;
+    draw();
+  }
+  function tapChip(i) {
+    if (over || chips[i].cell != null) return;
+    bad.clear();
+    if (!sel || locked.has(sel)) sel = firstEmpty();
+    if (!sel) return;
+    const cell = cellsMap.get(sel);
+    free(cell); chips[i].cell = sel; cell.chip = i;
+    sel = firstEmpty();
+    draw(); check();
+  }
+  function evalEq(d) {
+    const v = d.map(([r, c]) => shown(cellsMap.get(key(r, c))));
+    return v[0] !== "" && v[2] !== "" && v[4] !== "" && MOPS[v[1]](v[0], v[2]) === v[4];
+  }
+  function check() {
+    if (chips.some(c => c.cell == null)) return;
+    const failing = eqs.filter(d => !evalEq(d));
+    if (!failing.length) {
+      over = true; const t = ctx.stopTimer(), r = ctx.best(t);
+      draw();
+      ctx.win("Solved! 🎉", [`${level} level in ${fmt(t)}`, r.isNew ? "New best time!" : `Best: ${fmt(r.best)}`], newGame);
+    } else {
+      failing.forEach(d => d.forEach(([r, c]) => { if (cellsMap.get(key(r, c)).kind === "num") bad.add(key(r, c)); }));
+      msg.textContent = "Some equations don't work yet — they're highlighted in red."; msg.className = "msg bad"; draw();
+    }
+  }
+  function hint() {
+    if (over || hints <= 0) return;
+    const target = [...cellsMap.values()].find(c => c.hidden && !locked.has(key(c.r, c.c)) && (sel === key(c.r, c.c)) && (c.chip == null || chips[c.chip].v !== c.ans))
+      || [...cellsMap.values()].find(c => c.hidden && !locked.has(key(c.r, c.c)) && (c.chip == null || chips[c.chip].v !== c.ans));
+    if (!target) return;
+    const lockedChipIdx = new Set([...cellsMap.values()].filter(c => locked.has(key(c.r, c.c))).map(c => c.chip));
+    let ci = chips.findIndex((ch, i) => ch.v === target.ans && ch.cell == null);
+    if (ci < 0) ci = chips.findIndex((ch, i) => ch.v === target.ans && !lockedChipIdx.has(i));
+    free(target);
+    if (chips[ci].cell != null) free(cellsMap.get(chips[ci].cell));
+    chips[ci].cell = key(target.r, target.c); target.chip = ci;
+    locked.add(key(target.r, target.c)); hints--; bad.clear(); msg.textContent = "";
+    sel = firstEmpty(); draw(); check();
+  }
+  const drawLevels = () => levelSeg.replaceChildren(...Object.keys(LEVELS).map(l =>
+    h("button", { class: l === level ? "on" : "", onclick: () => { level = l; store.set("mathLevel", l); drawLevels(); newGame(); } }, l)));
+  drawLevels();
+  ctx.controls.append(levelSeg, btn("💡 Hint", hint), btn("⟳ New", newGame));
+  newGame();
+}
+
+/* ---------- registry ---------- */
+const GAMES = {
+  slide: {
+    title: "Slide Puzzle", icon: "🔢", desc: "Slide tiles into order using the empty space.", uses: "mode",
+    run: slideGame, bestKey: () => "slide" + store.get("slideN", 4) + mode, fmtBest: v => v + " moves"
+  },
+  match: {
+    title: "Pairs & Sums of 10", icon: "🔟", desc: "Clear the board by matching equal pairs or pairs that make 10.", uses: "mode",
+    run: matchGame, bestKey: () => "match" + mode, fmtBest: v => v + " pts"
+  },
+  cross: {
+    title: "Word Crossword", icon: "🔤", desc: "Fresh crossword every time. Fill the grid from the clues.", uses: "letters",
+    run: crossGame, bestKey: () => "cross", fmtBest: fmt
+  },
+  math: {
+    title: "Math Crossword", icon: "➕", desc: "Drop numbers into the grid so every equation is true.", uses: "numbers",
+    run: mathGame, bestKey: () => "math" + store.get("mathLevel", "Easy"), fmtBest: fmt
+  }
+};
+
+showMenu();
+</script>
+</body>
+</html>
