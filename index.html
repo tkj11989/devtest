@@ -16,42 +16,45 @@
     --board:#262b52;--tile:#323869;--tile-edge:#171a35;--tile-ink:#eef0fb;--empty:#1a1d3b;--good-soft:#1d4a37;--bad-soft:#5a2530}
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0}
-body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
-#app{max-width:620px;margin:0 auto;padding:12px 16px 40px}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;touch-action:manipulation}
+#shell{position:fixed;inset:0;display:flex;flex-direction:column}
+#stage{flex:1;min-height:0;overflow:hidden}
+#app{max-width:620px;margin:0 auto;padding:8px 16px;transform-origin:top center}
+#banner{flex:none;min-height:calc(56px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);display:grid;place-items:center;background:var(--card);border-top:1px solid var(--line)}
+#banner:empty{display:none}
 button{font:inherit;color:inherit;cursor:pointer}
 h1,h2,p{margin:0}
 
 /* menu */
-.hero{text-align:center;padding:18px 0 8px}
-.hero h1{font-size:34px;letter-spacing:-.5px}
+.hero{text-align:center;padding:4px 0 2px}
+.hero h1{font-size:28px;letter-spacing:-.5px}
 .hero p{color:var(--muted);margin-top:4px}
 .seg{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
 .seg button{border:0;background:transparent;padding:7px 16px;border-radius:999px;font-weight:600;color:var(--muted)}
 .seg button.on{background:var(--accent);color:#fff}
-.modebar{display:flex;justify-content:center;align-items:center;gap:10px;margin:14px 0 18px;flex-wrap:wrap}
+.modebar{display:flex;justify-content:center;align-items:center;gap:10px;margin:8px 0 10px;flex-wrap:wrap}
 .modebar small{color:var(--muted)}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:440px){.cards{grid-template-columns:1fr}}
-.gcard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;text-align:left;display:flex;flex-direction:column;gap:6px;transition:transform .12s}
+.gcard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;text-align:left;display:flex;flex-direction:column;gap:2px;transition:transform .12s}
 .gcard:active{transform:scale(.98)}
-.gcard .ic{font-size:30px}
-.gcard b{font-size:18px}
-.gcard span{color:var(--muted);font-size:14px}
+.gcard .ic{font-size:24px}
+.gcard b{font-size:16px}
+.gcard span{color:var(--muted);font-size:12.5px;line-height:1.25}
 .gcard i{font-style:normal;font-size:12px;color:var(--accent);font-weight:600}
 
 /* shell */
-.bar{display:flex;align-items:center;gap:10px;padding:4px 0 10px}
+.bar{display:flex;align-items:center;gap:10px;padding:2px 0 6px}
 .bar h1{flex:1;font-size:22px;text-align:center}
 .bar .timer{min-width:52px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:var(--muted)}
 .icon{border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px}
-.stats{display:flex;justify-content:space-around;gap:8px;margin-bottom:10px}
+.stats{display:flex;justify-content:space-around;gap:8px;margin-bottom:6px}
 .stat{text-align:center}
 .stat small{display:block;color:var(--muted);font-size:12px}
 .stat b{font-size:20px;font-variant-numeric:tabular-nums}
-.game-body{display:flex;flex-direction:column;align-items:center;gap:12px}
-.controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px;align-items:center}
-.btn{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:10px 18px;font-weight:600}
+.game-body{display:flex;flex-direction:column;align-items:center;gap:8px}
+.controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:9px 16px;font-weight:600}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn:disabled{opacity:.45}
 .msg{min-height:22px;text-align:center;color:var(--muted);font-weight:600}
@@ -63,15 +66,15 @@ h1,h2,p{margin:0}
 .sheet .row{display:flex;gap:10px;justify-content:center;margin-top:8px}
 
 /* 1. slide */
-.slide{--w:min(92vw,480px);width:var(--w);aspect-ratio:1;display:grid;grid-template-columns:repeat(var(--n),1fr);gap:calc(var(--w)/var(--n)*.05);padding:10px;background:var(--board);border-radius:14px}
+.slide{--w:min(92vw,480px,44vh);width:var(--w);aspect-ratio:1;display:grid;grid-template-columns:repeat(var(--n),1fr);gap:calc(var(--w)/var(--n)*.05);padding:10px;background:var(--board);border-radius:14px}
 .tile{border:0;border-radius:10px;background:var(--tile);color:var(--tile-ink);font-weight:800;font-size:calc(var(--w)/var(--n)*.42);box-shadow:0 3px 0 var(--tile-edge);padding:0}
 .tile.ok{background:var(--accent-soft);color:#1d3f8f}
 .tile.blank{background:var(--empty);box-shadow:none}
 .tile.hint{outline:4px solid var(--accent);outline-offset:-2px}
 
 /* 2. match */
-.mgrid{display:grid;grid-template-columns:repeat(9,1fr);width:min(92vw,440px);max-height:56vh;overflow:auto;border:2px solid var(--tile-edge);border-radius:10px;background:var(--board);gap:2px;padding:2px}
-.mc{aspect-ratio:1;border:0;border-radius:6px;background:var(--tile);color:var(--tile-ink);font-size:clamp(22px,7vw,34px);font-weight:700;padding:0;box-shadow:0 2px 0 var(--tile-edge)}
+.mgrid{display:grid;grid-template-columns:repeat(9,1fr);--W:min(92vw,400px,calc(44vh*9/var(--rows,5)));width:var(--W);--cell:calc(var(--W)/9);border:2px solid var(--tile-edge);border-radius:10px;background:var(--board);gap:2px;padding:2px}
+.mc{aspect-ratio:1;border:0;border-radius:6px;background:var(--tile);color:var(--tile-ink);font-size:calc(var(--cell)*.6);font-weight:700;padding:0;box-shadow:0 2px 0 var(--tile-edge)}
 .mc.done{opacity:.3;pointer-events:none;box-shadow:none;background:var(--empty)}
 .mc.sel,.mc.hint{background:var(--accent);color:#fff}
 .mc.hint{animation:pulse .6s 2}
@@ -81,18 +84,20 @@ h1,h2,p{margin:0}
 .badge em{position:absolute;top:-6px;right:-6px;background:var(--accent);color:#fff;font-style:normal;font-size:12px;font-weight:700;min-width:20px;height:20px;border-radius:10px;display:grid;place-items:center}
 
 /* 3. crossword */
-.cw{--W:min(94vw,520px);width:var(--W);display:grid;grid-template-columns:repeat(var(--cols),1fr);--cell:calc(var(--W)/var(--cols));gap:2px}
+.cw{--W:min(94vw,520px,calc(36vh*var(--ar,1)));width:var(--W);display:grid;grid-template-columns:repeat(var(--cols),1fr);--cell:calc(var(--W)/var(--cols));gap:2px}
 .cwc{position:relative;aspect-ratio:1;background:var(--tile);color:var(--tile-ink);border-radius:6px;box-shadow:0 2px 0 var(--tile-edge);display:grid;place-items:center;font-weight:800;font-size:calc(var(--cell)*.55);text-transform:uppercase;user-select:none;cursor:pointer}
 .cwc.void{background:transparent;box-shadow:none;cursor:default}
 .cwc.inword{background:var(--accent-soft);color:#1d3f8f}
 .cwc.cur{background:var(--accent);color:#fff}
 .cwc.bad{background:var(--bad-soft);color:var(--bad)}
 .cwc .n{position:absolute;top:1px;left:3px;font-size:calc(var(--cell)*.26);font-weight:600;opacity:.65}
-.cluebar{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;width:min(94vw,520px);text-align:center;font-weight:600}
+.cluebar{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;width:min(94vw,520px);text-align:center;font-weight:600;display:flex;align-items:center;gap:8px}
+.cluebar .ct{flex:1;font-size:14px}
+.cluebar .nav{flex:none;border:0;background:var(--accent-soft);color:var(--tile-ink);border-radius:8px;width:36px;height:36px;font-size:14px}
 .cluebar small{color:var(--accent);margin-right:6px}
 .kb{display:flex;flex-direction:column;gap:6px;align-items:center;width:min(96vw,520px)}
 .kb div{display:flex;gap:5px;justify-content:center;width:100%}
-.kb button{flex:1;max-width:46px;height:44px;border:0;background:var(--tile);color:var(--tile-ink);box-shadow:0 2px 0 var(--tile-edge);border-radius:8px;font-weight:700;font-size:16px;padding:0}
+.kb button{flex:1;max-width:46px;height:40px;border:0;background:var(--tile);color:var(--tile-ink);box-shadow:0 2px 0 var(--tile-edge);border-radius:8px;font-weight:700;font-size:16px;padding:0}
 .kb button.wide{max-width:70px}
 .clues{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:min(94vw,520px);font-size:14px}
 .clues h3{margin:0 0 4px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
@@ -108,10 +113,24 @@ h1,h2,p{margin:0}
 .mt.sel{background:var(--accent);color:#fff}
 .mt.bad{background:var(--bad-soft);color:var(--bad)}
 .mt.lock{background:var(--accent-soft);color:#1d3f8f}
-.tray{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:min(96vw,560px);padding:12px;background:var(--board);border-radius:14px;min-height:64px}
+.tray{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:min(96vw,560px);padding:10px;background:var(--board);border-radius:14px;min-height:64px}
 .chip{min-width:48px;height:44px;padding:0 10px;border:0;background:var(--tile);color:var(--tile-ink);box-shadow:0 2px 0 var(--tile-edge);font-weight:800;font-size:20px;border-radius:8px}
 .chip.gone{visibility:hidden}
 
+/* ads */
+.adbanner{width:min(100%,320px);height:50px;border-radius:6px;background:repeating-linear-gradient(45deg,var(--board),var(--board) 10px,var(--card) 10px,var(--card) 20px);border:1px dashed var(--tile-edge);display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--muted);position:relative}
+.adlabel{font-size:10px;font-weight:700;background:#ffcc33;color:#222;border-radius:3px;padding:1px 4px}
+.native{grid-column:1/-1;display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 12px;text-align:left;position:relative}
+.native .nic{font-size:28px}
+.native .ntx{flex:1;display:flex;flex-direction:column;font-size:12.5px;color:var(--muted);line-height:1.25}
+.native .ntx b{color:var(--ink);font-size:14px}
+.native .btn{padding:7px 12px;font-size:13px}
+.sheet .native{margin-top:2px}
+.adfull{position:fixed;inset:0;z-index:50;background:linear-gradient(160deg,#243b8a,#6b3fa0);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px}
+.adfull .adlabel{position:absolute;top:14px;left:14px}
+.adfull .big{font-size:72px}
+.adfull .btn{background:#fff;color:#222;border:0}
+.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;font-weight:600;z-index:60;font-size:14px}
 /* multiplayer */
 .vs{width:min(94vw,520px);background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;margin:0 auto 10px}
 .vs .row{display:grid;grid-template-columns:78px 1fr 44px;align-items:center;gap:8px;font-size:14px;font-weight:600}
@@ -119,7 +138,7 @@ h1,h2,p{margin:0}
 .vs .track i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
 .vs .opp .track i{background:#e8833a}
 .vs b{text-align:right;font-variant-numeric:tabular-nums}
-.mpbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:18px;display:flex;flex-direction:column;gap:10px}
+.mpbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;margin-top:10px;display:flex;flex-direction:column;gap:8px}
 .mpbox h2{font-size:18px}
 .mpbox .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .code{font:700 22px/1 ui-monospace,Menlo,monospace;letter-spacing:.25em;text-transform:uppercase;width:150px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink)}
@@ -133,7 +152,7 @@ h1,h2,p{margin:0}
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="shell"><main id="stage"><div id="app"></div></main><div id="banner"></div></div>
 <script>
 "use strict";
 /* ---------- helpers ---------- */
@@ -166,6 +185,110 @@ const app = $("#app");
 let mode = store.get("mode", "numbers");      // "numbers" | "letters"
 let current = null;
 
+/* ---------- ads ----------
+   provider "test": clearly-labelled placeholder ads (works out of the box).
+   provider "google": real ads. Fill in YOUR ids below. Banner/native use AdSense,
+   rewarded/interstitial use Google Ad Manager (GPT). Any slot whose id still
+   contains XXXX falls back to the test ad. Add ?ads=off to the URL to hide all ads. */
+const ADS = {
+  provider: "test",
+  adsense: { client: "ca-pub-XXXXXXXXXXXXXXXX", bannerSlot: "XXXXXXXXXX", nativeSlot: "XXXXXXXXXX", nativeLayoutKey: "XXXX" },
+  gpt: { rewardedPath: "/XXXXXXXX/rewarded", interstitialPath: "/XXXXXXXX/interstitial" },
+  interstitialEvery: 3,        // show an interstitial before every Nth game start
+  interstitialMinGapMs: 90000, // and never more often than this
+  rewardHints: 3, rewardAdds: 2
+};
+const adsOff = new URLSearchParams(location.search).get("ads") === "off";
+const Ads = (() => {
+  const real = k => ADS.provider === "google" && !/XXXX/.test(k);
+  let starts = 0, lastInter = 0;
+  const loadScript = (src, attrs = {}) => new Promise((res, rej) => {
+    if (document.querySelector(`script[src="${src}"]`)) return res();
+    const sc = document.createElement("script"); sc.async = true; sc.src = src;
+    for (const [k, v] of Object.entries(attrs)) sc.setAttribute(k, v);
+    sc.onload = res; sc.onerror = rej; document.head.append(sc);
+  });
+  const toast = msg => { const t = h("div", { class: "toast" }, msg); document.body.append(t); setTimeout(() => t.remove(), 2500); };
+  const adsense = async (el, style, extra) => {
+    try {
+      await loadScript("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=" + ADS.adsense.client, { crossorigin: "anonymous" });
+      const ins = h("ins", { class: "adsbygoogle", style, "data-ad-client": ADS.adsense.client, ...extra });
+      el.replaceChildren(ins); (window.adsbygoogle = window.adsbygoogle || []).push({});
+    } catch { el.replaceChildren(); }
+  };
+  // Full-screen test ad (stand-in for interstitial / rewarded video)
+  const testFull = kind => new Promise(res => {
+    let left = kind === "rewarded" ? 5 : 3, earned = false;
+    const note = h("p", {}, ""), close = h("button", { class: "btn" }, "");
+    const o = h("div", { class: "adfull" }, h("span", { class: "adlabel" }, "TEST AD"), h("div", { class: "big" }, kind === "rewarded" ? "🎁" : "📺"),
+      h("b", {}, kind === "rewarded" ? "Rewarded video (test)" : "Interstitial (test)"), note, close);
+    const upd = () => {
+      if (left > 0) { note.textContent = (kind === "rewarded" ? "Reward in " : "You can close in ") + left + "s"; close.textContent = kind === "rewarded" ? "Skip (no reward)" : "Please wait…"; close.disabled = kind !== "rewarded"; }
+      else { earned = kind === "rewarded"; note.textContent = earned ? "Reward earned!" : "Ad finished"; close.textContent = earned ? "Claim reward ✓" : "Close ✕"; close.disabled = false; }
+    };
+    upd();
+    const iv = setInterval(() => { if (left > 0) { left--; upd(); } }, 1000);
+    close.onclick = () => { clearInterval(iv); o.remove(); res(earned); };
+    document.body.append(o);
+  });
+  // Google Ad Manager out-of-page slot (rewarded / interstitial)
+  const gpt = (format, path) => new Promise(async res => {
+    try { await loadScript("https://securepubads.g.doubleclick.net/tag/js/gpt.js"); } catch { return res({ ok: false }); }
+    window.googletag = window.googletag || { cmd: [] };
+    googletag.cmd.push(() => {
+      const slot = googletag.defineOutOfPageSlot(path, googletag.enums.OutOfPageFormat[format]);
+      if (!slot) return res({ ok: false });
+      const ps = googletag.pubads(); slot.addService(ps);
+      let granted = false, done = false, wait = setTimeout(() => fin(false), 8000);
+      const fin = ok => { if (done) return; done = true; clearTimeout(wait); try { googletag.destroySlots([slot]); } catch {} res({ ok, granted }); };
+      const mine = e => e.slot === slot;
+      ps.addEventListener("rewardedSlotReady", e => { if (mine(e)) { clearTimeout(wait); e.makeRewardedVisible(); } });
+      ps.addEventListener("rewardedSlotGranted", e => { if (mine(e)) granted = true; });
+      ps.addEventListener("rewardedSlotClosed", e => { if (mine(e)) fin(true); });
+      ps.addEventListener("slotRenderEnded", e => { if (mine(e) && (e.isEmpty || format === "INTERSTITIAL")) fin(!e.isEmpty); });
+      googletag.enableServices(); googletag.display(slot);
+    });
+  });
+  return {
+    banner(el) {
+      if (adsOff) return el.replaceChildren();
+      if (real(ADS.adsense.bannerSlot) && real(ADS.adsense.client)) adsense(el, "display:inline-block;width:320px;height:50px", { "data-ad-slot": ADS.adsense.bannerSlot });
+      else el.replaceChildren(h("div", { class: "adbanner" }, h("span", { class: "adlabel" }, "AD"), "Test banner 320×50"));
+    },
+    nativeCard() {
+      if (adsOff) return null;
+      const box = h("div", { class: "native" });
+      if (real(ADS.adsense.nativeSlot) && real(ADS.adsense.client) && real(ADS.adsense.nativeLayoutKey))
+        adsense(box, "display:block", { "data-ad-slot": ADS.adsense.nativeSlot, "data-ad-format": "fluid", "data-ad-layout-key": ADS.adsense.nativeLayoutKey });
+      else box.append(h("span", { class: "adlabel" }, "AD"), h("div", { class: "nic" }, "🎯"),
+        h("div", { class: "ntx" }, h("small", {}, "Sponsored"), h("b", {}, "Test native ad"), h("span", {}, "Matches the look of the app, clearly labelled.")), h("button", { class: "btn" }, "Learn more"));
+      return box;
+    },
+    async rewarded(onGrant) {
+      if (adsOff) return onGrant();
+      if (real(ADS.gpt.rewardedPath)) { const r = await gpt("REWARDED", ADS.gpt.rewardedPath); if (r.ok && r.granted) onGrant(); else toast(r.ok ? "Reward skipped" : "No ad available right now — try again later"); return; }
+      if (await testFull("rewarded")) onGrant();
+    },
+    async maybeInterstitial(next) {
+      starts++;
+      if (adsOff || starts % ADS.interstitialEvery !== 0 || Date.now() - lastInter < ADS.interstitialMinGapMs) return next();
+      lastInter = Date.now();
+      if (real(ADS.gpt.interstitialPath)) await gpt("INTERSTITIAL", ADS.gpt.interstitialPath); else await testFull("interstitial");
+      next();
+    }
+  };
+})();
+
+/* ---------- fit-to-screen: nothing ever scrolls ---------- */
+const stage = $("#stage");
+function fit() {
+  app.style.transform = "none";
+  const k = Math.min(1, stage.clientHeight / app.offsetHeight, stage.clientWidth / app.scrollWidth);
+  app.style.transform = k < 1 ? `scale(${k})` : "none";
+}
+new ResizeObserver(fit).observe(app);
+window.addEventListener("resize", fit);
+
 /* ---------- shell ---------- */
 let net = null, screen = "menu";
 const lobbyCfg = { game: "slide", mode: store.get("mode", "numbers"), n: 4, level: "Easy" };
@@ -183,6 +306,7 @@ function showMenu() {
       h("button", { class: mode === k ? "on" : "", onclick: () => { mode = k; store.set("mode", k); drawSeg(); drawCards(); } }, t)));
   };
   const cards = h("div", { class: "cards" });
+  const nativeAd = Ads.nativeCard();
   const drawCards = () => {
     cards.replaceChildren(...Object.entries(GAMES).map(([key, g]) => {
       const best = store.get("best_" + g.bestKey(), null);
@@ -191,7 +315,7 @@ function showMenu() {
         g.uses === "mode" ? h("i", {}, mode === "letters" ? "Playing with letters" : "Playing with numbers") :
           h("i", {}, g.uses === "letters" ? "Letters only" : "Numbers only"),
         best != null ? h("span", {}, "Best: " + g.fmtBest(best)) : null);
-    }));
+    }), nativeAd);
   };
   drawSeg(); drawCards();
 
@@ -305,6 +429,10 @@ function showLobby() {
 }
 
 function openGame(key, mp = null) {
+  if (mp) return startGame(key, mp);
+  Ads.maybeInterstitial(() => startGame(key, mp));
+}
+function startGame(key, mp = null) {
   stopCurrent(); screen = "game";
   const g = GAMES[key];
   rng = mp ? seeded(mp.cfg.seed) : Math.random;
@@ -327,7 +455,7 @@ function openGame(key, mp = null) {
   const statEls = {};
   const showModal = (title, lines, buttons) => {
     if (modal) modal.remove();
-    modal = h("div", { class: "modal" }, h("div", { class: "sheet" }, h("h2", {}, title), lines.map(l => h("p", {}, l)), h("div", { class: "row" }, buttons)));
+    modal = h("div", { class: "modal" }, h("div", { class: "sheet" }, h("h2", {}, title), lines.map(l => l && l.nodeType ? l : h("p", {}, l)), h("div", { class: "row" }, buttons)));
     document.body.append(modal);
   };
   const mpButtons = () => [btn("Back to lobby", showLobby, "primary"), btn("Leave room", leaveRoom)];
@@ -361,7 +489,13 @@ function openGame(key, mp = null) {
         showModal("🏆 You win!", [lines[0], "You finished first."], mpButtons());
         return;
       }
-      showModal(title, lines, [btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu)]);
+      showModal(title, [...lines, Ads.nativeCard()], [btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu)]);
+    },
+    reward(text, onGrant) {     // offer a rewarded video (solo play only)
+      if (mp) return;
+      showModal("Need more?", [text], [
+        btn("📺 Watch video", () => { modal.remove(); modal = null; Ads.rewarded(onGrant); }, "primary"),
+        btn("No thanks", () => { modal.remove(); modal = null; })]);
     },
     dnf() {            // multiplayer: player can no longer finish
       meDnf = true; net && net.send({ t: "dnf" });
@@ -489,6 +623,7 @@ function matchGame(ctx) {
     return null;
   };
   const draw = () => {
+    grid.style.setProperty("--rows", Math.ceil(cells.length / COLS));
     grid.replaceChildren(...cells.map((c, i) => h("button", {
       class: "mc" + (c.done ? " done" : "") + (i === sel ? " sel" : "") + (hintPair && hintPair.includes(i) ? " hint" : ""),
       onclick: () => tap(i)
@@ -496,8 +631,8 @@ function matchGame(ctx) {
     ctx.stat("score", "Score", score);
     ctx.progress(score / 5 / totalEver);
     ctx.stat("left", "Left", cells.filter(c => !c.done).length);
-    plusBtn.lastChild.textContent = plusLeft; plusBtn.disabled = plusLeft <= 0 || over;
-    hintBtn.lastChild.textContent = hintsLeft; hintBtn.disabled = hintsLeft <= 0 || over;
+    plusBtn.lastChild.textContent = plusLeft > 0 ? plusLeft : "📺"; plusBtn.disabled = over;
+    hintBtn.lastChild.textContent = hintsLeft > 0 ? hintsLeft : "📺"; hintBtn.disabled = over;
   };
   const afterMove = () => {
     // drop fully cleared rows
@@ -509,9 +644,9 @@ function matchGame(ctx) {
       over = true; draw();
       const t = ctx.stopTimer(), r = ctx.best(score, false);
       ctx.win("Board cleared! 🎉", [`Score ${score} in ${fmt(t)}`, r.isNew ? "New best score!" : `Best: ${r.best}`], newGame);
-    } else if (!findPair() && plusLeft === 0) {
+    } else if (!findPair() && plusLeft === 0 && ctx.mp) {
       over = true; msg.textContent = ctx.mp ? "No more moves — you are out of the race." : "No more moves — tap New to try again."; msg.className = "msg bad"; draw(); ctx.stopTimer(); if (ctx.mp) ctx.dnf();
-    } else { msg.textContent = findPair() ? "" : "No pairs left — use ＋ to add numbers."; msg.className = "msg"; draw(); }
+    } else { msg.textContent = findPair() ? "" : plusLeft > 0 ? "No pairs left — use ＋ to add numbers." : "No pairs left — tap 📺 for more numbers."; msg.className = "msg"; draw(); }
   };
   function tap(i) {
     if (over || cells[i].done) return;
@@ -521,12 +656,14 @@ function matchGame(ctx) {
     else { msg.textContent = "Not a valid pair"; msg.className = "msg bad"; setTimeout(() => { if (msg.textContent === "Not a valid pair") msg.textContent = ""; }, 900); sel = i; draw(); }
   }
   function plus() {
-    if (over || plusLeft <= 0) return;
+    if (over) return;
+    if (plusLeft <= 0) return ctx.reward(`Out of extra numbers! Watch a short video for +${ADS.rewardAdds}?`, () => { plusLeft += ADS.rewardAdds; msg.textContent = ""; draw(); });
     plusLeft--; const add = cells.filter(c => !c.done).map(c => ({ v: c.v, done: false })); totalEver += add.length; cells.push(...add);
     hintPair = null; msg.textContent = ""; draw(); grid.scrollTop = grid.scrollHeight;
   }
   function hint() {
-    if (over || hintsLeft <= 0) return;
+    if (over) return;
+    if (hintsLeft <= 0) return ctx.reward(`Out of hints! Watch a short video for +${ADS.rewardHints}?`, () => { hintsLeft += ADS.rewardHints; draw(); });
     const p = findPair(); if (!p) { msg.textContent = "No pairs available — try ＋"; return; }
     hintsLeft--; hintPair = p; sel = -1; draw();
   }
@@ -618,9 +755,8 @@ function crossGame(ctx) {
   const board = h("div", { class: "cw" });
   const cluebar = h("div", { class: "cluebar" });
   const kb = h("div", { class: "kb" });
-  const clues = h("div", { class: "clues" });
   const msg = h("div", { class: "msg" });
-  ctx.body.append(board, cluebar, kb, msg, clues);
+  ctx.body.append(board, cluebar, kb, msg);
 
   const key = (r, c) => r + "," + c;
   const entryCells = e => Array.from({ length: e.word.length }, (_, i) => [e.r + (e.dir === "D" ? i : 0), e.c + (e.dir === "A" ? i : 0)]);
@@ -666,18 +802,19 @@ function crossGame(ctx) {
       }, cell.num ? h("span", { class: "n" }, cell.num) : null, val));
     }
     board.replaceChildren(...out);
-    cluebar.replaceChildren(ce ? h("span", {}, h("small", {}, ce.num + (ce.dir === "A" ? " ACROSS" : " DOWN")), ce.clue + ` (${ce.word.length})`) : "Tap a cell");
-    const list = d => h("div", {}, h("h3", {}, d === "A" ? "Across" : "Down"),
-      entries.filter(e => e.dir === d).map(e => h("button", {
-        class: (ce === e ? "act " : "") + (entrySolved(e) ? "solved" : ""),
-        onclick: () => { sel = key(e.r, e.c); dir = e.dir; draw(); }
-      }, `${e.num}. ${e.clue}`)));
-    clues.replaceChildren(list("A"), list("D"));
+    board.style.setProperty("--ar", cols / rows);
+    cluebar.replaceChildren(h("button", { class: "nav", "aria-label": "Previous clue", onclick: () => gotoClue(-1) }, "◀"),
+      h("span", { class: "ct" }, ce ? [h("small", {}, ce.num + (ce.dir === "A" ? " ACROSS" : " DOWN")), ce.clue + ` (${ce.word.length})`] : "Tap a cell"),
+      h("button", { class: "nav", "aria-label": "Next clue", onclick: () => gotoClue(1) }, "▶"));
     ctx.progress([...cells.keys()].filter(k => user.get(k) === cells.get(k).ch).length / cells.size);
     ctx.stat("solved", "Words", entries.filter(entrySolved).length + "/" + entries.length);
     ctx.stat("hints", "Hints", hints);
   }
 
+  function gotoClue(d) {
+    const ce = curEntry(), i = ce ? entries.indexOf(ce) : -1, e = entries[(i + d + entries.length) % entries.length];
+    sel = key(e.r, e.c); dir = e.dir; draw();
+  }
   function clickCell(k) {
     const cell = cells.get(k);
     if (k === sel && cell.A != null && cell.D != null) dir = dir === "A" ? "D" : "A";
@@ -710,7 +847,8 @@ function crossGame(ctx) {
     draw();
   }
   function hint() {
-    if (over || hints <= 0) return;
+    if (over) return;
+    if (hints <= 0) return ctx.reward(`Out of hints! Watch a short video for +${ADS.rewardHints}?`, () => { hints += ADS.rewardHints; draw(); });
     if (user.get(sel) === cells.get(sel).ch) return;
     hints--; bad.clear(); user.set(sel, cells.get(sel).ch);
     const nx = step(sel, 1); if (nx) sel = nx;
@@ -852,7 +990,8 @@ function mathGame(ctx) {
     }
   }
   function hint() {
-    if (over || hints <= 0) return;
+    if (over) return;
+    if (hints <= 0) return ctx.reward(`Out of hints! Watch a short video for +${ADS.rewardHints}?`, () => { hints += ADS.rewardHints; draw(); });
     const target = [...cellsMap.values()].find(c => c.hidden && !locked.has(key(c.r, c.c)) && (sel === key(c.r, c.c)) && (c.chip == null || chips[c.chip].v !== c.ans))
       || [...cellsMap.values()].find(c => c.hidden && !locked.has(key(c.r, c.c)) && (c.chip == null || chips[c.chip].v !== c.ans));
     if (!target) return;
@@ -892,6 +1031,7 @@ const GAMES = {
   }
 };
 
+Ads.banner($("#banner"));
 showMenu();
 </script>
 </body>
