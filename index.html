@@ -109,6 +109,25 @@ h1,h2,p{margin:0}
 .tray{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:min(96vw,560px);padding:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;min-height:64px}
 .chip{min-width:48px;height:44px;padding:0 10px;border:2px solid #7bb59a;background:#e6f5ef;color:#1f7a55;font-weight:800;font-size:20px;border-radius:6px}
 .chip.gone{visibility:hidden}
+
+/* multiplayer */
+.vs{width:min(94vw,520px);background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;margin:0 auto 10px}
+.vs .row{display:grid;grid-template-columns:78px 1fr 44px;align-items:center;gap:8px;font-size:14px;font-weight:600}
+.vs .track{height:10px;background:var(--line);border-radius:6px;overflow:hidden}
+.vs .track i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+.vs .opp .track i{background:#e8833a}
+.vs b{text-align:right;font-variant-numeric:tabular-nums}
+.mpbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:18px;display:flex;flex-direction:column;gap:10px}
+.mpbox h2{font-size:18px}
+.mpbox .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.code{font:700 22px/1 ui-monospace,Menlo,monospace;letter-spacing:.25em;text-transform:uppercase;width:150px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink)}
+.bigcode{font:800 44px/1 ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:center;padding:14px 0;color:var(--accent)}
+.lobby{display:flex;flex-direction:column;gap:14px;align-items:center;text-align:center}
+.lobby .status{font-weight:600}
+.lobby .status.ok{color:var(--good)}.lobby .status.bad{color:var(--bad)}
+.pick{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+.pick button{border:2px solid var(--line);background:var(--card);border-radius:12px;padding:10px;font-weight:600}
+.pick button.on{border-color:var(--accent);background:var(--accent-soft)}
 </style>
 </head>
 <body>
@@ -131,7 +150,12 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem("bq_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("bq_" + k, JSON.stringify(v)); } catch {} }
 };
-const rand = n => Math.floor(Math.random() * n);
+let rng = Math.random;
+const rand = n => Math.floor(rng() * n);
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rand(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const fmt = s => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 const btn = (label, fn, cls = "") => h("button", { class: "btn " + cls, onclick: fn }, label);
@@ -141,13 +165,16 @@ let mode = store.get("mode", "numbers");      // "numbers" | "letters"
 let current = null;
 
 /* ---------- shell ---------- */
+let net = null, screen = "menu";
+const lobbyCfg = { game: "slide", mode: store.get("mode", "numbers"), n: 4, level: "Easy" };
+
 function stopCurrent() {
   if (current) current.stop();
   current = null;
 }
 
 function showMenu() {
-  stopCurrent();
+  stopCurrent(); screen = "menu";
   const modeSeg = h("div", { class: "seg" });
   const drawSeg = () => {
     modeSeg.replaceChildren(...[["numbers", "123 Numbers"], ["letters", "ABC Letters"]].map(([k, t]) =>
@@ -165,28 +192,145 @@ function showMenu() {
     }));
   };
   drawSeg(); drawCards();
+
+  // multiplayer box
+  let kind = store.get("netkind", "online");
+  const kindSeg = h("div", { class: "seg" });
+  const drawKind = () => kindSeg.replaceChildren(...[["online", "🌐 Online"], ["local", "🖥 Same browser (tabs)"]].map(([k, t]) =>
+    h("button", { class: kind === k ? "on" : "", onclick: () => { kind = k; store.set("netkind", k); drawKind(); } }, t)));
+  drawKind();
+  const input = h("input", { class: "code", maxlength: "5", placeholder: "CODE", "aria-label": "Room code", autocapitalize: "characters" });
+  const mp = h("div", { class: "mpbox" },
+    h("h2", {}, "⚔️ Play a friend"),
+    h("p", { class: "help", style: "text-align:left" }, "Same puzzle for both players. Race live — first to finish wins."),
+    kindSeg,
+    h("div", { class: "row" }, btn("Create room", () => openRoom("host", kind, newCode()), "primary")),
+    h("div", { class: "row" }, input, btn("Join", () => { const c = input.value.trim().toUpperCase(); if (c.length === 5) openRoom("guest", kind, c); else input.focus(); })));
+
   app.replaceChildren(
     h("div", { class: "hero" }, h("h1", {}, "🧠 Brain Quiz"), h("p", {}, "Four puzzle games for numbers and letters")),
     h("div", { class: "modebar" }, h("small", {}, "Slide & Match games use:"), modeSeg),
-    cards
+    cards, mp
   );
 }
 
-function openGame(key) {
-  stopCurrent();
+/* ---------- multiplayer networking ---------- */
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const newCode = () => Array.from({ length: 5 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
+
+function loadPeer() {
+  return new Promise((res, rej) => {
+    if (window.Peer) return res();
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js";
+    s.onload = res; s.onerror = () => rej(new Error("Could not load the online connection library (are you offline?)"));
+    document.head.append(s);
+  });
+}
+function leaveRoom() {
+  if (net) { try { net.send({ t: "bye" }); } catch {} net.close(); net = null; }
+  showMenu();
+}
+async function openRoom(role, kind, code) {
+  if (net) { net.close(); net = null; }
+  const n = { role, kind, code, connected: false, error: "", handler: () => {}, send: () => {}, close: () => {} };
+  net = n;
+  const refresh = () => { if (net === n && screen === "lobby") showLobby(); };
+  const ready = () => { if (n.connected) return; n.connected = true; refresh(); };
+  const dispatch = m => { if (m.t === "bye") { n.connected = false; refresh(); } n.handler(m); };
+  showLobby();
+  if (kind === "local") {
+    const bc = new BroadcastChannel("bq-" + code); let timer;
+    n.send = m => bc.postMessage(m); n.close = () => { clearInterval(timer); bc.close(); };
+    bc.onmessage = e => {
+      const m = e.data;
+      if (m.t === "hello") { if (role === "host") { n.send({ t: "welcome" }); ready(); } }
+      else if (m.t === "welcome") { if (role === "guest") { clearInterval(timer); ready(); } }
+      else dispatch(m);
+    };
+    if (role === "guest") {
+      const hello = () => n.send({ t: "hello" }); hello(); timer = setInterval(hello, 700);
+      setTimeout(() => { if (!n.connected && net === n) { clearInterval(timer); n.error = "Room not found. Check the code, and that the host has created the room in another tab."; refresh(); } }, 6000);
+    }
+  } else {
+    try { await loadPeer(); } catch (e) { n.error = e.message; refresh(); return; }
+    const peer = role === "host" ? new Peer("bqz-" + code) : new Peer();
+    n.close = () => { try { peer.destroy(); } catch {} };
+    const wire = conn => {
+      conn.on("open", () => { n.send = m => { if (conn.open) conn.send(m); }; ready(); });
+      conn.on("data", dispatch);
+      conn.on("close", () => { if (net === n && n.connected) { n.connected = false; n.handler({ t: "bye" }); refresh(); } });
+    };
+    peer.on("error", e => {
+      n.error = e.type === "peer-unavailable" ? "Room not found. Check the code." : e.type === "unavailable-id" ? "That code is taken — go back and create a new room." : "Connection problem (" + e.type + ")";
+      refresh();
+    });
+    if (role === "host") peer.on("connection", c => { if (!n.connected) wire(c); else c.close(); });
+    else peer.on("open", () => wire(peer.connect("bqz-" + code, { reliable: true })));
+  }
+}
+
+function showLobby() {
+  stopCurrent(); screen = "lobby";
+  if (!net) return showMenu();
+  const host = net.role === "host";
+  const status = net.error ? h("div", { class: "status bad" }, net.error)
+    : net.connected ? h("div", { class: "status ok" }, host ? "✓ Friend joined!" : "✓ Connected to host")
+    : h("div", { class: "status" }, host ? "Waiting for a friend to join…" : "Connecting…");
+  const parts = [h("header", { class: "bar" }, h("button", { class: "icon", "aria-label": "Leave", onclick: leaveRoom }, "←"), h("h1", {}, "Room"), h("span", { class: "timer" }, ""))];
+  const box = h("div", { class: "lobby" }, h("p", { class: "help" }, host ? "Share this code with your friend:" : "Room code:"), h("div", { class: "bigcode" }, net.code), status);
+  if (host) {
+    const pick = h("div", { class: "pick" }), opts = h("div", { class: "row", style: "display:flex;gap:8px;justify-content:center;flex-wrap:wrap" });
+    const draw = () => {
+      pick.replaceChildren(...Object.entries(GAMES).map(([k, g]) => h("button", { class: lobbyCfg.game === k ? "on" : "", onclick: () => { lobbyCfg.game = k; draw(); } }, g.icon + " " + g.title)));
+      const g = GAMES[lobbyCfg.game], o = [];
+      if (g.uses === "mode") o.push(h("div", { class: "seg" }, ...[["numbers", "123"], ["letters", "ABC"]].map(([k, t]) => h("button", { class: lobbyCfg.mode === k ? "on" : "", onclick: () => { lobbyCfg.mode = k; draw(); } }, t))));
+      if (lobbyCfg.game === "slide") o.push(h("div", { class: "seg" }, ...[3, 4, 5].map(sz => h("button", { class: lobbyCfg.n === sz ? "on" : "", onclick: () => { lobbyCfg.n = sz; draw(); } }, sz + "×" + sz))));
+      if (lobbyCfg.game === "math") o.push(h("div", { class: "seg" }, ...Object.keys(LEVELS).map(l => h("button", { class: lobbyCfg.level === l ? "on" : "", onclick: () => { lobbyCfg.level = l; draw(); } }, l))));
+      opts.replaceChildren(...o);
+    };
+    draw();
+    const start = btn("▶ Start race", () => {
+      const cfg = { ...lobbyCfg, seed: Math.floor(Math.random() * 2 ** 31) };
+      net.send({ t: "start", cfg }); openGame(cfg.game, { cfg });
+    }, "primary");
+    start.disabled = !net.connected;
+    box.append(pick, opts, start);
+  } else box.append(h("p", { class: "help" }, "The host picks the game and starts the race."));
+  box.append(btn("Leave room", leaveRoom));
+  app.replaceChildren(...parts, box);
+  net.handler = m => { if (m.t === "start" && !host) openGame(m.cfg.game, { cfg: m.cfg }); };
+}
+
+function openGame(key, mp = null) {
+  stopCurrent(); screen = "game";
   const g = GAMES[key];
+  rng = mp ? seeded(mp.cfg.seed) : Math.random;
   const timerEl = h("span", { class: "timer" }, "0:00");
   const stats = h("div", { class: "stats" });
   const body = h("div", { class: "game-body" });
   const controls = h("div", { class: "controls" });
+  let vs = null, meBar, oppBar, mePct, oppPct;
+  if (mp) {
+    meBar = h("i"); oppBar = h("i"); mePct = h("b", {}, "0%"); oppPct = h("b", {}, "0%");
+    vs = h("div", { class: "vs" },
+      h("div", { class: "row" }, h("span", {}, "You"), h("div", { class: "track" }, meBar), mePct),
+      h("div", { class: "row opp" }, h("span", {}, "Opponent"), h("div", { class: "track" }, oppBar), oppPct));
+  }
   app.replaceChildren(
-    h("header", { class: "bar" }, h("button", { class: "icon", "aria-label": "Back", onclick: showMenu }, "←"), h("h1", {}, g.title), timerEl),
-    stats, body, controls);
-  let secs = 0, iv = null, modal = null;
+    h("header", { class: "bar" }, h("button", { class: "icon", "aria-label": "Back", onclick: mp ? showLobby : showMenu }, "←"), h("h1", {}, g.title), timerEl),
+    vs, stats, body, controls);
+  let secs = 0, iv = null, modal = null, ended = false, meDnf = false, oppDnf = false;
   const cleanups = [];
   const statEls = {};
+  const showModal = (title, lines, buttons) => {
+    if (modal) modal.remove();
+    modal = h("div", { class: "modal" }, h("div", { class: "sheet" }, h("h2", {}, title), lines.map(l => h("p", {}, l)), h("div", { class: "row" }, buttons)));
+    document.body.append(modal);
+  };
+  const mpButtons = () => [btn("Back to lobby", showLobby, "primary"), btn("Leave room", leaveRoom)];
   const ctx = {
-    body, controls, mode,
+    body, controls, mode: mp ? mp.cfg.mode : mode, cfg: mp ? mp.cfg : null, mp: !!mp,
     onStop: fn => cleanups.push(fn),
     startTimer() { secs = 0; timerEl.textContent = "0:00"; clearInterval(iv); iv = setInterval(() => { secs++; timerEl.textContent = fmt(secs); }, 1000); },
     stopTimer() { clearInterval(iv); return secs; },
@@ -194,8 +338,14 @@ function openGame(key) {
       if (!statEls[id]) { statEls[id] = h("b", {}, ""); stats.append(h("div", { class: "stat" }, h("small", {}, label), statEls[id])); }
       statEls[id].textContent = val;
     },
-    clearStats() { stats.replaceChildren(); for (const k in statEls) delete statEls[k]; },
+    progress(f) {
+      if (!mp) return;
+      f = Math.max(0, Math.min(1, f));
+      meBar.style.width = f * 100 + "%"; mePct.textContent = Math.round(f * 100) + "%";
+      net && net.send({ t: "progress", p: f });
+    },
     best(val, lowerIsBetter = true) {
+      if (mp) return { best: val, isNew: false };
       const k = "best_" + g.bestKey();
       const old = store.get(k, null);
       const isNew = old == null || (lowerIsBetter ? val < old : val > old);
@@ -203,16 +353,31 @@ function openGame(key) {
       return { best: isNew ? val : old, isNew };
     },
     win(title, lines, again) {
-      if (modal) modal.remove();
-      modal = h("div", { class: "modal" }, h("div", { class: "sheet" },
-        h("h2", {}, title), lines.map(l => h("p", {}, l)),
-        h("div", { class: "row" }, btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu))));
-      document.body.append(modal);
+      if (mp) {
+        if (ended) return;
+        ended = true; net && net.send({ t: "done", time: secs });
+        showModal("🏆 You win!", [lines[0], "You finished first."], mpButtons());
+        return;
+      }
+      showModal(title, lines, [btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu)]);
+    },
+    dnf() {            // multiplayer: player can no longer finish
+      meDnf = true; net && net.send({ t: "dnf" });
+      if (oppDnf && !ended) { ended = true; showModal("Draw", ["Both players ran out of moves."], mpButtons()); }
     },
     get modalOpen() { return !!modal && modal.isConnected; }
   };
   current = { stop() { clearInterval(iv); if (modal) modal.remove(); cleanups.forEach(f => f()); } };
+  if (mp && net) {
+    net.handler = m => {
+      if (m.t === "progress") { oppBar.style.width = m.p * 100 + "%"; oppPct.textContent = Math.round(m.p * 100) + "%"; }
+      else if (m.t === "done" && !ended) { ended = true; ctx.stopTimer(); showModal("Opponent won", ["They finished in " + fmt(m.time) + "."], mpButtons()); }
+      else if (m.t === "dnf") { oppDnf = true; if (meDnf && !ended) { ended = true; showModal("Draw", ["Both players ran out of moves."], mpButtons()); } }
+      else if (m.t === "bye" && !ended) { ended = true; ctx.stopTimer(); showModal("Opponent left", ["Your friend left the room."], [btn("Menu", leaveRoom, "primary")]); }
+    };
+  }
   g.run(ctx);
+  if (mp) controls.querySelectorAll(".solo").forEach(e => e.remove());
 }
 
 /* ======================================================================
@@ -221,9 +386,9 @@ function openGame(key) {
 function slideGame(ctx) {
   const letters = ctx.mode === "letters";
   const label = v => letters ? String.fromCharCode(64 + v) : String(v);
-  let n = store.get("slideN", 4), tiles = [], hist = [], moves = 0, hintIdx = -1, solved = false;
+  let n = ctx.cfg ? ctx.cfg.n : store.get("slideN", 4), tiles = [], hist = [], moves = 0, hintIdx = -1, solved = false;
   const board = h("div", { class: "slide" });
-  const sizeSeg = h("div", { class: "seg" });
+  const sizeSeg = h("div", { class: "seg solo" });
   ctx.body.append(board, h("p", { class: "help" }, `Slide the ${letters ? "letters into A, B, C…" : "numbers into order 1, 2, 3…"} Tap any tile in the blank's row or column.`));
 
   const total = () => n * n;
@@ -234,6 +399,7 @@ function slideGame(ctx) {
       ? h("button", { class: "tile" + (v === i + 1 ? " ok" : "") + (i === hintIdx ? " hint" : ""), onclick: () => tap(i) }, label(v))
       : h("div", { class: "tile blank" })));
     ctx.stat("moves", "Moves", moves);
+    ctx.progress(tiles.filter((v, i) => v && v === i + 1).length / (total() - 1));
   };
   const slideTo = (arr, idx) => {
     const b = arr.indexOf(0), r = Math.floor(idx / n), c = idx % n, br = Math.floor(b / n), bc = b % n;
@@ -286,7 +452,7 @@ function slideGame(ctx) {
   const drawSizes = () => sizeSeg.replaceChildren(...[3, 4, 5].map(s =>
     h("button", { class: s === n ? "on" : "", onclick: () => { n = s; store.set("slideN", s); drawSizes(); newGame(); } }, `${s}×${s}`)));
   drawSizes();
-  ctx.controls.append(sizeSeg, btn("↶ Undo", undo), btn("💡 Hint", hint), btn("⟳ New", newGame));
+  ctx.controls.append(sizeSeg, btn("↶ Undo", undo), btn("💡 Hint", hint), btn("⟳ New", newGame, "solo"));
   newGame();
 }
 
@@ -297,7 +463,7 @@ function matchGame(ctx) {
   const letters = ctx.mode === "letters";
   const label = v => letters ? String.fromCharCode(64 + v) : String(v);
   const COLS = 9;
-  let cells, sel, score, plusLeft, hintsLeft, hintPair, over;
+  let cells, sel, score, plusLeft, hintsLeft, hintPair, over, totalEver;
   const grid = h("div", { class: "mgrid" });
   const msg = h("div", { class: "msg" });
   const plusBtn = h("button", { class: "btn badge", onclick: () => plus() }, "＋ Add numbers", h("em", {}, ""));
@@ -326,6 +492,7 @@ function matchGame(ctx) {
       onclick: () => tap(i)
     }, label(c.v))));
     ctx.stat("score", "Score", score);
+    ctx.progress(score / 5 / totalEver);
     ctx.stat("left", "Left", cells.filter(c => !c.done).length);
     plusBtn.lastChild.textContent = plusLeft; plusBtn.disabled = plusLeft <= 0 || over;
     hintBtn.lastChild.textContent = hintsLeft; hintBtn.disabled = hintsLeft <= 0 || over;
@@ -341,7 +508,7 @@ function matchGame(ctx) {
       const t = ctx.stopTimer(), r = ctx.best(score, false);
       ctx.win("Board cleared! 🎉", [`Score ${score} in ${fmt(t)}`, r.isNew ? "New best score!" : `Best: ${r.best}`], newGame);
     } else if (!findPair() && plusLeft === 0) {
-      over = true; msg.textContent = "No more moves — tap New to try again."; msg.className = "msg bad"; draw(); ctx.stopTimer();
+      over = true; msg.textContent = ctx.mp ? "No more moves — you are out of the race." : "No more moves — tap New to try again."; msg.className = "msg bad"; draw(); ctx.stopTimer(); if (ctx.mp) ctx.dnf();
     } else { msg.textContent = findPair() ? "" : "No pairs left — use ＋ to add numbers."; msg.className = "msg"; draw(); }
   };
   function tap(i) {
@@ -353,7 +520,7 @@ function matchGame(ctx) {
   }
   function plus() {
     if (over || plusLeft <= 0) return;
-    plusLeft--; cells.push(...cells.filter(c => !c.done).map(c => ({ v: c.v, done: false })));
+    plusLeft--; const add = cells.filter(c => !c.done).map(c => ({ v: c.v, done: false })); totalEver += add.length; cells.push(...add);
     hintPair = null; msg.textContent = ""; draw(); grid.scrollTop = grid.scrollHeight;
   }
   function hint() {
@@ -362,11 +529,11 @@ function matchGame(ctx) {
     hintsLeft--; hintPair = p; sel = -1; draw();
   }
   function newGame() {
-    cells = Array.from({ length: COLS * 5 }, () => ({ v: 1 + rand(9), done: false }));
+    cells = Array.from({ length: COLS * 5 }, () => ({ v: 1 + rand(9), done: false })); totalEver = cells.length;
     sel = -1; score = 0; plusLeft = 4; hintsLeft = 5; hintPair = null; over = false; msg.textContent = "";
     draw(); ctx.startTimer();
   }
-  ctx.controls.append(plusBtn, hintBtn, btn("⟳ New", newGame));
+  ctx.controls.append(plusBtn, hintBtn, btn("⟳ New", newGame, "solo"));
   newGame();
 }
 
@@ -504,6 +671,7 @@ function crossGame(ctx) {
         onclick: () => { sel = key(e.r, e.c); dir = e.dir; draw(); }
       }, `${e.num}. ${e.clue}`)));
     clues.replaceChildren(list("A"), list("D"));
+    ctx.progress([...cells.keys()].filter(k => user.get(k) === cells.get(k).ch).length / cells.size);
     ctx.stat("solved", "Words", entries.filter(entrySolved).length + "/" + entries.length);
     ctx.stat("hints", "Hints", hints);
   }
@@ -564,7 +732,7 @@ function crossGame(ctx) {
     if (i === 2) r.append(h("button", { class: "wide", "aria-label": "Delete", onclick: backspace }, "⌫"));
     kb.append(r);
   });
-  ctx.controls.append(btn("✔ Check", check), btn("💡 Hint letter", hint), btn("⟳ New", build));
+  ctx.controls.append(btn("✔ Check", check), btn("💡 Hint letter", hint), btn("⟳ New", build, "solo"));
   build();
 }
 
@@ -579,11 +747,11 @@ const LEVELS = {
 };
 
 function mathGame(ctx) {
-  let level = store.get("mathLevel", "Easy"), cellsMap, eqs, chips, sel, locked, bad, hints, over;
+  let level = ctx.cfg ? ctx.cfg.level : store.get("mathLevel", "Easy"), cellsMap, eqs, chips, sel, locked, bad, hints, over;
   const board = h("div", { class: "mx" });
   const tray = h("div", { class: "tray" });
   const msg = h("div", { class: "msg" });
-  const levelSeg = h("div", { class: "seg" });
+  const levelSeg = h("div", { class: "seg solo" });
   ctx.body.append(board, msg, tray, h("p", { class: "help" }, "Tap an empty box, then tap a number below to place it. Every row and column equation must be true. Tap a placed number to take it back."));
 
   const key = (r, c) => r + "," + c;
@@ -641,6 +809,7 @@ function mathGame(ctx) {
     }
     board.replaceChildren(...out);
     tray.replaceChildren(...chips.map((ch, i) => h("button", { class: "chip" + (ch.cell != null ? " gone" : ""), onclick: () => tapChip(i) }, ch.v)));
+    { const hid = [...cellsMap.values()].filter(c => c.hidden); ctx.progress(hid.filter(c => c.chip != null && chips[c.chip].v === c.ans).length / hid.length); }
     ctx.stat("left", "To place", chips.filter(c => c.cell == null).length);
     ctx.stat("hints", "Hints", hints);
   }
@@ -697,7 +866,7 @@ function mathGame(ctx) {
   const drawLevels = () => levelSeg.replaceChildren(...Object.keys(LEVELS).map(l =>
     h("button", { class: l === level ? "on" : "", onclick: () => { level = l; store.set("mathLevel", l); drawLevels(); newGame(); } }, l)));
   drawLevels();
-  ctx.controls.append(levelSeg, btn("💡 Hint", hint), btn("⟳ New", newGame));
+  ctx.controls.append(levelSeg, btn("💡 Hint", hint), btn("⟳ New", newGame, "solo"));
   newGame();
 }
 
