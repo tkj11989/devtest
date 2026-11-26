@@ -35,11 +35,11 @@ h1,h2,p{margin:0}
 .seg button.on{background:var(--accent);color:#fff}
 .modebar{display:flex;justify-content:center;align-items:center;gap:10px;margin:8px 0 10px;flex-wrap:wrap}
 .modebar small{color:var(--muted)}
-.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .gcard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;text-align:left;display:flex;flex-direction:column;gap:2px;transition:transform .12s}
 .gcard:active{transform:scale(.98)}
-.gcard .ic{font-size:24px}
-.gcard b{font-size:16px}
+.gcard .ic{font-size:26px}
+.gcard b{font-size:14px;line-height:1.15}
 .gcard span{color:var(--muted);font-size:12.5px;line-height:1.25}
 .gcard i{font-style:normal;font-size:12px;color:var(--accent);font-weight:600}
 
@@ -117,6 +117,19 @@ h1,h2,p{margin:0}
 .chip{min-width:48px;height:44px;padding:0 10px;border:0;background:var(--tile);color:var(--tile-ink);box-shadow:0 2px 0 var(--tile-edge);font-weight:800;font-size:20px;border-radius:8px}
 .chip.gone{visibility:hidden}
 
+/* 5/6. arithmetic & algebra quiz */
+.qcard{width:min(92vw,480px);background:var(--board);border-radius:16px;padding:14px 12px;text-align:center;display:flex;flex-direction:column;gap:6px;align-items:center}
+.qcard small{color:var(--muted);font-weight:600}
+.qtext{font-size:clamp(28px,9vw,44px);font-weight:800;color:var(--tile-ink);padding:10px 0;letter-spacing:.02em}
+.dots{display:flex;gap:6px}
+.dots i{width:10px;height:10px;border-radius:50%;background:var(--empty)}
+.dots i.done{background:var(--accent)}
+.dots i.cur{background:var(--accent-soft);outline:2px solid var(--accent)}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:min(92vw,480px)}
+.opt{border:0;background:var(--tile);color:var(--tile-ink);box-shadow:0 3px 0 var(--tile-edge);border-radius:12px;padding:16px 0;font-size:26px;font-weight:800}
+.opt.right{background:var(--good-soft);color:var(--good)}
+.opt.wrong{background:var(--bad-soft);color:var(--bad)}
+.opt:disabled{opacity:.4}
 /* ads */
 .adbanner{width:min(100%,320px);height:50px;border-radius:6px;background:repeating-linear-gradient(45deg,var(--board),var(--board) 10px,var(--card) 10px,var(--card) 20px);border:1px dashed var(--tile-edge);display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--muted);position:relative}
 .adlabel{font-size:10px;font-weight:700;background:#ffcc33;color:#222;border-radius:3px;padding:1px 4px}
@@ -310,11 +323,11 @@ function showMenu() {
   const drawCards = () => {
     cards.replaceChildren(...Object.entries(GAMES).map(([key, g]) => {
       const best = store.get("best_" + g.bestKey(), null);
-      return h("button", { class: "gcard", onclick: () => openGame(key) },
-        h("div", { class: "ic" }, g.icon), h("b", {}, g.title), h("span", {}, g.desc),
-        g.uses === "mode" ? h("i", {}, mode === "letters" ? "Playing with letters" : "Playing with numbers") :
-          h("i", {}, g.uses === "letters" ? "Letters only" : "Numbers only"),
-        best != null ? h("span", {}, "Best: " + g.fmtBest(best)) : null);
+      const tag = g.uses === "mode" ? (mode === "letters" ? "ABC" : "123") : g.uses === "letters" ? "ABC" : "123";
+      return h("button", { class: "gcard", title: g.desc, onclick: () => openGame(key) },
+        h("div", { class: "ic" }, g.icon), h("b", {}, g.title),
+        h("i", {}, tag + (g.uses === "mode" ? " · switchable" : "")),
+        best != null ? h("span", {}, "Best " + g.fmtBest(best)) : null);
     }), nativeAd);
   };
   drawSeg(); drawCards();
@@ -334,7 +347,7 @@ function showMenu() {
     h("div", { class: "row" }, input, btn("Join", () => { const c = input.value.trim().toUpperCase(); if (c.length === 5) openRoom("guest", kind, c); else input.focus(); })));
 
   app.replaceChildren(
-    h("div", { class: "hero" }, h("h1", {}, "🧠 Brain Quiz"), h("p", {}, "Four puzzle games for numbers and letters")),
+    h("div", { class: "hero" }, h("h1", {}, "🧠 Brain Quiz"), h("p", {}, "Six puzzle games for numbers and letters")),
     h("div", { class: "modebar" }, h("small", {}, "Slide & Match games use:"), modeSeg),
     cards, mp
   );
@@ -412,7 +425,7 @@ function showLobby() {
       const g = GAMES[lobbyCfg.game], o = [];
       if (g.uses === "mode") o.push(h("div", { class: "seg" }, ...[["numbers", "123"], ["letters", "ABC"]].map(([k, t]) => h("button", { class: lobbyCfg.mode === k ? "on" : "", onclick: () => { lobbyCfg.mode = k; draw(); } }, t))));
       if (lobbyCfg.game === "slide") o.push(h("div", { class: "seg" }, ...[3, 4, 5].map(sz => h("button", { class: lobbyCfg.n === sz ? "on" : "", onclick: () => { lobbyCfg.n = sz; draw(); } }, sz + "×" + sz))));
-      if (lobbyCfg.game === "math") o.push(h("div", { class: "seg" }, ...Object.keys(LEVELS).map(l => h("button", { class: lobbyCfg.level === l ? "on" : "", onclick: () => { lobbyCfg.level = l; draw(); } }, l))));
+      if (["math", "arith", "algebra"].includes(lobbyCfg.game)) o.push(h("div", { class: "seg" }, ...Object.keys(LEVELS).map(l => h("button", { class: lobbyCfg.level === l ? "on" : "", onclick: () => { lobbyCfg.level = l; draw(); } }, l))));
       opts.replaceChildren(...o);
     };
     draw();
@@ -464,6 +477,7 @@ function startGame(key, mp = null) {
     onStop: fn => cleanups.push(fn),
     startTimer() { secs = 0; timerEl.textContent = "0:00"; clearInterval(iv); iv = setInterval(() => { secs++; timerEl.textContent = fmt(secs); }, 1000); },
     stopTimer() { clearInterval(iv); return secs; },
+    addTime(n) { secs += n; timerEl.textContent = fmt(secs); },
     stat(id, label, val) {
       if (!statEls[id]) { statEls[id] = h("b", {}, ""); stats.append(h("div", { class: "stat" }, h("small", {}, label), statEls[id])); }
       statEls[id].textContent = val;
@@ -1011,23 +1025,159 @@ function mathGame(ctx) {
   newGame();
 }
 
+/* ======================================================================
+   5 & 6. ARITHMETIC and ALGEBRA QUIZ
+   ====================================================================== */
+const fmtN = n => n < 0 ? "−" + (-n) : String(n);
+const lin = (a, b) => {                      // "3x + 5", "x − 4", "−2x"
+  let t = a === 1 ? "x" : a === -1 ? "−x" : fmtN(a) + "x";
+  if (b > 0) t += " + " + b; else if (b < 0) t += " − " + (-b);
+  return t;
+};
+const pickOf = a => a[rand(a.length)];
+
+function arithQ(level) {
+  let a, b, c, ans, text;
+  if (level === "Easy") {
+    const op = pickOf(["+", "−"]); a = 2 + rand(40); b = 2 + rand(40);
+    if (op === "−" && b > a) [a, b] = [b, a];
+    ans = op === "+" ? a + b : a - b; text = `${a} ${op} ${b}`;
+  } else if (level === "Medium") {
+    const op = pickOf(["+", "−", "×", "÷"]);
+    if (op === "+") { a = 20 + rand(180); b = 20 + rand(180); ans = a + b; }
+    else if (op === "−") { a = 50 + rand(200); b = 10 + rand(a - 20); ans = a - b; }
+    else if (op === "×") { a = 2 + rand(11); b = 2 + rand(11); ans = a * b; }
+    else { b = 2 + rand(11); ans = 2 + rand(11); a = b * ans; }
+    text = `${a} ${op} ${b}`;
+  } else {
+    const form = rand(5); a = 2 + rand(12); b = 2 + rand(12); c = 2 + rand(20);
+    if (form === 0) { ans = a + b * c; text = `${a} + ${b} × ${c}`; }
+    else if (form === 1) { ans = (a + c) * b; text = `(${a} + ${c}) × ${b}`; }
+    else if (form === 2) { ans = a * b - c; text = `${a} × ${b} − ${c}`; }
+    else if (form === 3) { const d = 2 + rand(9); ans = b * c + a; text = `${b * d} ÷ ${d} × ${c} + ${a}`; }
+    else { a = 11 + rand(30); b = 3 + rand(9); ans = a * b; text = `${a} × ${b}`; }
+  }
+  return { text, ans };
+}
+
+function algebraQ(level) {
+  let a, b, c, d, x, text;
+  if (level === "Easy") {
+    const f = rand(4);
+    if (f === 0) { x = 2 + rand(20); a = 1 + rand(20); text = `x + ${a} = ${x + a}`; }
+    else if (f === 1) { a = 1 + rand(20); x = a + 1 + rand(15); text = `x − ${a} = ${x - a}`; }
+    else if (f === 2) { a = 2 + rand(8); x = 2 + rand(10); text = `${a}x = ${a * x}`; }
+    else { a = 2 + rand(8); b = 2 + rand(10); x = a * b; text = `x ÷ ${a} = ${b}`; }
+  } else if (level === "Medium") {
+    const f = rand(4);
+    a = 2 + rand(8); b = 1 + rand(20); x = 1 + rand(12);
+    if (f === 0) text = `${a}x + ${b} = ${a * x + b}`;
+    else if (f === 1) { b = 1 + rand(a * x - 1); text = `${a}x − ${b} = ${a * x - b}`; }
+    else if (f === 2) { x = a * (1 + rand(8)); text = `x ÷ ${a} + ${b} = ${x / a + b}`; }
+    else text = `${a}(x + ${b}) = ${a * (x + b)}`;
+  } else {
+    const f = rand(4);
+    x = rand(21) - 8; if (x === 0) x = 5;
+    if (f === 0) { a = 3 + rand(6); c = 1 + rand(a - 2); b = 1 + rand(15); d = (a - c) * x + b; text = `${lin(a, b)} = ${lin(c, d)}`; }
+    else if (f === 1) { a = 2 + rand(6); b = 1 + rand(9); c = 1 + rand(15); text = `${a}(x + ${b}) − ${c} = ${fmtN(a * (x + b) - c)}`; }
+    else if (f === 2) { a = 2 + rand(6); c = 2 + rand(8); b = a * c - x; text = `(x ${b < 0 ? "−" : "+"} ${Math.abs(b)}) ÷ ${a} = ${c}`; }
+    else { a = -(2 + rand(6)); b = 1 + rand(20); text = `${fmtN(a)}x + ${b} = ${fmtN(a * x + b)}`; }
+  }
+  return { text, ans: x };
+}
+
+function makeOptions(ans) {
+  const c = [...new Set([ans + 1, ans - 1, ans + 2, ans - 2, ans + 10, ans - 10, ans + 3 + rand(5), ans - 3 - rand(5), -ans, ans * 2].filter(v => v !== ans && (ans < 0 || v >= 0)))];
+  return shuffle([ans, ...shuffle(c).slice(0, 3)]);
+}
+
+function quizGame(kind) {
+  const gen = kind === "arith" ? arithQ : algebraQ, N = 10;
+  return ctx => {
+    let level = ctx.cfg ? ctx.cfg.level : store.get(kind + "Level", "Easy");
+    let qs, qi, mistakes, hints, locked, off, state;
+    const card = h("div", { class: "qcard" }), optsEl = h("div", { class: "opts" }), msg = h("div", { class: "msg" });
+    const levelSeg = h("div", { class: "seg solo" });
+    ctx.body.append(card, optsEl, msg, h("p", { class: "help" }, "Pick the right answer — a wrong pick adds a 3 second penalty. Keys 1–4 also work."));
+
+    const render = () => {
+      const q = qs[qi];
+      card.replaceChildren(
+        h("small", {}, (kind === "arith" ? "Calculate" : "Solve for x") + " · " + (qi + 1) + " of " + N),
+        h("div", { class: "qtext" }, q.text + (kind === "arith" ? " = ?" : "")),
+        h("div", { class: "dots" }, qs.map((_, k) => h("i", { class: k < qi ? "done" : k === qi ? "cur" : "" }))));
+      optsEl.replaceChildren(...q.opts.map((v, k) => {
+        const b = h("button", { class: "opt " + (state[k] || ""), onclick: () => pick(k) }, fmtN(v));
+        b.disabled = off.has(k); return b;
+      }));
+      ctx.stat("q", "Question", qi + 1 + "/" + N); ctx.stat("miss", "Mistakes", mistakes); ctx.stat("hints", "50:50", hints);
+      ctx.progress(qi / N);
+    };
+    function pick(k) {
+      if (locked || off.has(k)) return;
+      const q = qs[qi];
+      if (q.opts[k] === q.ans) {
+        locked = true; state[k] = "right"; msg.textContent = ""; render();
+        setTimeout(() => {
+          if (!current) return;
+          qi++; off = new Set(); state = []; locked = false;
+          if (qi >= N) {
+            ctx.progress(1);
+            const t = ctx.stopTimer(), r = ctx.best(t);
+            ctx.win("Quiz complete! 🎉", [`${fmt(t)} with ${mistakes} mistake${mistakes === 1 ? "" : "s"}`, r.isNew ? "New best time!" : `Best: ${fmt(r.best)}`], newGame);
+          } else { msg.textContent = ""; render(); }
+        }, 350);
+      } else {
+        mistakes++; ctx.addTime(3); off.add(k); state[k] = "wrong"; msg.textContent = "Not quite — +3 s penalty"; msg.className = "msg bad"; render();
+      }
+    }
+    function hint() {
+      if (locked) return;
+      if (hints <= 0) return ctx.reward(`Out of 50:50 hints! Watch a short video for +${ADS.rewardHints}?`, () => { hints += ADS.rewardHints; render(); });
+      const q = qs[qi], wrongs = shuffle(q.opts.map((v, k) => k).filter(k => q.opts[k] !== q.ans && !off.has(k))).slice(0, 2);
+      if (!wrongs.length) return;
+      hints--; wrongs.forEach(k => off.add(k)); render();
+    }
+    function newGame() {
+      qs = Array.from({ length: N }, () => { const q = gen(level); q.opts = makeOptions(q.ans); return q; });
+      qi = 0; mistakes = 0; hints = 3; locked = false; off = new Set(); state = []; msg.textContent = ""; msg.className = "msg";
+      render(); ctx.startTimer();
+    }
+    const onKey = e => { if (!ctx.modalOpen && /^[1-4]$/.test(e.key)) pick(+e.key - 1); };
+    document.addEventListener("keydown", onKey); ctx.onStop(() => document.removeEventListener("keydown", onKey));
+    const drawLevels = () => levelSeg.replaceChildren(...Object.keys(LEVELS).map(l =>
+      h("button", { class: l === level ? "on" : "", onclick: () => { level = l; store.set(kind + "Level", l); drawLevels(); newGame(); } }, l)));
+    drawLevels();
+    ctx.controls.append(levelSeg, btn("💡 50:50", hint), btn("⟳ New", newGame, "solo"));
+    newGame();
+  };
+}
+
 /* ---------- registry ---------- */
 const GAMES = {
   slide: {
-    title: "Slide Puzzle", icon: "🔢", desc: "Slide tiles into order using the empty space.", uses: "mode",
+    title: "Slide Puzzle", icon: "🔢", desc: "Slide tiles into order.", uses: "mode",
     run: slideGame, bestKey: () => "slide" + store.get("slideN", 4) + mode, fmtBest: v => v + " moves"
   },
   match: {
-    title: "Pairs & Sums of 10", icon: "🔟", desc: "Clear the board by matching equal pairs or pairs that make 10.", uses: "mode",
+    title: "Pairs & Sums of 10", icon: "🔟", desc: "Match equal pairs or pairs making 10.", uses: "mode",
     run: matchGame, bestKey: () => "match" + mode, fmtBest: v => v + " pts"
   },
-  cross: {
-    title: "Word Crossword", icon: "🔤", desc: "Fresh crossword every time. Fill the grid from the clues.", uses: "letters",
-    run: crossGame, bestKey: () => "cross", fmtBest: fmt
+  arith: {
+    title: "Arithmetic", icon: "🧮", desc: "Add, subtract, multiply, divide — fast.", uses: "numbers",
+    run: quizGame("arith"), bestKey: () => "arith" + store.get("arithLevel", "Easy"), fmtBest: fmt
+  },
+  algebra: {
+    title: "Algebra", icon: "📐", desc: "Solve for x in linear equations.", uses: "numbers",
+    run: quizGame("algebra"), bestKey: () => "algebra" + store.get("algebraLevel", "Easy"), fmtBest: fmt
   },
   math: {
-    title: "Math Crossword", icon: "➕", desc: "Drop numbers into the grid so every equation is true.", uses: "numbers",
+    title: "Math Crossword", icon: "➕", desc: "Fill the grid so every equation is true.", uses: "numbers",
     run: mathGame, bestKey: () => "math" + store.get("mathLevel", "Easy"), fmtBest: fmt
+  },
+  cross: {
+    title: "Word Crossword", icon: "🔤", desc: "A fresh crossword every time.", uses: "letters",
+    run: crossGame, bestKey: () => "cross", fmtBest: fmt
   }
 };
 
