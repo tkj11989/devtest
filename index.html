@@ -3,7 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Brain Quiz</title>
+<title>NumLex</title>
+<meta name="theme-color" content="#2f6fed">
+<meta name="description" content="NumLex — numbers & letters puzzle quiz">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
 <style>
 :root{
   --bg:#f3f5fb;--card:#fff;--ink:#2d3354;--muted:#7a809c;--line:#d5d9ea;
@@ -28,7 +33,10 @@ h1,h2,p{margin:0}
 
 /* menu */
 .hero{text-align:center;padding:4px 0 2px}
-.hero h1{font-size:28px;letter-spacing:-.5px}
+.brand{display:flex;align-items:center;justify-content:center;gap:10px}
+.brand img{border-radius:12px;box-shadow:0 3px 0 var(--tile-edge)}
+.hero h1 span{color:var(--accent)}
+.hero h1{font-size:30px;letter-spacing:-.5px}
 .hero p{color:var(--muted);margin-top:4px}
 .seg{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
 .seg button{border:0;background:transparent;padding:7px 16px;border-radius:999px;font-weight:600;color:var(--muted)}
@@ -198,6 +206,10 @@ const app = $("#app");
 let mode = store.get("mode", "numbers");      // "numbers" | "letters"
 let current = null;
 
+/* ---------- brand ---------- */
+const APP = { name: "NumLex", tagline: "Numbers & letters puzzle quiz" };
+document.title = APP.name;
+
 /* ---------- ads ----------
    provider "test": clearly-labelled placeholder ads (works out of the box).
    provider "google": real ads. Fill in YOUR ids below. Banner/native use AdSense,
@@ -328,7 +340,7 @@ function showMenu() {
         h("div", { class: "ic" }, g.icon), h("b", {}, g.title),
         h("i", {}, tag + (g.uses === "mode" ? " · switchable" : "")),
         best != null ? h("span", {}, "Best " + g.fmtBest(best)) : null);
-    }), nativeAd);
+    }), ...(nativeAd ? [nativeAd] : []));
   };
   drawSeg(); drawCards();
 
@@ -347,7 +359,7 @@ function showMenu() {
     h("div", { class: "row" }, input, btn("Join", () => { const c = input.value.trim().toUpperCase(); if (c.length === 5) openRoom("guest", kind, c); else input.focus(); })));
 
   app.replaceChildren(
-    h("div", { class: "hero" }, h("h1", {}, "🧠 Brain Quiz"), h("p", {}, "Six puzzle games for numbers and letters")),
+    h("div", { class: "hero" }, h("div", { class: "brand" }, h("img", { src: "logo.svg", alt: "", width: "48", height: "48" }), h("h1", {}, APP.name.slice(0, 3), h("span", {}, APP.name.slice(3)))), h("p", {}, APP.tagline)),
     h("div", { class: "modebar" }, h("small", {}, "Slide & Match games use:"), modeSeg),
     cards, mp
   );
@@ -503,7 +515,7 @@ function startGame(key, mp = null) {
         showModal("🏆 You win!", [lines[0], "You finished first."], mpButtons());
         return;
       }
-      showModal(title, [...lines, Ads.nativeCard()], [btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu)]);
+      showModal(title, [...lines, Ads.nativeCard()].filter(Boolean), [btn("Play again", () => { modal.remove(); modal = null; again(); }, "primary"), btn("Menu", showMenu)]);
     },
     reward(text, onGrant) {     // offer a rewarded video (solo play only)
       if (mp) return;

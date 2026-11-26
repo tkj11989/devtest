@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="NumLex logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4c8dff"/>
+      <stop offset="1" stop-color="#2a56d6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- letter tile (behind) -->
+  <g transform="translate(338 238) rotate(8)">
+    <rect x="-100" y="-88" width="200" height="200" rx="38" fill="#7f9fe6"/>
+    <rect x="-100" y="-100" width="200" height="200" rx="38" fill="#cfe8ff"/>
+    <path d="M-46 56 L0 -56 L46 56 M-26 14 H26" fill="none" stroke="#1d3f8f" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- number tile (front) -->
+  <g transform="translate(176 262) rotate(-9)">
+    <rect x="-100" y="-88" width="200" height="200" rx="38" fill="#9db9f5"/>
+    <rect x="-100" y="-100" width="200" height="200" rx="38" fill="#ffffff"/>
+    <path d="M-42 -50 H42 L-6 54" fill="none" stroke="#2a56d6" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
