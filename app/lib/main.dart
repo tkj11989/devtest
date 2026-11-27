@@ -33,6 +33,12 @@ class MutualTestingApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: 'Mutual Testing',
         theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
+        // Android 15+ forces edge-to-edge; keep every screen (and the bottom tab bar) above the
+        // system navigation bar / gesture handle instead of drawing underneath it.
+        builder: (context, child) => ColoredBox(
+          color: Theme.of(context).colorScheme.surface,
+          child: SafeArea(top: false, left: false, right: false, child: child!),
+        ),
         home: StreamBuilder<User?>(
           stream: FirebaseAuth.instance.authStateChanges(),
           builder: (_, s) => s.data == null ? const SignInScreen() : const HomeShell(),
