@@ -11,7 +11,7 @@ service cloud.firestore {
     match /apps/{appId} {
       allow read: if signedIn();
       allow create: if isOwner(request.resource.data.ownerUid)
-        && request.resource.data.checklist == {'groupAdded': false, 'buildReleased': false, 'linkPasted': false};
+        && request.resource.data.checklist == {'groupAdded': false, 'buildReleased': false};
       allow update: if isOwner(resource.data.ownerUid)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && request.resource.data.checklist == resource.data.checklist;

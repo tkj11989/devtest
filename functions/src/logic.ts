@@ -2,7 +2,7 @@ import * as C from "./constants";
 
 const DAY = 86_400_000;
 
-export const checklistComplete = (c?: Partial<C.Checklist>) => !!(c && c.groupAdded && c.buildReleased && c.linkPasted);
+export const checklistComplete = (c?: Partial<C.Checklist>) => !!(c && c.groupAdded && c.buildReleased);
 
 /** Day number of a running pool: day 1 is the day it started. */
 export const dayNumber = (startedAt: number, now: number) => Math.floor((now - startedAt) / DAY) + 1;
@@ -28,7 +28,8 @@ export function checkJoin(a: {
   if (a.sameAppMembership) return "same_app";
   if (user.activeTesterPools >= testerPoolLimit(user, a.platformLimit)) return "tester_slots_full";
   if (pool.testerCount >= C.MIN_TESTERS) return "pool_full";
-  if (pool.state === "filling") return null;
+  // During the install buffer a freed slot can be refilled; the newcomer installs within the same deadline.
+  if (pool.state === "filling" || pool.state === "installing") return null;
   // Replacements for dropouts: only early in a running pool, so they can still stay opted in long enough.
   if ((pool.state === "running" || pool.state === "at_risk") && pool.startedAt !== undefined) {
     return dayNumber(pool.startedAt, now) <= C.LATE_JOIN_MAX_DAY ? null : "too_late";
@@ -36,9 +37,26 @@ export function checkJoin(a: {
   return "pool_closed";
 }
 
-/** Filling -> Running when full and the developer's setup is confirmed. */
-export const shouldStart = (p: C.Pool, checklist?: Partial<C.Checklist>) =>
+/** Filling -> Installing (buffer timer starts) when full and the developer's setup is confirmed. */
+export const shouldBeginInstall = (p: C.Pool, checklist?: Partial<C.Checklist>) =>
   p.state === "filling" && p.testerCount >= C.MIN_TESTERS && checklistComplete(checklist);
+
+export const installDeadline = (now: number, bufferHours: number = C.INSTALL_BUFFER_HOURS) => now + bufferHours * C.HOUR_MS;
+
+/**
+ * What happens to a pool in the install buffer:
+ *  - "start":  all 18 testers confirmed the install (early), or the timer ran out with at least 12 installed.
+ *  - "refill": the timer ran out with fewer than 12 installed; non-installers are dropped and the pool reopens.
+ *  - "wait":   keep waiting.
+ */
+export function installPhase(p: { installedCount: number; deadline: number; now: number }): "start" | "refill" | "wait" {
+  if (p.installedCount >= C.MIN_TESTERS) return "start";
+  if (p.now < p.deadline) return "wait";
+  return p.installedCount >= C.GOOGLE_MIN_TESTERS ? "start" : "refill";
+}
+
+/** Testing (and the 30-second daily test) is only possible once the install is confirmed. */
+export const isInstalledStatus = (s: C.MemberStatus) => s === "installed" || s === "active";
 
 /** Pool state for a running pool given the current number of active testers. */
 export function runningState(activeCount: number): "running" | "at_risk" {

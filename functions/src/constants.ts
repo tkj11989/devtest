@@ -14,14 +14,20 @@ export const FEEDBACK_DAYS = [8, 16] as const;
 export const MIN_TEST_SECONDS = 30; // a daily test only counts after the tester used the app this long
 export const MAX_TEST_SESSION_MINUTES = 120; // sessions older than this are abandoned
 export const DAY_MS = 86_400_000;
+export const HOUR_MS = 3_600_000;
+// Once a pool has its 18 testers, they get this long to download the app before day 1 (config/limits.installBufferHours).
+export const INSTALL_BUFFER_HOURS = 24;
 
-export type PoolState = "filling" | "running" | "at_risk" | "complete" | "failed" | "cancelled";
+// filling -> installing (buffer timer) -> running/at_risk -> complete/failed
+export type PoolState = "filling" | "installing" | "running" | "at_risk" | "complete" | "failed" | "cancelled";
 export type MemberStatus = "joined" | "installed" | "active" | "dropped" | "completed";
 
-export interface Checklist { groupAdded: boolean; buildReleased: boolean; linkPasted: boolean }
+// No opt-in link step: the developer only confirms the group and the closed-track build.
+export interface Checklist { groupAdded: boolean; buildReleased: boolean }
 export interface Pool {
   state: PoolState; appId: string; ownerUid: string;
   testerCount: number; activeCount: number; startedAt?: number; // epoch ms
+  installedCount?: number; installDeadline?: number;
 }
 export interface UserDoc { credits: number; activeTesterPools: number; activeDevPools: number; status: "ok" | "banned" | "cooldown"; cooldownUntil?: number; maxTesterPools?: number }
 export interface Member { status: MemberStatus; lastCheckIn?: number; checkInCount: number; joinedAt: number; feedback8?: boolean; feedback16?: boolean }

@@ -49,7 +49,7 @@ export const updateChecklist = onCall(async (req) => {
   const uid = uidOf(req);
   const appId = str(req.data.appId, "appId");
   const patch: Partial<C.Checklist> = {};
-  for (const k of ["groupAdded", "buildReleased", "linkPasted"] as const)
+  for (const k of ["groupAdded", "buildReleased"] as const)
     if (typeof req.data[k] === "boolean") patch[k] = req.data[k];
   const appRef = db.collection("apps").doc(appId);
   await db.runTransaction(async (tx) => {
@@ -57,15 +57,72 @@ export const updateChecklist = onCall(async (req) => {
     if (!app.exists || app.data()!.ownerUid !== uid) throw new HttpsError("permission-denied", "Not your app.");
     const checklist = { ...app.data()!.checklist, ...patch };
     const pools = await tx.get(db.collection("pools").where("appId", "==", appId).where("state", "==", "filling"));
+    const limits = await tx.get(db.doc("config/limits"));
     tx.update(appRef, { checklist });
-    for (const p of pools.docs) startIfReady(tx, p.ref, p.data() as C.Pool, checklist);
+    for (const p of pools.docs) beginInstallIfReady(tx, p.ref, p.data() as C.Pool, checklist, bufferHoursOf(limits));
   });
   return { ok: true };
 });
 
-function startIfReady(tx: Transaction, ref: DocumentReference, pool: C.Pool, checklist: Partial<C.Checklist>) {
-  if (L.shouldStart(pool, checklist)) tx.update(ref, { state: "running", startedAt: Date.now(), endsAt: Date.now() + C.DURATION_DAYS * 86_400_000 });
+const OPEN_STATES = ["filling", "installing", "running", "at_risk"];
+const bufferHoursOf = (limits: FirebaseFirestore.DocumentSnapshot) =>
+  typeof limits.data()?.installBufferHours === "number" ? limits.data()!.installBufferHours : C.INSTALL_BUFFER_HOURS;
+
+/** Day 1 of the 16-day test. */
+const startedFields = (now: number, testers: number) => ({
+  state: L.runningState(testers), startedAt: now, endsAt: now + C.DURATION_DAYS * C.DAY_MS, testerCount: testers, activeCount: testers,
+});
+
+/** Pool is full and set up: start the install buffer timer (or start straight away if everyone already installed). */
+function beginInstallIfReady(tx: Transaction, ref: DocumentReference, pool: C.Pool, checklist: Partial<C.Checklist>, bufferHours: number) {
+  if (!L.shouldBeginInstall(pool, checklist)) return;
+  const now = Date.now();
+  if ((pool.installedCount ?? 0) >= C.MIN_TESTERS) tx.update(ref, { ...startedFields(now, pool.testerCount), installDeadline: now });
+  else tx.update(ref, { state: "installing", installStartedAt: now, installDeadline: L.installDeadline(now, bufferHours) });
 }
+
+/**
+ * Settles a pool in the install buffer: start testing when all 18 have installed or the timer ran out with
+ * at least 12 installed; otherwise reopen it for joins. Testers who never installed are released (no penalty).
+ */
+async function settleInstallPhase(poolId: string): Promise<string> {
+  const poolRef = db.collection("pools").doc(poolId);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(poolRef);
+    const p = snap.data() as C.Pool | undefined;
+    if (!p || p.state !== "installing") return p?.state ?? "missing";
+    const now = Date.now();
+    const decision = L.installPhase({ installedCount: p.installedCount ?? 0, deadline: p.installDeadline ?? now, now });
+    if (decision === "wait") return "installing";
+    const members = await tx.get(db.collection("poolMembers").where("poolId", "==", poolId));
+    const installed = members.docs.filter((m) => L.isInstalledStatus(m.data().status)).length;
+    const notInstalled = members.docs.filter((m) => m.data().status === "joined");
+    // Read the users first (transactions need all reads before writes); a deleted account must not wedge the pool.
+    const users = await Promise.all(notInstalled.map((m) => tx.get(db.collection("users").doc(m.data().uid))));
+    notInstalled.forEach((m, i) => {
+      tx.update(m.ref, { status: "dropped", reason: "not_installed", droppedAt: now });
+      if (users[i].exists) tx.update(users[i].ref, { activeTesterPools: FieldValue.increment(-1) });
+    });
+    if (decision === "start") {
+      tx.update(poolRef, { ...startedFields(now, installed), installedCount: installed });
+      return "running";
+    }
+    tx.update(poolRef, { state: "filling", testerCount: installed, activeCount: installed, installedCount: installed, installDeadline: FieldValue.delete() });
+    return "filling";
+  });
+}
+
+/** The app calls this when it sees the buffer timer has run out, so the pool moves on without waiting for the sweep. */
+export const refreshPool = onCall(async (req) => {
+  uidOf(req);
+  return { state: await settleInstallPhase(str(req.data.poolId, "poolId")) };
+});
+
+/** Backstop for install deadlines when nobody has the app open. */
+export const installSweep = onSchedule("every 10 minutes", async () => {
+  const pools = await db.collection("pools").where("state", "==", "installing").where("installDeadline", "<=", Date.now()).get();
+  for (const p of pools.docs) await settleInstallPhase(p.id);
+});
 
 export const createPool = onCall(async (req) => {
   const uid = uidOf(req);
@@ -83,7 +140,7 @@ export const createPool = onCall(async (req) => {
     if (u.activeDevPools >= C.MAX_ACTIVE_POOLS) throw new HttpsError("resource-exhausted", "You already have 2 active pools.");
     if (u.credits < C.POOL_COST) throw new HttpsError("failed-precondition", "Not enough credits.");
     // Spec: same app may run in two pools, with no shared testers (enforced in joinPool via sameAppMembership).
-    const open = await tx.get(db.collection("pools").where("appId", "==", appId).where("state", "in", ["filling", "running", "at_risk"]));
+    const open = await tx.get(db.collection("pools").where("appId", "==", appId).where("state", "in", OPEN_STATES));
     if (open.size >= 2) throw new HttpsError("resource-exhausted", "This app already has 2 active pools.");
     tx.set(poolRef, {
       poolId: poolRef.id, appId, ownerUid: uid, state: "filling", minTesters: C.MIN_TESTERS, durationDays: C.DURATION_DAYS,
@@ -101,16 +158,15 @@ export const joinPool = onCall(async (req) => {
   const poolRef = db.collection("pools").doc(poolId);
   const userRef = db.collection("users").doc(uid);
   const memberRef = db.collection("poolMembers").doc(`${poolId}_${uid}`);
-  const optInLink = await db.runTransaction(async (tx) => {
+  const result = await db.runTransaction(async (tx) => {
     const [pool, user, member] = await Promise.all([tx.get(poolRef), tx.get(userRef), tx.get(memberRef)]);
     if (!pool.exists || !user.exists) throw new HttpsError("not-found", "Pool or user not found.");
     const p = pool.data() as C.Pool;
-    const app = await tx.get(db.collection("apps").doc(p.appId));
-    const secret = await tx.get(db.collection("appSecrets").doc(p.appId)); // all reads before writes
+    const app = await tx.get(db.collection("apps").doc(p.appId)); // all reads before writes
     const limits = await tx.get(db.doc("config/limits"));
     const platformLimit = Number.isInteger(limits.data()?.maxTesterPools) ? limits.data()!.maxTesterPools : C.MAX_ACTIVE_POOLS;
     // Same-app rule: any membership in another pool of this app (any state still holding the slot).
-    const siblings = await tx.get(db.collection("pools").where("appId", "==", p.appId).where("state", "in", ["filling", "running", "at_risk"]));
+    const siblings = await tx.get(db.collection("pools").where("appId", "==", p.appId).where("state", "in", OPEN_STATES));
     let sameApp = false;
     for (const s of siblings.docs) {
       if (s.id === poolId) continue;
@@ -125,12 +181,12 @@ export const joinPool = onCall(async (req) => {
     const next = { ...p, testerCount: p.testerCount + 1, activeCount: p.activeCount + 1 };
     tx.update(poolRef, { testerCount: next.testerCount, activeCount: next.activeCount });
     if (!user.data()!.groupMember) { queueGroup(tx, "add", user.data()!.email); tx.update(userRef, { groupMember: true }); }
-    if (p.state === "filling") startIfReady(tx, poolRef, next, app.data()?.checklist);
+    if (p.state === "filling") beginInstallIfReady(tx, poolRef, next, app.data()?.checklist, bufferHoursOf(limits));
     if (p.state === "at_risk") tx.update(poolRef, { state: L.runningState(next.activeCount) });
-    // The opt-in link lives in appSecrets (owner-only to clients) and is revealed only to assigned testers.
-    return (secret.data()?.optInLink ?? null) as string | null;
+    // No opt-in link: the tester installs the package and the app confirms the install with confirmInstalled.
+    return { packageName: app.data()?.packageName ?? null, installBufferHours: bufferHoursOf(limits) };
   });
-  return { optInLink };
+  return result;
 });
 
 /** Tester leaves before the end: no credit, reputation penalty, cooldown after repeat exits. Group membership stays. */
@@ -147,7 +203,9 @@ export const leavePool = onCall(async (req) => {
     tx.update(memberRef, { status: "dropped", droppedAt: Date.now(), reason: "left" });
     const running = p.state === "running" || p.state === "at_risk";
     const activeCount = p.activeCount - 1;
-    tx.update(poolRef, { activeCount, ...(running ? { state: L.runningState(activeCount) } : { testerCount: p.testerCount - 1 }) });
+    const installedDrop = L.isInstalledStatus(m.data()!.status) ? { installedCount: FieldValue.increment(-1) } : {};
+    // Filling or installing: the slot frees up and can be refilled. Running: the slot is gone, state may drop to at_risk.
+    tx.update(poolRef, { activeCount, ...installedDrop, ...(running ? { state: L.runningState(activeCount) } : { testerCount: p.testerCount - 1 }) });
     const rep = (user.data()!.reputation ?? 0) - (running ? 1 : 0);
     tx.update(userRef, {
       activeTesterPools: FieldValue.increment(-1), reputation: rep,
@@ -180,16 +238,31 @@ export const cancelPool = onCall(async (req) => {
   return { ok: true };
 });
 
-/** "I installed" confirmation after the opt-in. */
+/**
+ * The app found the package installed on the tester's phone and reports it. The install status lives here,
+ * in the backend (member.status "installed", installedAt, pool.installedCount). When all 18 testers of a pool
+ * in the install buffer have installed, testing starts immediately instead of waiting for the timer.
+ */
 export const confirmInstalled = onCall(async (req) => {
   const uid = uidOf(req);
-  const ref = db.collection("poolMembers").doc(`${str(req.data.poolId, "poolId")}_${uid}`);
-  await db.runTransaction(async (tx) => {
-    const m = await tx.get(ref);
-    if (!m.exists || m.data()!.status !== "joined") throw new HttpsError("failed-precondition", "Nothing to confirm.");
-    tx.update(ref, { status: "installed" });
+  const poolId = str(req.data.poolId, "poolId");
+  const ref = db.collection("poolMembers").doc(`${poolId}_${uid}`);
+  const poolRef = db.collection("pools").doc(poolId);
+  const out = await db.runTransaction(async (tx) => {
+    const [m, pool] = await Promise.all([tx.get(ref), tx.get(poolRef)]);
+    if (!m.exists) throw new HttpsError("not-found", "Not a member.");
+    const p = pool.data() as C.Pool;
+    if (L.isInstalledStatus(m.data()!.status)) return { installed: true, state: p.state, already: true };
+    if (m.data()!.status !== "joined" || !OPEN_STATES.includes(p.state)) throw new HttpsError("failed-precondition", "Nothing to confirm.");
+    const now = Date.now();
+    tx.update(ref, { status: "installed", installedAt: now });
+    const installedCount = (p.installedCount ?? 0) + 1;
+    tx.update(poolRef, { installedCount });
+    return { installed: true, state: p.state, installedCount };
   });
-  return { ok: true };
+  // Last of the 18 installed: start testing now (settle runs its own transaction).
+  const state = out.state === "installing" ? await settleInstallPhase(poolId) : out.state;
+  return { ...out, state };
 });
 
 const checkInRef = (poolId: string, uid: string, day: number) => db.collection("checkIns").doc(`${poolId}_${uid}_d${day}`);
@@ -207,10 +280,12 @@ export const startTestSession = onCall(async (req) => {
   return db.runTransaction(async (tx) => {
     const [m, pool] = await Promise.all([tx.get(memberRef), tx.get(db.collection("pools").doc(poolId))]);
     if (!m.exists || !L.isActiveStatus(m.data()!.status)) throw new HttpsError("failed-precondition", "Not an active member.");
+    if (!L.isInstalledStatus(m.data()!.status)) throw new HttpsError("failed-precondition", "not_installed");
     const p = pool.data() as C.Pool;
     if ((p.state !== "running" && p.state !== "at_risk") || p.startedAt === undefined)
       throw new HttpsError("failed-precondition", "pool_not_running");
-    const dayStart = L.testerDayStart(m.data()!.joinedAt, p.startedAt);
+    // A replacement who installed after the pool started counts days from their own install.
+    const dayStart = L.testerDayStart(m.data()!.installedAt ?? m.data()!.joinedAt, p.startedAt);
     const day = L.testerDay(dayStart, now);
     if ((await tx.get(checkInRef(poolId, uid, day))).exists)
       throw new HttpsError("already-exists", "already_tested_today", { nextDayAt: L.nextDayAt(dayStart, now) });

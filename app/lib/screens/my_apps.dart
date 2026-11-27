@@ -31,7 +31,7 @@ class AppForm extends StatefulWidget {
 }
 
 class _AppFormState extends State<AppForm> {
-  final c = {for (final k in ['name', 'packageName', 'description', 'testInstructions', 'optInLink']) k: TextEditingController()};
+  final c = {for (final k in ['name', 'packageName', 'description', 'testInstructions']) k: TextEditingController()};
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Add app')),
@@ -41,7 +41,6 @@ class _AppFormState extends State<AppForm> {
             onPressed: () async {
               await Api.saveApp(
                 info: {for (final k in ['name', 'packageName', 'description', 'testInstructions']) k: c[k]!.text.trim()},
-                optInLink: c['optInLink']!.text.trim(),
               );
               if (context.mounted) Navigator.pop(context);
             },
@@ -65,7 +64,6 @@ class AppDashboard extends StatelessWidget {
             const labels = {
               'groupAdded': 'Added the platform group email to my closed track\'s testers',
               'buildReleased': 'Released a build to the closed track',
-              'linkPasted': 'Pasted the Play opt-in link',
             };
             return ListView(padding: const EdgeInsets.all(8), children: [
               for (final e in labels.entries)
@@ -87,8 +85,15 @@ class AppDashboard extends StatelessWidget {
                 builder: (_, ps) => Column(children: [
                   for (final p in ps.data?.docs ?? [])
                     ListTile(
-                      title: Text('${p['state']} · ${p['activeCount']}/${p['testerCount']} active'),
-                      subtitle: Text(p['state'] == 'at_risk' ? 'Fewer than 14 active: replacements are being pulled.' : 'Needs 12 active at day 16'),
+                      title: Text(p['state'] == 'installing'
+                          ? 'Install period · ${p['installedCount'] ?? 0}/${p['testerCount']} installed'
+                          : '${p['state']} · ${p['activeCount']}/${p['testerCount']} active · ${p['installedCount'] ?? 0} installed'),
+                      subtitle: Text(switch (p['state']) {
+                        'filling' => 'Waiting for 18 testers, then a 24 h install period starts.',
+                        'installing' => 'Testers are installing. Day 1 starts when all have installed or the timer ends.',
+                        'at_risk' => 'Fewer than 14 active: replacements are being pulled.',
+                        _ => 'Needs 12 active at day 16',
+                      }),
                       trailing: p['state'] == 'filling' ? TextButton(onPressed: () => Api.cancelPool(p.id), child: const Text('Cancel')) : null,
                     ),
                 ]),

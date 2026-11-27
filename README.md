@@ -36,11 +36,25 @@ cd app; flutter run                    # debug builds talk to the emulators at 1
 Sign in with any email and password `password` (dev1/dev2/dev3@test.local own the demo apps).
 Emulator UI: http://127.0.0.1:4000. Build with `--dart-define=USE_EMULATOR=false` to use the real project.
 
+## Install period (no opt-in link)
+Pool states: `filling` → `installing` → `running` / `at_risk` → `complete` / `failed`.
+- When a pool has 18 testers (and the developer's checklist is done), it enters `installing` with a buffer timer:
+  `installDeadline = now + config/limits.installBufferHours` (default 24 h).
+- The app checks the phone for the package (Android `getLaunchIntentForPackage`) when My tests opens, every 20 s
+  while it is open, and when the tester returns from the Play Store. If found, it calls `confirmInstalled`; the
+  backend stores the install status (`poolMembers.status = installed`, `installedAt`, `pools.installedCount`).
+- Day 1 starts as soon as all 18 have installed, or when the timer ends with at least 12 installed. Testers who
+  never installed are released (no penalty). With fewer than 12 installed the pool reopens (`filling`) and the
+  installed testers keep their place.
+- Deadlines are settled by `installSweep` (every 10 min) and by `refreshPool`, which the app calls when it sees an
+  expired timer (the emulator does not run scheduled functions).
+- A replacement who joins a running pool also installs first; their 24-hour days count from their own install.
+
 ## Daily testing rules
 - **Package limit per user:** a tester can be in `maxTesterPools` packages at once. The platform default lives in
   `config/limits.maxTesterPools` (2); setting `maxTesterPools` on a `users/{uid}` doc overrides it for that user
   (edit it in the Emulator UI or Firebase console).
-- **24-hour days:** each tester's Day 1 starts at the pool start, or at their own join if they joined later;
+- **24-hour days:** each tester's Day 1 starts at the pool start, or at their own install if they joined later;
   Day N+1 starts exactly 24 h after Day N. One recorded test per day.
 - **30-second test:** "Test app" calls `startTestSession` (server-stamped start), opens the app by package name,
   and on return `finishTestSession` records the day only if 30 s or more have passed. Shorter tries keep the

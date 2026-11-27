@@ -23,6 +23,10 @@ const devs = [
   // Uses an app that is preinstalled on the Android emulator, so "Test app (30 s)" really opens something.
   { email: "dev4@test.local", name: "Kiran (dev)", app: "Calendar (emulator demo)", pkg: "com.google.android.calendar", fill: 17,
     desc: "Demo package that is installed on the emulator.", steps: "Open the calendar, create an event, keep it open 30 seconds." },
+  // Install-period demo: 17 testers have already installed; the 18th to join starts the install timer, and the
+  // app's automatic install check (Clock is preinstalled on the emulator) starts day 1 straight away.
+  { email: "dev5@test.local", name: "Neha (dev)", app: "Clock (install demo)", pkg: "com.google.android.deskclock", fill: 17, installed: true,
+    desc: "Demo of the install period and automatic install check.", steps: "Set an alarm, start a timer, keep it open 30 seconds." },
 ];
 
 async function user(email, displayName) {
@@ -32,7 +36,8 @@ async function user(email, displayName) {
 
 (async () => {
   // Platform default package limit; a user doc's own `maxTesterPools` overrides it.
-  await db.doc("config/limits").set({ maxTesterPools: 2, rewardedAdCredits: 0.25, rewardedAdDailyCap: 3 }, { merge: true });
+  await db.doc("config/limits").set(
+    { maxTesterPools: 2, installBufferHours: 24, rewardedAdCredits: 0.25, rewardedAdDailyCap: 3 }, { merge: true });
   for (const d of devs) {
     const poolIdCheck = `pool_${d.pkg.split(".").pop()}`;
     if ((await db.doc(`pools/${poolIdCheck}`).get()).exists) { console.log(`${d.app}: already seeded, skipped`); continue; }
@@ -44,18 +49,19 @@ async function user(email, displayName) {
     const appId = `app_${d.pkg.split(".").pop()}`;
     await db.doc(`apps/${appId}`).set({
       appId, ownerUid: uid, name: d.app, packageName: d.pkg, description: d.desc, testInstructions: d.steps,
-      checklist: { groupAdded: true, buildReleased: true, linkPasted: true },
+      checklist: { groupAdded: true, buildReleased: true },
     });
     await db.doc(`appSecrets/${appId}`).set({ optInLink: `https://play.google.com/apps/testing/${d.pkg}` });
     const poolId = `pool_${d.pkg.split(".").pop()}`;
     await db.doc(`pools/${poolId}`).set({
       poolId, appId, ownerUid: uid, state: "filling", minTesters: 18, durationDays: 16,
-      createdAt: now - d.fill * 60_000, testerCount: d.fill, activeCount: d.fill,
+      createdAt: now - d.fill * 60_000, testerCount: d.fill, activeCount: d.fill, installedCount: d.installed ? d.fill : 0,
     });
     for (let i = 1; i <= d.fill; i++) {
       const tuid = `seed_tester_${i}`;
       await db.doc(`poolMembers/${poolId}_${tuid}`).set({
-        poolId, uid: tuid, appId, status: "joined", joinedAt: now, checkInCount: 0, feedback8: false, feedback16: false,
+        poolId, uid: tuid, appId, status: d.installed ? "installed" : "joined", joinedAt: now,
+        ...(d.installed ? { installedAt: now } : {}), checkInCount: 0, feedback8: false, feedback16: false,
       });
     }
     console.log(`${d.app}: pool ${poolId} with ${d.fill}/18 testers, owner ${d.email}`);

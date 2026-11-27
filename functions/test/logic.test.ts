@@ -26,12 +26,26 @@ test("replacements only early in a running pool", () => {
 });
 test("complete pool is closed", () => assert.equal(L.checkJoin({ ...base, pool: { ...pool, state: "complete" } }), "pool_closed"));
 
-test("start needs 18 testers and full checklist", () => {
+test("install buffer begins with 18 testers and the checklist (no opt-in link needed)", () => {
   const full = { ...pool, testerCount: 18 };
-  const ok = { groupAdded: true, buildReleased: true, linkPasted: true };
-  assert.equal(L.shouldStart(full, ok), true);
-  assert.equal(L.shouldStart(full, { ...ok, linkPasted: false }), false);
-  assert.equal(L.shouldStart({ ...full, testerCount: 17 }, ok), false);
+  const ok = { groupAdded: true, buildReleased: true };
+  assert.equal(L.shouldBeginInstall(full, ok), true);
+  assert.equal(L.shouldBeginInstall(full, { ...ok, buildReleased: false }), false);
+  assert.equal(L.shouldBeginInstall({ ...full, testerCount: 17 }, ok), false);
+  assert.equal(L.installDeadline(0), 24 * 3600_000);
+  assert.equal(L.installDeadline(0, 6), 6 * 3600_000);
+});
+test("install buffer: early start, start at deadline, or refill", () => {
+  assert.equal(L.installPhase({ installedCount: 18, deadline: 100, now: 0 }), "start"); // everyone installed early
+  assert.equal(L.installPhase({ installedCount: 15, deadline: 100, now: 50 }), "wait");
+  assert.equal(L.installPhase({ installedCount: 12, deadline: 100, now: 100 }), "start");
+  assert.equal(L.installPhase({ installedCount: 11, deadline: 100, now: 100 }), "refill");
+});
+test("joins allowed during the buffer while a slot is free", () => {
+  assert.equal(L.checkJoin({ ...base, pool: { ...pool, state: "installing", testerCount: 17 } }), null);
+  assert.equal(L.checkJoin({ ...base, pool: { ...pool, state: "installing", testerCount: 18 } }), "pool_full");
+  assert.equal(L.isInstalledStatus("joined"), false);
+  assert.equal(L.isInstalledStatus("installed"), true);
 });
 test("at-risk threshold is 14", () => {
   assert.equal(L.runningState(14), "running");
