@@ -35,7 +35,7 @@ class _AppFormState extends State<AppForm> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Add app')),
-        body: ListView(padding: const EdgeInsets.all(16), children: [
+        body: SafeArea(top: false, child: ListView(padding: const EdgeInsets.all(16), children: [
           for (final e in c.entries) Padding(padding: const EdgeInsets.only(bottom: 12), child: TextField(controller: e.value, decoration: InputDecoration(labelText: e.key), maxLines: e.key.contains('Instructions') ? 4 : 1)),
           FilledButton(
             onPressed: () async {
@@ -47,7 +47,7 @@ class _AppFormState extends State<AppForm> {
             },
             child: const Text('Save'),
           ),
-        ]),
+        ])),
       );
 }
 
@@ -58,7 +58,7 @@ class AppDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('App setup & pools')),
-        body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        body: SafeArea(top: false, child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: Api.db.collection('apps').doc(appId).snapshots(),
           builder: (_, s) {
             final cl = Map<String, dynamic>.from(s.data?.data()?['checklist'] ?? {});
@@ -95,6 +95,6 @@ class AppDashboard extends StatelessWidget {
               ),
             ]);
           },
-        ),
+        )),
       );
 }

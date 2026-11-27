@@ -59,7 +59,7 @@ class _PoolDetailState extends State<PoolDetail> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: Text(widget.app['name'] ?? 'Pool')),
-        body: ListView(padding: const EdgeInsets.all(16), children: [
+        body: SafeArea(top: false, child: ListView(padding: const EdgeInsets.all(16), children: [
           Text(widget.app['description'] ?? ''),
           const SizedBox(height: 12),
           const Text('Test instructions', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -75,6 +75,6 @@ class _PoolDetailState extends State<PoolDetail> {
             FilledButton(onPressed: () => launchUrl(Uri.parse(link!), mode: LaunchMode.externalApplication), child: const Text('Open opt-in link')),
           ],
           TextButton(onPressed: () => Api.report('app', widget.app['appId'], 'Reported from pool detail'), child: const Text('Report this app')),
-        ]),
+        ])),
       );
 }
