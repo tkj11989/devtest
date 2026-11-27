@@ -68,7 +68,7 @@ class _PoolDetailState extends State<PoolDetail> {
           const Text('Your email is added to a platform-wide Google Group; the developer never sees it.'),
           const SizedBox(height: 16),
           if (link == null)
-            FilledButton(onPressed: busy ? null : join, child: const Text('Join this test (1 of your 2 slots)'))
+            FilledButton(onPressed: busy ? null : join, child: const Text('Join this test (uses 1 of your packages)'))
           else ...[
             const Text('Joined. Next: opt in, install from Play Store, then tap "I installed" in My tests.'),
             const SizedBox(height: 8),

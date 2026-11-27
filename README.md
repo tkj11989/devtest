@@ -35,3 +35,13 @@ cd app; flutter run                    # debug builds talk to the emulators at 1
 ```
 Sign in with any email and password `password` (dev1/dev2/dev3@test.local own the demo apps).
 Emulator UI: http://127.0.0.1:4000. Build with `--dart-define=USE_EMULATOR=false` to use the real project.
+
+## Daily testing rules
+- **Package limit per user:** a tester can be in `maxTesterPools` packages at once. The platform default lives in
+  `config/limits.maxTesterPools` (2); setting `maxTesterPools` on a `users/{uid}` doc overrides it for that user
+  (edit it in the Emulator UI or Firebase console).
+- **24-hour days:** each tester's Day 1 starts at the pool start, or at their own join if they joined later;
+  Day N+1 starts exactly 24 h after Day N. One recorded test per day.
+- **30-second test:** "Test app" calls `startTestSession` (server-stamped start), opens the app by package name,
+  and on return `finishTestSession` records the day only if 30 s or more have passed. Shorter tries keep the
+  session open so the tester can continue.

@@ -20,6 +20,9 @@ const devs = [
     desc: "60-second trivia rounds.", steps: "Play two rounds, check the leaderboard, change the theme." },
   { email: "dev3@test.local", name: "Meera (dev)", app: "Plant Pal", pkg: "com.demo.plantpal", fill: 0,
     desc: "Watering reminders for house plants.", steps: "Add a plant, set a reminder, mark it watered." },
+  // Uses an app that is preinstalled on the Android emulator, so "Test app (30 s)" really opens something.
+  { email: "dev4@test.local", name: "Kiran (dev)", app: "Calendar (emulator demo)", pkg: "com.google.android.calendar", fill: 17,
+    desc: "Demo package that is installed on the emulator.", steps: "Open the calendar, create an event, keep it open 30 seconds." },
 ];
 
 async function user(email, displayName) {
@@ -28,7 +31,11 @@ async function user(email, displayName) {
 }
 
 (async () => {
+  // Platform default package limit; a user doc's own `maxTesterPools` overrides it.
+  await db.doc("config/limits").set({ maxTesterPools: 2, rewardedAdCredits: 0.25, rewardedAdDailyCap: 3 }, { merge: true });
   for (const d of devs) {
+    const poolIdCheck = `pool_${d.pkg.split(".").pop()}`;
+    if ((await db.doc(`pools/${poolIdCheck}`).get()).exists) { console.log(`${d.app}: already seeded, skipped`); continue; }
     const uid = await user(d.email, d.name);
     await db.doc(`users/${uid}`).set({
       uid, email: d.email, displayName: d.name, credits: 0, reputation: 0,

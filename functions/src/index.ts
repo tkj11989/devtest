@@ -107,6 +107,8 @@ export const joinPool = onCall(async (req) => {
     const p = pool.data() as C.Pool;
     const app = await tx.get(db.collection("apps").doc(p.appId));
     const secret = await tx.get(db.collection("appSecrets").doc(p.appId)); // all reads before writes
+    const limits = await tx.get(db.doc("config/limits"));
+    const platformLimit = Number.isInteger(limits.data()?.maxTesterPools) ? limits.data()!.maxTesterPools : C.MAX_ACTIVE_POOLS;
     // Same-app rule: any membership in another pool of this app (any state still holding the slot).
     const siblings = await tx.get(db.collection("pools").where("appId", "==", p.appId).where("state", "in", ["filling", "running", "at_risk"]));
     let sameApp = false;
@@ -115,7 +117,7 @@ export const joinPool = onCall(async (req) => {
       const m = await tx.get(db.collection("poolMembers").doc(`${s.id}_${uid}`));
       if (m.exists && L.isActiveStatus(m.data()!.status)) sameApp = true;
     }
-    const err = L.checkJoin({ user: user.data() as C.UserDoc, uid, pool: p, now: Date.now(), alreadyMember: member.exists, sameAppMembership: sameApp });
+    const err = L.checkJoin({ user: user.data() as C.UserDoc, uid, pool: p, now: Date.now(), alreadyMember: member.exists, sameAppMembership: sameApp, platformLimit });
     if (err) throw new HttpsError("failed-precondition", err);
 
     tx.create(memberRef, { poolId, uid, appId: p.appId, status: "joined", joinedAt: Date.now(), checkInCount: 0, feedback8: false, feedback16: false });
@@ -190,24 +192,67 @@ export const confirmInstalled = onCall(async (req) => {
   return { ok: true };
 });
 
-/** One check-in per tester per UTC day while the pool is running. */
-export const dailyCheckIn = onCall(async (req) => {
+const checkInRef = (poolId: string, uid: string, day: number) => db.collection("checkIns").doc(`${poolId}_${uid}_d${day}`);
+
+/**
+ * Daily test, step 1: the tester taps "Test app". The server stamps the start time (the client clock is
+ * never trusted) and returns the package to launch. One recorded test per tester per 24 h day.
+ */
+export const startTestSession = onCall(async (req) => {
   const uid = uidOf(req);
   const poolId = str(req.data.poolId, "poolId");
-  const note = typeof req.data.note === "string" ? req.data.note.slice(0, 500) : "";
   const now = Date.now();
   const memberRef = db.collection("poolMembers").doc(`${poolId}_${uid}`);
-  const ciRef = db.collection("checkIns").doc(`${poolId}_${uid}_${L.dayKey(now)}`);
-  await db.runTransaction(async (tx) => {
-    const [m, pool, ci] = await Promise.all([tx.get(memberRef), tx.get(db.collection("pools").doc(poolId)), tx.get(ciRef)]);
+  const sessionRef = db.collection("testSessions").doc();
+  return db.runTransaction(async (tx) => {
+    const [m, pool] = await Promise.all([tx.get(memberRef), tx.get(db.collection("pools").doc(poolId))]);
     if (!m.exists || !L.isActiveStatus(m.data()!.status)) throw new HttpsError("failed-precondition", "Not an active member.");
     const p = pool.data() as C.Pool;
-    if (p.state !== "running" && p.state !== "at_risk") throw new HttpsError("failed-precondition", "Pool is not running.");
-    if (ci.exists) throw new HttpsError("already-exists", "Already checked in today.");
-    tx.create(ciRef, { poolId, uid, date: L.dayKey(now), note, createdAt: now });
-    tx.update(memberRef, { status: "active", lastCheckIn: now, checkInCount: FieldValue.increment(1) });
+    if ((p.state !== "running" && p.state !== "at_risk") || p.startedAt === undefined)
+      throw new HttpsError("failed-precondition", "pool_not_running");
+    const dayStart = L.testerDayStart(m.data()!.joinedAt, p.startedAt);
+    const day = L.testerDay(dayStart, now);
+    if ((await tx.get(checkInRef(poolId, uid, day))).exists)
+      throw new HttpsError("already-exists", "already_tested_today", { nextDayAt: L.nextDayAt(dayStart, now) });
+    const app = await tx.get(db.collection("apps").doc(p.appId));
+    tx.create(sessionRef, { poolId, uid, appId: p.appId, day, dayStart, startedAt: now, status: "open" });
+    return {
+      sessionId: sessionRef.id, packageName: app.data()?.packageName ?? null, day,
+      minSeconds: C.MIN_TEST_SECONDS, nextDayAt: L.nextDayAt(dayStart, now),
+    };
   });
-  return { ok: true };
+});
+
+/**
+ * Daily test, step 2: the tester is back in our app. If at least 30 s passed since the server-stamped
+ * start, that day is recorded. If not, the session stays open so the tester can go back and continue.
+ */
+export const finishTestSession = onCall(async (req) => {
+  const uid = uidOf(req);
+  const sessionRef = db.collection("testSessions").doc(str(req.data.sessionId, "sessionId"));
+  const now = Date.now();
+  return db.runTransaction(async (tx) => {
+    const s = await tx.get(sessionRef);
+    if (!s.exists || s.data()!.uid !== uid) throw new HttpsError("not-found", "Session not found.");
+    const d = s.data()!;
+    const seconds = Math.floor((now - d.startedAt) / 1000);
+    if (d.status !== "open") throw new HttpsError("failed-precondition", "Session already closed.");
+    const memberRef = db.collection("poolMembers").doc(`${d.poolId}_${uid}`);
+    const ciRef = checkInRef(d.poolId, uid, d.day);
+    const [m, ci] = await Promise.all([tx.get(memberRef), tx.get(ciRef)]);
+    if (!m.exists || !L.isActiveStatus(m.data()!.status)) throw new HttpsError("failed-precondition", "Not an active member.");
+
+    const err = L.checkSession({ startedAt: d.startedAt, day: d.day, dayStart: d.dayStart, now });
+    if (err === "too_short") return { recorded: false, reason: err, seconds, minSeconds: C.MIN_TEST_SECONDS };
+    if (err || ci.exists) {
+      tx.update(sessionRef, { status: "rejected", reason: err ?? "already_tested_today", seconds, endedAt: now });
+      return { recorded: false, reason: err ?? "already_tested_today", seconds, minSeconds: C.MIN_TEST_SECONDS };
+    }
+    tx.update(sessionRef, { status: "done", seconds, endedAt: now });
+    tx.create(ciRef, { poolId: d.poolId, uid, day: d.day, seconds, sessionId: sessionRef.id, createdAt: now });
+    tx.update(memberRef, { status: "active", lastCheckIn: now, lastTestDay: d.day, checkInCount: FieldValue.increment(1) });
+    return { recorded: true, day: d.day, seconds, nextDayAt: L.nextDayAt(d.dayStart, now) };
+  });
 });
 
 export const submitFeedback = onCall(async (req) => {

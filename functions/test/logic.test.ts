@@ -52,6 +52,32 @@ test("drop after 3 missed days", () => {
   assert.equal(L.shouldDrop(m, 0, 3 * DAY), true);
   assert.equal(L.shouldDrop({ ...m, status: "dropped" }, 0, 9 * DAY), false);
 });
+test("per-user package limit overrides the platform default", () => {
+  assert.equal(L.testerPoolLimit(user), 2);
+  assert.equal(L.testerPoolLimit(user, 3), 3);
+  assert.equal(L.testerPoolLimit({ ...user, maxTesterPools: 5 }, 3), 5);
+  assert.equal(L.testerPoolLimit({ ...user, maxTesterPools: 0 }), 0);
+  const u = { ...user, activeTesterPools: 2, maxTesterPools: 4 };
+  assert.equal(L.checkJoin({ ...base, user: u }), null);
+  assert.equal(L.checkJoin({ ...base, user: { ...u, activeTesterPools: 4 } }), "tester_slots_full");
+  assert.equal(L.checkJoin({ ...base, user: { ...user, activeTesterPools: 2 }, platformLimit: 3 }), null);
+});
+test("tester days roll every 24 h from the tester's own start", () => {
+  const start = L.testerDayStart(5 * DAY + 3600_000, 2 * DAY); // late joiner: own start wins
+  assert.equal(start, 5 * DAY + 3600_000);
+  assert.equal(L.testerDay(start, start), 1);
+  assert.equal(L.testerDay(start, start + DAY - 1), 1);
+  assert.equal(L.testerDay(start, start + DAY), 2);
+  assert.equal(L.nextDayAt(start, start + 10), start + DAY);
+  assert.equal(L.testerDayStart(0, 2 * DAY), 2 * DAY); // joined while filling: pool start wins
+});
+test("a test counts only after 30 s, within its own day", () => {
+  const s = { startedAt: 1000, day: 1, dayStart: 0 };
+  assert.equal(L.checkSession({ ...s, now: 1000 + 29_999 }), "too_short");
+  assert.equal(L.checkSession({ ...s, now: 1000 + 30_000 }), null);
+  assert.equal(L.checkSession({ ...s, now: 1000 + 3 * 3600_000 }), "expired");
+  assert.equal(L.checkSession({ startedAt: DAY - 10_000, day: 1, dayStart: 0, now: DAY + 25_000 }), "wrong_day");
+});
 test("reward needs check-ins and both feedbacks", () => {
   const m: C.Member = { status: "active", checkInCount: 12, joinedAt: 0, feedback8: true, feedback16: true };
   assert.equal(L.earnsReward(m), true);

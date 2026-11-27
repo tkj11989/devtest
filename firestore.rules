@@ -35,6 +35,7 @@ service cloud.firestore {
         || get(/databases/$(db)/documents/pools/$(resource.data.poolId)).data.ownerUid == request.auth.uid);
       allow write: if false;
     }
+    match /testSessions/{id} { allow read: if signedIn() && resource.data.uid == request.auth.uid; allow write: if false; }
     match /creditLedger/{id} { allow read: if signedIn() && resource.data.uid == request.auth.uid; allow write: if false; }
     match /reports/{id} { allow read, write: if false; }
     match /config/{doc} { allow read: if signedIn(); allow write: if false; }

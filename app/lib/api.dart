@@ -29,8 +29,9 @@ class Api {
       (await call<Map>('joinPool', {'poolId': poolId}))['optInLink'] as String?;
   static Future<void> leavePool(String poolId) => call('leavePool', {'poolId': poolId});
   static Future<void> confirmInstalled(String poolId) => call('confirmInstalled', {'poolId': poolId});
-  static Future<void> checkIn(String poolId, {String note = ''}) =>
-      call('dailyCheckIn', {'poolId': poolId, 'note': note});
+  /// Daily test: the server stamps the start time; finishing records the day once 30 s have passed.
+  static Future<Map> startTest(String poolId) => call<Map>('startTestSession', {'poolId': poolId});
+  static Future<Map> finishTest(String sessionId) => call<Map>('finishTestSession', {'sessionId': sessionId});
   static Future<void> feedback(String poolId, int day, int rating, String text) =>
       call('submitFeedback', {'poolId': poolId, 'day': day, 'rating': rating, 'text': text});
   static Future<void> rewardedAd() => call('claimRewardedAd');
@@ -70,13 +71,15 @@ class Api {
 
 String friendly(Object e) {
   const map = {
-    'tester_slots_full': 'You already have 2 active tests.',
+    'tester_slots_full': 'You have reached your package limit. Finish or leave a test to join another.',
     'same_app': 'You are already testing this app in another pool.',
     'own_app': 'You cannot test your own app.',
     'pool_full': 'This pool is full.',
     'pool_closed': 'This pool is closed.',
     'too_late': 'This pool has already started.',
     'user_blocked': 'Your account is temporarily blocked from joining.',
+    'already_tested_today': 'Today\'s test is already recorded. Come back when the next day starts.',
+    'pool_not_running': 'Testing starts when the pool has 18 testers.',
   };
   if (e is FirebaseFunctionsException) return map[e.message] ?? e.message ?? 'Something went wrong.';
   return 'Something went wrong.';
