@@ -299,6 +299,11 @@ export const processGroupQueue = onDocumentCreated("groupQueue/{id}", async (eve
   const snap = event.data;
   if (!snap) return;
   const { op, email } = snap.data();
+  if (process.env.FUNCTIONS_EMULATOR === "true") {
+    // Local development: there is no Workspace group, so record the op as done without calling Google.
+    await snap.ref.update({ done: true, doneAt: Date.now(), skipped: "emulator" });
+    return;
+  }
   const client = directoryClient(ADMIN_USER.value());
   try {
     await client[op as "add" | "remove"](GROUP_EMAIL.value(), email);

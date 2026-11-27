@@ -1,0 +1,4 @@
+emulator-data/
+firebase-debug.log
+*-debug.log
+functions/.env

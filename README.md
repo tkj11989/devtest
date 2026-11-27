@@ -23,3 +23,15 @@ Implements the *Mutual App Testing Platform – Product & Technical Spec*: free 
 - Replacements may join a running pool only until day 2 (later joiners could not stay opted in long enough).
 - A tester earns credit with ≥12 check-ins and both feedback forms; dropped after 3 consecutive missed days.
 - Not verified here: Flutter app (no SDK in this environment), rules emulator tests, live Directory API.
+
+## Run locally (Firebase Emulator Suite, no cloud)
+Needs Java 21+ for the emulators (Android Studio's bundled JBR works).
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
+npm --prefix functions install; npm --prefix functions run build
+firebase emulators:start --import=./emulator-data --export-on-exit=./emulator-data
+npm --prefix functions run seed        # second terminal: demo developers, apps, pools
+cd app; flutter run                    # debug builds talk to the emulators at 10.0.2.2
+```
+Sign in with any email and password `password` (dev1/dev2/dev3@test.local own the demo apps).
+Emulator UI: http://127.0.0.1:4000. Build with `--dart-define=USE_EMULATOR=false` to use the real project.

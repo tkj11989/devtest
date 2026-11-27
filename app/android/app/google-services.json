@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "632737824253",
+    "project_id": "apptestprayuktech",
+    "storage_bucket": "apptestprayuktech.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:632737824253:android:39a25a502b0553fa4e2d94",
+        "android_client_info": {
+          "package_name": "com.mutualtesting.mutual_testing"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2KVVKEzlZ3R3JtJadBF1xYCyjB8moNxE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
